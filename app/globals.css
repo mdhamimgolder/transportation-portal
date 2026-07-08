@@ -1,0 +1,158 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+/* Design tokens -- "manifest" system: an ink-dark brand spine (sidebar, auth)
+   against a warm paper content canvas (dense schedules/tables), with a single
+   transit-signal amber accent and a cool teal used only for route/data lines. */
+:root {
+  --radius: 0.625rem;
+
+  /* Brand spine -- constant regardless of light/dark content mode. */
+  --ink: #03120f;
+  --ink-foreground: #eef1ec;
+  --graphite: #16211d;
+  --graphite-foreground: #eef1ec;
+  --paper: #f5f3ec;
+
+  --background: #f5f3ec;
+  --foreground: #14231d;
+  --card: #fdfcf8;
+  --card-foreground: #14231d;
+  --popover: #fdfcf8;
+  --popover-foreground: #14231d;
+
+  --primary: #0e2d26;
+  --primary-foreground: #f5f3ec;
+  --secondary: #e9e4d6;
+  --secondary-foreground: #14231d;
+  --muted: #efebe0;
+  --muted-foreground: #66766d;
+  --accent: #e2eeea;
+  --accent-foreground: #0e2d26;
+  --destructive: #b8412c;
+  --border: #ddd7c8;
+  --input: #d6d0bf;
+  --ring: #3fa79a;
+
+  --teal: #3fa79a;
+  --teal-foreground: #ffffff;
+
+  --amber: #e2932f;
+  --amber-foreground: #472c07;
+  --green: #3f8f6b;
+  --green-foreground: #f5f3ec;
+  --red: #b8412c;
+  --red-foreground: #f5f3ec;
+
+  --font-display: var(--font-space-grotesk), ui-sans-serif, system-ui, sans-serif;
+  --font-sans: var(--font-plex-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-plex-mono), ui-monospace, "SFMono-Regular", monospace;
+}
+
+.dark {
+  --background: #03120f;
+  --foreground: #eef1ec;
+  --card: #0d211b;
+  --card-foreground: #eef1ec;
+  --popover: #0d211b;
+  --popover-foreground: #eef1ec;
+  --primary: #3fa79a;
+  --primary-foreground: #04140f;
+  --secondary: #16241f;
+  --secondary-foreground: #eef1ec;
+  --muted: #16241f;
+  --muted-foreground: #8ba39a;
+  --accent: #16241f;
+  --accent-foreground: #eef1ec;
+  --destructive: #e2684f;
+  --border: #1d302a;
+  --input: #1d302a;
+  --ring: #3fa79a;
+  --teal: #4fd1c5;
+  --teal-foreground: #04140f;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-teal: var(--teal);
+  --color-teal-foreground: var(--teal-foreground);
+  --color-amber: var(--amber);
+  --color-amber-foreground: var(--amber-foreground);
+  --color-green: var(--green);
+  --color-green-foreground: var(--green-foreground);
+  --color-red: var(--red);
+  --color-red-foreground: var(--red-foreground);
+
+  --color-ink: var(--ink);
+  --color-ink-foreground: var(--ink-foreground);
+  --color-graphite: var(--graphite);
+  --color-graphite-foreground: var(--graphite-foreground);
+  --color-paper: var(--paper);
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* Tabular figures for schedules, plate/route codes, countdowns. */
+.font-mono,
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+@keyframes route-loop-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes route-loop-travel {
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+.route-loop-orbit {
+  animation: route-loop-spin 36s linear infinite;
+  transform-origin: 50% 50%;
+}
+
+.route-loop-dash {
+  stroke-dasharray: 6 14;
+  animation: route-loop-travel 5.5s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .route-loop-orbit,
+  .route-loop-dash {
+    animation: none;
+  }
+}

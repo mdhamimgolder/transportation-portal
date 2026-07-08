@@ -1,0 +1,33 @@
+import { requireRole } from "@/lib/rbac/guards";
+import { Role } from "@/lib/constants/enums";
+import { NavSidebar } from "@/components/shared/nav-sidebar";
+import type { NavLink } from "@/components/shared/nav-sidebar";
+
+const links: NavLink[] = [
+  { href: "/facilities/dashboard", label: "Dashboard", icon: "dashboard" },
+  { href: "/facilities/route-planning", label: "Route Planning", icon: "route" },
+  { href: "/facilities/weekly-export", label: "Weekly Export", icon: "export" },
+  { href: "/facilities/adhoc", label: "Ad-hoc Transport", icon: "adhoc" },
+  { href: "/facilities/vehicles", label: "Vehicles & Drivers", icon: "vehicles" },
+  { href: "/facilities/user-info", label: "User Info", icon: "users" },
+  {
+    href: "/facilities/allocation-history",
+    label: "Allocation History",
+    icon: "history",
+  },
+];
+
+export default async function FacilitiesLayout({
+  children,
+}: Readonly<{ children: React.ReactNode }>) {
+  const user = await requireRole([Role.FACILITIES]);
+
+  return (
+    <div className="flex min-h-screen">
+      <NavSidebar user={user} title="Facilities" links={links} />
+      <main className="flex-1 px-6 py-8 lg:px-10">
+        <div className="mx-auto w-full max-w-7xl space-y-6">{children}</div>
+      </main>
+    </div>
+  );
+}

@@ -1,0 +1,307 @@
+// Prisma schema for the Transportation Management Portal.
+// SQLite for local dev; kept portable to PostgreSQL (no SQLite-only types,
+// no native `enum` usage since SQLite/Prisma doesn't support it -- role and
+// status fields are `String`, constrained by TS unions in lib/constants/enums.ts).
+
+generator client {
+  provider = "prisma-client"
+  output   = "../lib/generated/prisma"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+// ── AUTH / USER ──────────────────────────────────────────────
+
+model User {
+  id           String @id @default(cuid())
+  email        String @unique
+  passwordHash String
+  role         String // SUPER_ADMIN | EMPLOYEE | OPERATIONS | FACILITIES
+
+  fullName      String
+  employeeCode  String? @unique // human-readable employee ID, e.g. "EMP0001"
+  contactNumber String?
+  address       String? // free-text "live" value; changes flow through AddressChangeRequest
+  pickupPoint   String? // designated pickup location for transport, editable directly by the employee
+
+  mustChangePassword   Boolean   @default(false)
+  isBulkCreated        Boolean   @default(false)
+  lastLoginAt          DateTime?
+  passwordResetToken   String?   @unique
+  passwordResetExpires DateTime?
+
+  isActive  Boolean   @default(true)
+  deletedAt DateTime?
+  deletedBy String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  zoneId String? // Phase 2 hook: area/zone grouping
+  zone   Zone?   @relation(fields: [zoneId], references: [id])
+
+  weeklySchedules        WeeklySchedule[]       @relation("EmployeeWeeklySchedules")
+  adHocRequests          AdHocRequest[]         @relation("EmployeeAdHocRequests")
+  addressChangeRequests  AddressChangeRequest[] @relation("EmployeeAddressChangeRequests")
+  reviewedAddressChanges AddressChangeRequest[] @relation("ReviewerAddressChanges")
+  contactChangeRequests  ContactChangeRequest[] @relation("EmployeeContactChangeRequests")
+  reviewedContactChanges ContactChangeRequest[] @relation("ReviewerContactChangeRequests")
+  pickupPointChangeRequests  PickupPointChangeRequest[] @relation("EmployeePickupPointChangeRequests")
+  reviewedPickupPointChanges PickupPointChangeRequest[] @relation("ReviewerPickupPointChanges")
+  auditLogsAsActor       AuditLog[]             @relation("ActorAuditLogs")
+  sessions               Session[]
+
+  @@index([role])
+  @@index([isActive])
+  @@index([zoneId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id])
+  sessionToken String   @unique
+  expiresAt    DateTime
+  createdAt    DateTime @default(now())
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+// ── ADDRESS CHANGE WORKFLOW ──────────────────────────────────
+
+model AddressChangeRequest {
+  id         String @id @default(cuid())
+  employeeId String
+  employee   User   @relation("EmployeeAddressChangeRequests", fields: [employeeId], references: [id])
+
+  oldAddress   String
+  newAddress   String
+  status       String  @default("PENDING") // PENDING | APPROVED | REJECTED
+  rejectReason String?
+
+  reviewedById String?
+  reviewedBy   User?     @relation("ReviewerAddressChanges", fields: [reviewedById], references: [id])
+  reviewedAt   DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([employeeId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+// ── CONTACT NUMBER CHANGE WORKFLOW ───────────────────────────
+
+model ContactChangeRequest {
+  id         String @id @default(cuid())
+  employeeId String
+  employee   User   @relation("EmployeeContactChangeRequests", fields: [employeeId], references: [id])
+
+  oldContactNumber String
+  newContactNumber String
+  status           String  @default("PENDING") // PENDING | APPROVED | REJECTED
+  rejectReason     String?
+
+  reviewedById String?
+  reviewedBy   User?     @relation("ReviewerContactChangeRequests", fields: [reviewedById], references: [id])
+  reviewedAt   DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([employeeId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+// ── PICK-UP POINT CHANGE WORKFLOW ────────────────────────────
+
+model PickupPointChangeRequest {
+  id         String @id @default(cuid())
+  employeeId String
+  employee   User   @relation("EmployeePickupPointChangeRequests", fields: [employeeId], references: [id])
+
+  oldPickupPoint String
+  newPickupPoint String
+  status         String  @default("PENDING") // PENDING | APPROVED | REJECTED
+  rejectReason   String?
+
+  reviewedById String?
+  reviewedBy   User?     @relation("ReviewerPickupPointChanges", fields: [reviewedById], references: [id])
+  reviewedAt   DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([employeeId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+// ── WEEKLY TRANSPORT ─────────────────────────────────────────
+
+model WeeklySchedule {
+  id         String @id @default(cuid())
+  employeeId String
+  employee   User   @relation("EmployeeWeeklySchedules", fields: [employeeId], references: [id])
+
+  weekStartDate DateTime // normalized to the Monday of the target week
+  status        String   @default("PENDING") // PENDING | APPROVED | REJECTED
+  rejectReason  String?
+
+  submittedAt  DateTime  @default(now())
+  reviewedById String?
+  reviewedAt   DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  days WeeklyScheduleDay[]
+
+  @@unique([employeeId, weekStartDate])
+  @@index([weekStartDate])
+  @@index([status])
+}
+
+model WeeklyScheduleDay {
+  id               String         @id @default(cuid())
+  weeklyScheduleId String
+  weeklySchedule   WeeklySchedule @relation(fields: [weeklyScheduleId], references: [id])
+
+  dayOfWeek      Int // 1=Mon .. 5=Fri
+  date           DateTime
+  needsTransport Boolean  @default(true)
+  arrivalTime    String? // "HH:mm"; null when needsTransport=false
+
+  routeAssignment RouteAssignment?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([weeklyScheduleId, dayOfWeek])
+  @@index([date])
+}
+
+// ── AD-HOC TRANSPORT ─────────────────────────────────────────
+
+model AdHocRequest {
+  id         String @id @default(cuid())
+  employeeId String
+  employee   User   @relation("EmployeeAdHocRequests", fields: [employeeId], references: [id])
+
+  date        DateTime
+  arrivalTime String // "HH:mm"
+  reason      String?
+  status      String   @default("PENDING") // PENDING | ASSIGNED | CANCELLED
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  routeAssignment RouteAssignment?
+
+  @@index([date])
+  @@index([status])
+  @@index([employeeId])
+}
+
+// ── ROUTE ASSIGNMENT (shared by weekly-day and ad-hoc) ───────
+
+model RouteAssignment {
+  id String @id @default(cuid())
+
+  weeklyScheduleDayId String?            @unique
+  weeklyScheduleDay   WeeklyScheduleDay? @relation(fields: [weeklyScheduleDayId], references: [id])
+  adHocRequestId      String?            @unique
+  adHocRequest        AdHocRequest?      @relation(fields: [adHocRequestId], references: [id])
+  // exactly one of the two above is set -- enforced at the application layer
+
+  vehicleDriverId String
+  vehicleDriver   VehicleDriver @relation(fields: [vehicleDriverId], references: [id])
+  pickupTime      String // "HH:mm"
+
+  assignedById String
+  assignedAt   DateTime  @default(now())
+  emailSentAt  DateTime?
+  noShow       Boolean? // Phase 2 hook; null = not tracked
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([vehicleDriverId])
+}
+
+// ── VEHICLE & DRIVER MASTER LIST ─────────────────────────────
+// One combined record per vehicle+driver pairing (as vendors typically supply
+// both together), rather than separate driver/vehicle master lists.
+
+model VehicleDriver {
+  id            String @id @default(cuid())
+  driverName    String
+  contactNumber String
+  vehicleNumber String @unique
+  vendor        String
+
+  isActive  Boolean   @default(true)
+  deletedAt DateTime?
+  deletedBy String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  assignments RouteAssignment[]
+
+  @@index([isActive])
+}
+
+// ── AUDIT LOG ─────────────────────────────────────────────────
+
+model AuditLog {
+  id String @id @default(cuid())
+
+  actorId    String?
+  actor      User?   @relation("ActorAuditLogs", fields: [actorId], references: [id])
+  actorEmail String? // denormalized snapshot, survives actor deactivation
+  actorRole  String?
+
+  actionType String // e.g. ADDRESS_CHANGE_APPROVED, PROFILE_EDITED, SCHEDULE_APPROVED, USER_BULK_CREATED
+  entityType String // User | AddressChangeRequest | WeeklySchedule | AdHocRequest | RouteAssignment | VehicleDriver
+  entityId   String
+
+  beforeValue String? // JSON-stringified snapshot
+  afterValue  String? // JSON-stringified snapshot
+  description String? // e.g. "Operations approved Employee X's address change"
+
+  createdAt DateTime @default(now())
+
+  @@index([actorId])
+  @@index([actionType])
+  @@index([entityType, entityId])
+  @@index([createdAt])
+}
+
+// ── PHASE-2 PLACEHOLDERS (schema-only; no UI yet) ────────────
+
+model Zone {
+  id          String    @id @default(cuid())
+  name        String    @unique
+  description String?
+  isActive    Boolean   @default(true)
+  deletedAt   DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  employees User[]
+}
+
+model Holiday {
+  id        String   @id @default(cuid())
+  date      DateTime @unique
+  name      String
+  createdAt DateTime @default(now())
+
+  @@index([date])
+}
