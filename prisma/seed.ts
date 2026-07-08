@@ -1,3 +1,4 @@
+import "dotenv/config";
 import { prisma } from "../lib/prisma";
 import { hashPassword } from "../lib/auth/password";
 import { Role } from "../lib/constants/enums";
