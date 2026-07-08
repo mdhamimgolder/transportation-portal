@@ -30,3 +30,6 @@ next-env.d.ts
 /prisma/dev.db-journal
 
 /lib/generated/prisma
+
+.vercel
+.env*
