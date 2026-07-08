@@ -1,7 +1,8 @@
 // Prisma schema for the Transportation Management Portal.
-// SQLite for local dev; kept portable to PostgreSQL (no SQLite-only types,
-// no native `enum` usage since SQLite/Prisma doesn't support it -- role and
-// status fields are `String`, constrained by TS unions in lib/constants/enums.ts).
+// Postgres (Neon) in deployment; started on SQLite for local dev, so the
+// schema deliberately avoids SQLite-only types and native `enum` usage --
+// role and status fields are `String`, constrained by TS unions in
+// lib/constants/enums.ts -- which is what made this cutover a one-line change.
 
 generator client {
   provider = "prisma-client"
@@ -9,7 +10,7 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
 }
 
 // ── AUTH / USER ──────────────────────────────────────────────
