@@ -50,7 +50,20 @@
       "PowerShell(Get-Process | Where-Object { $_.ProcessName -match \"git|GitCredential\" } | Select-Object Id, ProcessName)",
       "Bash(npm uninstall *)",
       "Bash(npm install *)",
-      "Bash(npx tsc *)"
+      "Bash(npx tsc *)",
+      "Bash(npm run *)",
+      "Bash(git commit *)",
+      "Bash(node -e \"console.log\\(require\\('crypto'\\).randomBytes\\(48\\).toString\\('base64'\\)\\)\")",
+      "Bash(xargs grep -l \"datasource\")",
+      "Bash(find node_modules -path \"*prisma/config*\" -name \"*.d.ts\")",
+      "Bash(find node_modules/prisma -maxdepth 2 -iname \"*.d.ts\")",
+      "Bash(npx vercel *)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" https://transportation-portal-igpk6avrl-mdhamimgolders-projects.vercel.app/login)",
+      "Bash(curl -s https://transportation-portal-igpk6avrl-mdhamimgolders-projects.vercel.app/login)",
+      "Bash(curl -sI https://transportation-portal-igpk6avrl-mdhamimgolders-projects.vercel.app/login)",
+      "Bash(timeout 30 npx prisma migrate deploy)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" https://transportation-portal-mdhamimgolders-projects.vercel.app/login)",
+      "Bash(curl -s https://transportation-portal-mdhamimgolders-projects.vercel.app/login)"
     ]
   }
 }

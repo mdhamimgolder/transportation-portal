@@ -1,20 +1,31 @@
 import Link from "next/link";
-import { CalendarDays, ClipboardList, MapPin } from "lucide-react";
+import { CalendarDays, ClipboardList } from "lucide-react";
 import { requireRole } from "@/lib/rbac/guards";
 import { Role } from "@/lib/constants/enums";
 import { prisma } from "@/lib/prisma";
 import { getSubmissionWindow, startOfToday } from "@/lib/date/week";
+import { getTransportSettings } from "@/lib/queries/settings";
 import { PageHeader } from "@/components/shared/page-header";
 import { StatCard } from "@/components/shared/stat-card";
+import {
+  TodaysScheduleCard,
+  type TodaysScheduleEntry,
+} from "@/components/employee/todays-schedule-card";
 import { Button } from "@/components/ui/button";
 
 export default async function EmployeeDashboardPage() {
   const user = await requireRole([Role.EMPLOYEE]);
 
-  const window = getSubmissionWindow();
+  const settings = await getTransportSettings();
+  const window = getSubmissionWindow(
+    new Date(),
+    settings.weeklyLockDayOfWeek,
+    settings.weeklyLockHour,
+    settings.weeklyLockMinute
+  );
   const today = startOfToday();
 
-  const [currentSchedule, upcomingPickups, pendingAddress, pendingContact, pendingPickupPoint] =
+  const [currentSchedule, todaysAssignments, pendingAddress, pendingContact, pendingPickupPoint] =
     await Promise.all([
       prisma.weeklySchedule.findUnique({
         where: {
@@ -25,18 +36,20 @@ export default async function EmployeeDashboardPage() {
         },
         select: { status: true },
       }),
-      prisma.routeAssignment.count({
+      prisma.routeAssignment.findMany({
         where: {
           OR: [
             {
               weeklyScheduleDay: {
-                date: { gte: today },
+                date: today,
                 weeklySchedule: { employeeId: user.id },
               },
             },
-            { adHocRequest: { employeeId: user.id, date: { gte: today } } },
+            { adHocRequest: { employeeId: user.id, date: today } },
           ],
         },
+        include: { vehicleDriver: true },
+        orderBy: { pickupTime: "asc" },
       }),
       prisma.addressChangeRequest.count({
         where: { employeeId: user.id, status: "PENDING" },
@@ -48,6 +61,13 @@ export default async function EmployeeDashboardPage() {
         where: { employeeId: user.id, status: "PENDING" },
       }),
     ]);
+
+  const todaysScheduleEntries: TodaysScheduleEntry[] = todaysAssignments.map((a) => ({
+    id: a.id,
+    pickupTime: a.pickupTime,
+    driverName: a.vehicleDriver.driverName,
+    contactNumber: a.vehicleDriver.contactNumber,
+  }));
 
   const firstName = user.fullName.split(" ")[0];
   const todayLabel = new Date().toLocaleDateString(undefined, {
@@ -71,12 +91,7 @@ export default async function EmployeeDashboardPage() {
           icon={<CalendarDays className="size-5" />}
           href="/employee/weekly"
         />
-        <StatCard
-          label="Upcoming pickups"
-          value={upcomingPickups}
-          hint="Assigned transport from today"
-          icon={<MapPin className="size-5" />}
-        />
+        <TodaysScheduleCard entries={todaysScheduleEntries} />
         <StatCard
           label="Pending profile requests"
           value={pendingAddress + pendingContact + pendingPickupPoint}

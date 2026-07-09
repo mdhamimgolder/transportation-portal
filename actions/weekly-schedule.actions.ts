@@ -5,6 +5,7 @@ import { prisma } from "@/lib/prisma";
 import { requireRole } from "@/lib/rbac/guards";
 import { writeAuditLog } from "@/lib/audit/log";
 import { getSubmissionWindow, getWeekDays } from "@/lib/date/week";
+import { getTransportSettings } from "@/lib/queries/settings";
 import { NO_TRANSPORT_VALUE, ARRIVAL_TIME_OPTIONS } from "@/lib/constants/arrival-times";
 import {
   Role,
@@ -28,7 +29,13 @@ export async function submitWeeklySchedule(
 ): Promise<SubmitWeeklyScheduleState> {
   const session = await requireRole([Role.EMPLOYEE]);
 
-  const window = getSubmissionWindow();
+  const settings = await getTransportSettings();
+  const window = getSubmissionWindow(
+    new Date(),
+    settings.weeklyLockDayOfWeek,
+    settings.weeklyLockHour,
+    settings.weeklyLockMinute
+  );
   if (!window.isOpen) {
     return { error: "The submission window for this week has closed." };
   }

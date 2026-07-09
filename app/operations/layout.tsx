@@ -1,10 +1,5 @@
 import { requireRole } from "@/lib/rbac/guards";
-import {
-  Role,
-  AddressChangeStatus,
-  ContactChangeStatus,
-  PickupPointChangeStatus,
-} from "@/lib/constants/enums";
+import { Role, AddressChangeStatus, ContactChangeStatus } from "@/lib/constants/enums";
 import { prisma } from "@/lib/prisma";
 import { NavSidebar } from "@/components/shared/nav-sidebar";
 import type { NavLink } from "@/components/shared/nav-sidebar";
@@ -14,18 +9,14 @@ export default async function OperationsLayout({
 }: Readonly<{ children: React.ReactNode }>) {
   const user = await requireRole([Role.OPERATIONS]);
 
-  const [pendingAddressChanges, pendingContactChanges, pendingPickupPointChanges] =
-    await Promise.all([
-      prisma.addressChangeRequest.count({
-        where: { status: AddressChangeStatus.PENDING },
-      }),
-      prisma.contactChangeRequest.count({
-        where: { status: ContactChangeStatus.PENDING },
-      }),
-      prisma.pickupPointChangeRequest.count({
-        where: { status: PickupPointChangeStatus.PENDING },
-      }),
-    ]);
+  const [pendingAddressChanges, pendingContactChanges] = await Promise.all([
+    prisma.addressChangeRequest.count({
+      where: { status: AddressChangeStatus.PENDING },
+    }),
+    prisma.contactChangeRequest.count({
+      where: { status: ContactChangeStatus.PENDING },
+    }),
+  ]);
 
   const links: NavLink[] = [
     { href: "/operations/dashboard", label: "Dashboard", icon: "dashboard" },
@@ -39,8 +30,7 @@ export default async function OperationsLayout({
       href: "/operations/profile-approvals",
       label: "Profile Approvals",
       icon: "approvals",
-      badge:
-        pendingAddressChanges + pendingContactChanges + pendingPickupPointChanges,
+      badge: pendingAddressChanges + pendingContactChanges,
     },
     {
       href: "/operations/allocation-history",

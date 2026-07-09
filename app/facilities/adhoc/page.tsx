@@ -93,6 +93,7 @@ export default async function FacilitiesAdHocPage() {
                   <AssignmentForm
                     target={{ adHocRequestId: request.id }}
                     options={options}
+                    pickupTimeMode="text"
                     existing={
                       request.routeAssignment
                         ? {

@@ -12,16 +12,3 @@ export async function verifyPassword(
 ): Promise<boolean> {
   return bcrypt.compare(plain, hash);
 }
-
-const TEMP_PASSWORD_CHARS =
-  "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789";
-
-export function generateTempPassword(length = 12): string {
-  let result = "";
-  for (let i = 0; i < length; i++) {
-    result += TEMP_PASSWORD_CHARS.charAt(
-      Math.floor(Math.random() * TEMP_PASSWORD_CHARS.length)
-    );
-  }
-  return result;
-}

@@ -29,6 +29,7 @@ const SAMPLE_HEADERS = [
   "contactNumber",
   "address",
   "pickupPoint",
+  "password",
 ];
 const SAMPLE_ROW = [
   "Jamie Rivera",
@@ -38,6 +39,7 @@ const SAMPLE_ROW = [
   "01700000000",
   "12 Example Street, Dhaka",
   "Gulshan Circle 2",
+  "Passw0rd!23",
 ];
 
 function SubmitButton() {
@@ -69,23 +71,11 @@ function BulkUploadDialogBody({ onDone }: { onDone: () => void }) {
 
         {state.results.created.length > 0 ? (
           <div className="space-y-2">
-            <div className="flex items-center justify-between">
-              <p className="text-sm font-medium">Generated credentials</p>
-              <ExportCsvButton
-                filename="bulk-upload-credentials.csv"
-                headers={["Full Name", "Email", "Temporary Password"]}
-                rows={state.results.created.map((r) => [
-                  r.fullName,
-                  r.email,
-                  r.tempPassword,
-                ])}
-                label="Export credentials"
-              />
-            </div>
+            <p className="text-sm font-medium">Accounts created</p>
             <div className="max-h-48 space-y-1 overflow-y-auto rounded-lg border bg-muted p-3 font-mono text-xs">
               {state.results.created.map((r) => (
                 <p key={r.email}>
-                  {r.email} — {r.tempPassword}
+                  {r.fullName} — {r.email}
                 </p>
               ))}
             </div>
@@ -118,12 +108,13 @@ function BulkUploadDialogBody({ onDone }: { onDone: () => void }) {
     <form action={formAction} className="space-y-4">
       <div className="space-y-2 text-sm text-muted-foreground">
         <p>
-          CSV columns: <code className="font-mono">fullName, email, role</code>{" "}
-          (required), plus optional{" "}
+          Required CSV columns:{" "}
           <code className="font-mono">
-            employeeCode, contactNumber, address, pickupPoint
+            fullName, email, role, employeeCode, contactNumber, address,
+            pickupPoint, password
           </code>
           . Role must be one of EMPLOYEE, OPERATIONS, FACILITIES, SUPER_ADMIN.
+          Password must be at least 8 characters.
         </p>
         <ExportCsvButton
           filename="bulk-upload-template.csv"

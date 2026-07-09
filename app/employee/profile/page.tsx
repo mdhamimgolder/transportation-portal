@@ -9,6 +9,7 @@ import { prisma } from "@/lib/prisma";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { StatusBadge } from "@/components/shared/status-badge";
 import { ProfileUpdateForm } from "@/components/employee/profile-update-form";
+import { ChangePasswordForm } from "@/components/employee/change-password-form";
 
 function ProfileField({ label, value }: { label: string; value: string }) {
   return (
@@ -106,8 +107,8 @@ export default async function ProfilePage() {
         <CardHeader>
           <CardTitle className="text-base">Update Profile</CardTitle>
           <p className="text-xs text-muted-foreground">
-            Pick-up Point, Address, and Contact Number changes are all sent to
-            Operations for review.
+            Address and Contact Number changes are sent to Operations for
+            review. Pick-up Point changes are sent to Facilities for review.
           </p>
         </CardHeader>
         <CardContent>
@@ -119,6 +120,15 @@ export default async function ProfilePage() {
             addressDisabled={hasPendingAddressRequest}
             contactNumberDisabled={hasPendingContactRequest}
           />
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Change Password</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <ChangePasswordForm />
         </CardContent>
       </Card>
 

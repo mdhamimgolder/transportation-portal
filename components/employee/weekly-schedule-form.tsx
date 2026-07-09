@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useState } from "react";
+import { useActionState, useEffect, useState } from "react";
 import { useFormStatus } from "react-dom";
 import {
   submitWeeklySchedule,
@@ -16,6 +16,13 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 
 const initialState: SubmitWeeklyScheduleState = {};
 
@@ -44,6 +51,11 @@ export function WeeklyScheduleForm({
 }) {
   const [state, formAction] = useActionState(submitWeeklySchedule, initialState);
   const [values, setValues] = useState<string[]>(initialValues);
+  const [confirmOpen, setConfirmOpen] = useState(false);
+
+  useEffect(() => {
+    if (state.success) setConfirmOpen(true);
+  }, [state.success]);
 
   function setDay(index: number, value: string) {
     setValues((prev) => prev.map((v, i) => (i === index ? value : v)));
@@ -109,13 +121,33 @@ export function WeeklyScheduleForm({
       {state.error ? (
         <p className="text-sm text-destructive">{state.error}</p>
       ) : null}
-      {state.success ? (
-        <p className="text-sm text-green-foreground">
-          Schedule submitted successfully.
-        </p>
-      ) : null}
 
       <SubmitButton disabled={disabled} />
+
+      <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Schedule submitted</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            Your weekly transport schedule has been submitted for approval.
+          </p>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setConfirmOpen(false)}
+            >
+              Close
+            </Button>
+            <Button type="button" asChild>
+              <a href="#history" onClick={() => setConfirmOpen(false)}>
+                Check History
+              </a>
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </form>
   );
 }

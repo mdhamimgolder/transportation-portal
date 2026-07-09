@@ -18,7 +18,7 @@ export async function approvePickupPointChange(
   _prevState: ApprovePickupPointChangeState,
   formData: FormData
 ): Promise<ApprovePickupPointChangeState> {
-  const session = await requireRole([Role.OPERATIONS]);
+  const session = await requireRole([Role.FACILITIES]);
 
   const requestId = formData.get("requestId");
   if (typeof requestId !== "string" || !requestId) {
@@ -60,7 +60,7 @@ export async function approvePickupPointChange(
     description: `${session.fullName} approved ${request.employee.fullName}'s pick-up point change`,
   });
 
-  revalidatePath("/operations/profile-approvals");
+  revalidatePath("/facilities/profile-approvals");
   revalidatePath("/employee/profile");
   return {};
 }
@@ -74,7 +74,7 @@ export async function rejectPickupPointChange(
   _prevState: RejectPickupPointChangeState,
   formData: FormData
 ): Promise<RejectPickupPointChangeState> {
-  const session = await requireRole([Role.OPERATIONS]);
+  const session = await requireRole([Role.FACILITIES]);
 
   const requestId = formData.get("requestId");
   const reason = formData.get("reason");
@@ -117,7 +117,7 @@ export async function rejectPickupPointChange(
     description: `${session.fullName} rejected ${request.employee.fullName}'s pick-up point change: ${reason.trim()}`,
   });
 
-  revalidatePath("/operations/profile-approvals");
+  revalidatePath("/facilities/profile-approvals");
   revalidatePath("/employee/profile");
   return { success: true };
 }

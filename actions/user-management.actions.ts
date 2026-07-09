@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { requireRole } from "@/lib/rbac/guards";
 import { writeAuditLog } from "@/lib/audit/log";
-import { hashPassword, generateTempPassword } from "@/lib/auth/password";
+import { hashPassword } from "@/lib/auth/password";
 import { parseCsv } from "@/lib/csv";
 import { Role, ALL_ROLES, AuditActionType } from "@/lib/constants/enums";
 
@@ -12,56 +12,63 @@ function isValidRole(value: string): value is Role {
   return (ALL_ROLES as string[]).includes(value);
 }
 
-function optionalField(formData: FormData, name: string): string | null {
+function requiredField(formData: FormData, name: string): string | null {
   const value = formData.get(name);
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
 export type CreateUserState = {
   error?: string;
-  created?: { email: string; tempPassword: string; fullName: string };
+  created?: { email: string; fullName: string };
 };
 
 export async function createUserAction(
   _prevState: CreateUserState,
   formData: FormData
 ): Promise<CreateUserState> {
-  const session = await requireRole([Role.SUPER_ADMIN]);
+  const session = await requireRole([Role.SUPER_ADMIN, Role.FACILITIES]);
 
-  const fullName = formData.get("fullName");
-  const email = formData.get("email");
+  const fullName = requiredField(formData, "fullName");
+  const email = requiredField(formData, "email");
   const role = formData.get("role");
+  const employeeCode = requiredField(formData, "employeeCode");
+  const contactNumber = requiredField(formData, "contactNumber");
+  const address = requiredField(formData, "address");
+  const pickupPoint = requiredField(formData, "pickupPoint");
+  const password = requiredField(formData, "password");
 
-  if (typeof fullName !== "string" || !fullName.trim()) {
-    return { error: "Full name is required." };
-  }
-  if (typeof email !== "string" || !email.trim()) {
-    return { error: "Email is required." };
-  }
+  if (!fullName) return { error: "Full name is required." };
+  if (!email) return { error: "Email is required." };
   if (typeof role !== "string" || !isValidRole(role)) {
     return { error: "Please select a valid role." };
   }
+  if (!employeeCode) return { error: "Employee ID is required." };
+  if (!contactNumber) return { error: "Contact number is required." };
+  if (!address) return { error: "Address is required." };
+  if (!pickupPoint) return { error: "Pick-up point is required." };
+  if (!password || password.length < 8) {
+    return { error: "Password is required and must be at least 8 characters." };
+  }
 
-  const normalizedEmail = email.trim().toLowerCase();
+  const normalizedEmail = email.toLowerCase();
   const existing = await prisma.user.findUnique({ where: { email: normalizedEmail } });
   if (existing) {
     return { error: "A user with this email already exists." };
   }
 
-  const tempPassword = generateTempPassword();
-  const passwordHash = await hashPassword(tempPassword);
+  const passwordHash = await hashPassword(password);
 
   const user = await prisma.user.create({
     data: {
       email: normalizedEmail,
-      fullName: fullName.trim(),
+      fullName,
       role,
-      employeeCode: optionalField(formData, "employeeCode"),
-      contactNumber: optionalField(formData, "contactNumber"),
-      address: optionalField(formData, "address"),
-      pickupPoint: optionalField(formData, "pickupPoint"),
+      employeeCode,
+      contactNumber,
+      address,
+      pickupPoint,
       passwordHash,
-      mustChangePassword: true,
+      mustChangePassword: false,
       isBulkCreated: false,
     },
   });
@@ -76,10 +83,11 @@ export async function createUserAction(
   });
 
   revalidatePath("/super-admin/users");
-  return { created: { email: user.email, tempPassword, fullName: user.fullName } };
+  revalidatePath("/facilities/user-info");
+  return { created: { email: user.email, fullName: user.fullName } };
 }
 
-export type BulkCreateResultRow = { email: string; tempPassword: string; fullName: string };
+export type BulkCreateResultRow = { email: string; fullName: string };
 export type BulkCreateSkipRow = { line: number; reason: string };
 export type BulkCreateUsersState = {
   error?: string;
@@ -90,7 +98,7 @@ export async function bulkCreateUsersAction(
   _prevState: BulkCreateUsersState,
   formData: FormData
 ): Promise<BulkCreateUsersState> {
-  const session = await requireRole([Role.SUPER_ADMIN]);
+  const session = await requireRole([Role.SUPER_ADMIN, Role.FACILITIES]);
 
   const file = formData.get("file");
   if (!(file instanceof File) || file.size === 0) {
@@ -113,9 +121,22 @@ export async function bulkCreateUsersAction(
     contactNumber: colIndex("contactnumber"),
     address: colIndex("address"),
     pickupPoint: colIndex("pickuppoint"),
+    password: colIndex("password"),
   };
-  if (idx.fullName === -1 || idx.email === -1 || idx.role === -1) {
-    return { error: "CSV must include at least fullName, email, and role columns." };
+  if (
+    idx.fullName === -1 ||
+    idx.email === -1 ||
+    idx.role === -1 ||
+    idx.employeeCode === -1 ||
+    idx.contactNumber === -1 ||
+    idx.address === -1 ||
+    idx.pickupPoint === -1 ||
+    idx.password === -1
+  ) {
+    return {
+      error:
+        "CSV must include fullName, email, role, employeeCode, contactNumber, address, pickupPoint, and password columns.",
+    };
   }
 
   const created: BulkCreateResultRow[] = [];
@@ -127,13 +148,35 @@ export async function bulkCreateUsersAction(
     const fullName = cols[idx.fullName]?.trim();
     const email = cols[idx.email]?.trim().toLowerCase();
     const role = cols[idx.role]?.trim().toUpperCase();
+    const employeeCode = cols[idx.employeeCode]?.trim();
+    const contactNumber = cols[idx.contactNumber]?.trim();
+    const address = cols[idx.address]?.trim();
+    const pickupPoint = cols[idx.pickupPoint]?.trim();
+    const password = cols[idx.password]?.trim();
 
-    if (!fullName || !email || !role) {
-      skipped.push({ line, reason: "Missing fullName, email, or role." });
+    if (
+      !fullName ||
+      !email ||
+      !role ||
+      !employeeCode ||
+      !contactNumber ||
+      !address ||
+      !pickupPoint ||
+      !password
+    ) {
+      skipped.push({
+        line,
+        reason:
+          "Missing one or more required fields (fullName, email, role, employeeCode, contactNumber, address, pickupPoint, password).",
+      });
       continue;
     }
     if (!isValidRole(role)) {
       skipped.push({ line, reason: `Unknown role "${role}".` });
+      continue;
+    }
+    if (password.length < 8) {
+      skipped.push({ line, reason: "Password must be at least 8 characters." });
       continue;
     }
 
@@ -143,26 +186,24 @@ export async function bulkCreateUsersAction(
       continue;
     }
 
-    const tempPassword = generateTempPassword();
-    const passwordHash = await hashPassword(tempPassword);
+    const passwordHash = await hashPassword(password);
 
     const user = await prisma.user.create({
       data: {
         email,
         fullName,
         role,
-        employeeCode: (idx.employeeCode >= 0 ? cols[idx.employeeCode]?.trim() : "") || null,
-        contactNumber:
-          (idx.contactNumber >= 0 ? cols[idx.contactNumber]?.trim() : "") || null,
-        address: (idx.address >= 0 ? cols[idx.address]?.trim() : "") || null,
-        pickupPoint: (idx.pickupPoint >= 0 ? cols[idx.pickupPoint]?.trim() : "") || null,
+        employeeCode,
+        contactNumber,
+        address,
+        pickupPoint,
         passwordHash,
-        mustChangePassword: true,
+        mustChangePassword: false,
         isBulkCreated: true,
       },
     });
 
-    created.push({ email: user.email, tempPassword, fullName: user.fullName });
+    created.push({ email: user.email, fullName: user.fullName });
   }
 
   if (created.length > 0) {
@@ -177,6 +218,7 @@ export async function bulkCreateUsersAction(
   }
 
   revalidatePath("/super-admin/users");
+  revalidatePath("/facilities/user-info");
   return { results: { created, skipped } };
 }
 

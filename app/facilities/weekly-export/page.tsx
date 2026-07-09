@@ -4,6 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { formatShortDate, getWeekDays, DAY_LABELS } from "@/lib/date/week";
 import { ARRIVAL_TIME_OPTIONS, NO_TRANSPORT_VALUE } from "@/lib/constants/arrival-times";
 import { MAX_UNFILTERED_ROWS } from "@/lib/constants/limits";
+import { excelSafeText } from "@/lib/csv";
 import {
   Table,
   TableBody,
@@ -93,7 +94,7 @@ export default async function WeeklyExportPage({
   const csvRows = rows.map((row) => [
     row.employeeName,
     row.employeeCode,
-    row.contactNumber,
+    excelSafeText(row.contactNumber),
     row.address,
     row.pickupPoint,
     ...row.days.map((d) => (d === NO_TRANSPORT_VALUE ? "Not Required" : d)),

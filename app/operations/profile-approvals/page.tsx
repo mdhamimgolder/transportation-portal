@@ -9,24 +9,16 @@ import {
   ContactApprovalCard,
   type ContactApprovalRow,
 } from "@/components/operations/contact-approval-card";
-import {
-  PickupPointApprovalCard,
-  type PickupPointApprovalRow,
-} from "@/components/operations/pickup-point-approval-card";
 
 export default async function ProfileApprovalsPage() {
   await requireRole([Role.OPERATIONS]);
 
-  const [addressRequests, contactRequests, pickupPointRequests] = await Promise.all([
+  const [addressRequests, contactRequests] = await Promise.all([
     prisma.addressChangeRequest.findMany({
       include: { employee: true },
       orderBy: [{ status: "asc" }, { createdAt: "desc" }],
     }),
     prisma.contactChangeRequest.findMany({
-      include: { employee: true },
-      orderBy: [{ status: "asc" }, { createdAt: "desc" }],
-    }),
-    prisma.pickupPointChangeRequest.findMany({
       include: { employee: true },
       orderBy: [{ status: "asc" }, { createdAt: "desc" }],
     }),
@@ -60,24 +52,9 @@ export default async function ProfileApprovalsPage() {
     },
   }));
 
-  const pickupPointRows: PickupPointApprovalRow[] = pickupPointRequests.map((r) => ({
-    id: r.id,
-    status: r.status,
-    oldPickupPoint: r.oldPickupPoint,
-    newPickupPoint: r.newPickupPoint,
-    rejectReason: r.rejectReason,
-    createdAt: r.createdAt.toISOString(),
-    employee: {
-      fullName: r.employee.fullName,
-      employeeCode: r.employee.employeeCode,
-      email: r.employee.email,
-    },
-  }));
-
   const pendingAddressCount = addressRows.filter((r) => r.status === "PENDING").length;
   const pendingContactCount = contactRows.filter((r) => r.status === "PENDING").length;
-  const pendingPickupPointCount = pickupPointRows.filter((r) => r.status === "PENDING").length;
-  const totalPending = pendingAddressCount + pendingContactCount + pendingPickupPointCount;
+  const totalPending = pendingAddressCount + pendingContactCount;
 
   return (
     <div className="space-y-6">
@@ -117,23 +94,6 @@ export default async function ProfileApprovalsPage() {
           <div className="space-y-3">
             {contactRows.map((row) => (
               <ContactApprovalCard key={row.id} row={row} />
-            ))}
-          </div>
-        )}
-      </div>
-
-      <div className="space-y-3">
-        <h2 className="text-sm font-semibold text-muted-foreground">
-          Pick-up Point Change Requests ({pendingPickupPointCount} pending)
-        </h2>
-        {pickupPointRows.length === 0 ? (
-          <p className="text-sm text-muted-foreground">
-            No pick-up point change requests yet.
-          </p>
-        ) : (
-          <div className="space-y-3">
-            {pickupPointRows.map((row) => (
-              <PickupPointApprovalCard key={row.id} row={row} />
             ))}
           </div>
         )}

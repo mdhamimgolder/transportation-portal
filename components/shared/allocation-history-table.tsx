@@ -9,14 +9,22 @@ import {
 import { Badge } from "@/components/ui/badge";
 import type { AllocationHistoryRow } from "@/lib/queries/allocation-history";
 
-export function AllocationHistoryTable({ rows }: { rows: AllocationHistoryRow[] }) {
+export function AllocationHistoryTable({
+  rows,
+  showTypeColumn = true,
+}: {
+  rows: AllocationHistoryRow[];
+  showTypeColumn?: boolean;
+}) {
+  const columnCount = showTypeColumn ? 9 : 8;
+
   return (
     <div className="overflow-x-auto rounded-lg border">
       <Table>
         <TableHeader>
           <TableRow>
             <TableHead>Employee</TableHead>
-            <TableHead>Type</TableHead>
+            {showTypeColumn ? <TableHead>Type</TableHead> : null}
             <TableHead>Date</TableHead>
             <TableHead>Driver</TableHead>
             <TableHead>Driver Contact</TableHead>
@@ -29,7 +37,7 @@ export function AllocationHistoryTable({ rows }: { rows: AllocationHistoryRow[] 
         <TableBody>
           {rows.length === 0 ? (
             <TableRow>
-              <TableCell colSpan={9} className="text-center text-muted-foreground">
+              <TableCell colSpan={columnCount} className="text-center text-muted-foreground">
                 No allocation history yet.
               </TableCell>
             </TableRow>
@@ -46,7 +54,7 @@ export function AllocationHistoryTable({ rows }: { rows: AllocationHistoryRow[] 
                     ) : null}
                   </div>
                 </TableCell>
-                <TableCell>{row.type}</TableCell>
+                {showTypeColumn ? <TableCell>{row.type}</TableCell> : null}
                 <TableCell>{row.dateLabel}</TableCell>
                 <TableCell>{row.driverName}</TableCell>
                 <TableCell className="text-muted-foreground">

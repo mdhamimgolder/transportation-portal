@@ -1,3 +1,13 @@
+/**
+ * Wraps a digit-heavy value (phone numbers, employee codes with leading
+ * zeros) as an Excel formula literal so Excel opens it as text instead of
+ * auto-converting it to a number and dropping leading zeros / switching to
+ * scientific notation.
+ */
+export function excelSafeText(value: string): string {
+  return `="${value.replace(/"/g, '""')}"`;
+}
+
 /** Minimal RFC-4180-ish CSV parser: handles quoted fields, escaped quotes, CRLF/LF. */
 export function parseCsv(text: string): string[][] {
   const rows: string[][] = [];

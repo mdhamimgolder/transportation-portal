@@ -37,12 +37,23 @@ export type SubmissionWindow = {
   isOpen: boolean;
 };
 
-export function getSubmissionWindow(now: Date = new Date()): SubmissionWindow {
+/**
+ * `lockDayOfWeek` is 0=Sun .. 6=Sat (defaults to Saturday, matching the
+ * original hardcoded behavior). Super Admin can override day/hour/minute via
+ * TransportSettings -- see lib/queries/settings.ts.
+ */
+export function getSubmissionWindow(
+  now: Date = new Date(),
+  lockDayOfWeek: number = 6,
+  lockHour: number = 12,
+  lockMinute: number = 0
+): SubmissionWindow {
   const thisMonday = getMondayOfWeek(now);
+  const dayOffsetFromMonday = (lockDayOfWeek - 1 + 7) % 7;
 
   let candidateTargetMonday = new Date(thisMonday.getTime() + 7 * MS_PER_DAY);
-  let deadline = new Date(thisMonday.getTime() + 5 * MS_PER_DAY);
-  deadline.setHours(12, 0, 0, 0);
+  let deadline = new Date(thisMonday.getTime() + dayOffsetFromMonday * MS_PER_DAY);
+  deadline.setHours(lockHour, lockMinute, 0, 0);
 
   if (now.getTime() > deadline.getTime()) {
     candidateTargetMonday = new Date(

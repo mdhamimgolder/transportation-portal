@@ -12,112 +12,9 @@ function parseDateRange(from?: string, to?: string): DateRange {
   };
 }
 
-export type WeeklyReportRow = {
-  id: string;
-  employeeName: string;
-  employeeCode: string | null;
-  weekLabel: string;
-  status: string;
-  submittedAtLabel: string;
-  daysNeedingTransport: number;
-};
-
-export async function getWeeklyReportRows(
-  q?: string,
-  from?: string,
-  to?: string
-): Promise<WeeklyReportRow[]> {
-  const range = parseDateRange(from, to);
-
-  const schedules = await prisma.weeklySchedule.findMany({
-    where:
-      range.from || range.to
-        ? {
-            weekStartDate: {
-              ...(range.from ? { gte: range.from } : {}),
-              ...(range.to ? { lte: range.to } : {}),
-            },
-          }
-        : undefined,
-    include: { employee: true, days: true },
-    orderBy: { weekStartDate: "desc" },
-    take: MAX_UNFILTERED_ROWS,
-  });
-
-  const rows: WeeklyReportRow[] = schedules.map((s) => ({
-    id: s.id,
-    employeeName: s.employee.fullName,
-    employeeCode: s.employee.employeeCode,
-    weekLabel: formatShortDate(s.weekStartDate),
-    status: s.status,
-    submittedAtLabel: formatShortDate(s.submittedAt),
-    daysNeedingTransport: s.days.filter((d) => d.needsTransport).length,
-  }));
-
-  const needle = q?.trim().toLowerCase();
-  if (!needle) return rows;
-
-  return rows.filter(
-    (r) =>
-      r.employeeName.toLowerCase().includes(needle) ||
-      (r.employeeCode?.toLowerCase().includes(needle) ?? false)
-  );
-}
-
-export type AdHocReportRow = {
-  id: string;
-  employeeName: string;
-  employeeCode: string | null;
-  dateLabel: string;
-  arrivalTime: string;
-  status: string;
-  reason: string | null;
-};
-
-export async function getAdHocReportRows(
-  q?: string,
-  from?: string,
-  to?: string
-): Promise<AdHocReportRow[]> {
-  const range = parseDateRange(from, to);
-
-  const requests = await prisma.adHocRequest.findMany({
-    where:
-      range.from || range.to
-        ? {
-            date: {
-              ...(range.from ? { gte: range.from } : {}),
-              ...(range.to ? { lte: range.to } : {}),
-            },
-          }
-        : undefined,
-    include: { employee: true },
-    orderBy: { date: "desc" },
-    take: MAX_UNFILTERED_ROWS,
-  });
-
-  const rows: AdHocReportRow[] = requests.map((r) => ({
-    id: r.id,
-    employeeName: r.employee.fullName,
-    employeeCode: r.employee.employeeCode,
-    dateLabel: formatShortDate(r.date),
-    arrivalTime: r.arrivalTime,
-    status: r.status,
-    reason: r.reason,
-  }));
-
-  const needle = q?.trim().toLowerCase();
-  if (!needle) return rows;
-
-  return rows.filter(
-    (r) =>
-      r.employeeName.toLowerCase().includes(needle) ||
-      (r.employeeCode?.toLowerCase().includes(needle) ?? false)
-  );
-}
-
 export type AssignmentReportRow = {
   id: string;
+  type: "Weekly" | "Ad-hoc";
   employeeName: string;
   employeeCode: string | null;
   address: string | null;
@@ -162,6 +59,7 @@ export async function getAssignmentReportRows(
     return [
       {
         id: assignment.id,
+        type: assignment.weeklyScheduleDay ? "Weekly" : "Ad-hoc",
         employeeName: employee.fullName,
         employeeCode: employee.employeeCode,
         address: employee.address,

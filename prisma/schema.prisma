@@ -284,6 +284,17 @@ model AuditLog {
   @@index([createdAt])
 }
 
+// ── APP SETTINGS ──────────────────────────────────────────────
+// Single-row config table (fixed id "singleton") for admin-tunable values.
+
+model TransportSettings {
+  id                  String   @id @default("singleton")
+  weeklyLockDayOfWeek Int      @default(6) // 0=Sun .. 6=Sat; default Saturday
+  weeklyLockHour      Int      @default(12)
+  weeklyLockMinute    Int      @default(0)
+  updatedAt           DateTime @updatedAt
+}
+
 // ── PHASE-2 PLACEHOLDERS (schema-only; no UI yet) ────────────
 
 model Zone {

@@ -12,6 +12,7 @@ import {
   LayoutDashboard,
   Map,
   ScrollText,
+  Settings,
   UserCheck,
   UserRound,
   Users,
@@ -43,6 +44,7 @@ const ICONS: Record<string, LucideIcon> = {
   users: Users,
   reports: BarChart3,
   audit: ScrollText,
+  settings: Settings,
 };
 
 function initialsOf(name: string): string {

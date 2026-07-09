@@ -42,14 +42,10 @@ function AddEmployeeDialogBody({ onDone }: { onDone: () => void }) {
       <div className="space-y-4">
         <p className="text-sm text-foreground">
           Account created for{" "}
-          <span className="font-medium">{state.created.fullName}</span>. Share
-          these sign-in details securely — the temporary password won&apos;t
-          be shown again.
+          <span className="font-medium">{state.created.fullName}</span>{" "}
+          (<span className="font-mono">{state.created.email}</span>). They can
+          sign in now with the password you set.
         </p>
-        <div className="space-y-1.5 rounded-lg border bg-muted p-3 font-mono text-sm">
-          <p>{state.created.email}</p>
-          <p>{state.created.tempPassword}</p>
-        </div>
         <DialogFooter>
           <Button type="button" onClick={onDone}>
             Done
@@ -86,21 +82,32 @@ function AddEmployeeDialogBody({ onDone }: { onDone: () => void }) {
       </div>
       <div className="grid grid-cols-2 gap-4">
         <div className="space-y-2">
-          <Label htmlFor="employeeCode">Employee ID (optional)</Label>
-          <Input id="employeeCode" name="employeeCode" disabled={pending} />
+          <Label htmlFor="employeeCode">Employee ID</Label>
+          <Input id="employeeCode" name="employeeCode" required disabled={pending} />
         </div>
         <div className="space-y-2">
-          <Label htmlFor="contactNumber">Contact number (optional)</Label>
-          <Input id="contactNumber" name="contactNumber" disabled={pending} />
+          <Label htmlFor="contactNumber">Contact number</Label>
+          <Input id="contactNumber" name="contactNumber" required disabled={pending} />
         </div>
       </div>
       <div className="space-y-2">
-        <Label htmlFor="address">Address (optional)</Label>
-        <Input id="address" name="address" disabled={pending} />
+        <Label htmlFor="address">Address</Label>
+        <Input id="address" name="address" required disabled={pending} />
       </div>
       <div className="space-y-2">
-        <Label htmlFor="pickupPoint">Pick-up point (optional)</Label>
-        <Input id="pickupPoint" name="pickupPoint" disabled={pending} />
+        <Label htmlFor="pickupPoint">Pick-up point</Label>
+        <Input id="pickupPoint" name="pickupPoint" required disabled={pending} />
+      </div>
+      <div className="space-y-2">
+        <Label htmlFor="password">Password</Label>
+        <Input
+          id="password"
+          name="password"
+          type="password"
+          minLength={8}
+          required
+          disabled={pending}
+        />
       </div>
       {state.error ? <p className="text-sm text-destructive">{state.error}</p> : null}
       <DialogFooter>

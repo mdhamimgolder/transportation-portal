@@ -30,10 +30,27 @@ export async function submitAdHocRequest(
     return { error: "Please select a valid arrival time." };
   }
 
+  const today = startOfToday();
+
+  const existingWeeklyDay = await prisma.weeklyScheduleDay.findFirst({
+    where: {
+      date: today,
+      needsTransport: true,
+      weeklySchedule: { employeeId: session.id },
+    },
+  });
+
+  if (existingWeeklyDay && existingWeeklyDay.arrivalTime === arrivalTime) {
+    return {
+      error:
+        "You already have a weekly schedule with this arrival time for today. Choose a different arrival time to submit an ad-hoc request.",
+    };
+  }
+
   const request = await prisma.adHocRequest.create({
     data: {
       employeeId: session.id,
-      date: startOfToday(),
+      date: today,
       arrivalTime,
       reason: typeof reason === "string" && reason.trim() ? reason.trim() : null,
     },

@@ -8,6 +8,7 @@ const links: NavLink[] = [
   { href: "/super-admin/users", label: "Users", icon: "users" },
   { href: "/super-admin/reports", label: "Reports", icon: "reports" },
   { href: "/super-admin/audit-log", label: "Audit Log", icon: "audit" },
+  { href: "/super-admin/settings", label: "Settings", icon: "settings" },
 ];
 
 export default async function SuperAdminLayout({

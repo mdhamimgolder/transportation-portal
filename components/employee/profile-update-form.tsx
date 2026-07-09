@@ -56,7 +56,7 @@ export function ProfileUpdateForm({
           </p>
         ) : (
           <p className="text-xs text-muted-foreground">
-            Changing this submits a request for Operations to review.
+            Changing this submits a request for Facilities to review.
           </p>
         )}
         {state.errors?.pickupPoint ? (

@@ -11,7 +11,11 @@ import {
 } from "@/lib/auth/session";
 import { requireAuth } from "@/lib/rbac/guards";
 import { writeAuditLog } from "@/lib/audit/log";
-import { loginSchema, changePasswordSchema } from "@/lib/validation/schemas";
+import {
+  loginSchema,
+  changePasswordSchema,
+  selfChangePasswordSchema,
+} from "@/lib/validation/schemas";
 import { AuditActionType, ROLE_HOME, type Role } from "@/lib/constants/enums";
 
 export type LoginActionState = {
@@ -117,4 +121,53 @@ export async function changePasswordAction(
   });
 
   redirect(ROLE_HOME[user.role as Role]);
+}
+
+export type SelfChangePasswordState = {
+  error?: string;
+  success?: boolean;
+};
+
+export async function selfChangePasswordAction(
+  _prevState: SelfChangePasswordState,
+  formData: FormData
+): Promise<SelfChangePasswordState> {
+  const session = await requireAuth();
+
+  const parsed = selfChangePasswordSchema.safeParse({
+    currentPassword: formData.get("currentPassword"),
+    newPassword: formData.get("newPassword"),
+    confirmPassword: formData.get("confirmPassword"),
+  });
+
+  if (!parsed.success) {
+    return { error: parsed.error.issues[0]?.message ?? "Invalid input" };
+  }
+
+  const user = await prisma.user.findUniqueOrThrow({ where: { id: session.id } });
+
+  const currentMatches = await verifyPassword(
+    parsed.data.currentPassword,
+    user.passwordHash
+  );
+  if (!currentMatches) {
+    return { error: "Current password is incorrect." };
+  }
+
+  const passwordHash = await hashPassword(parsed.data.newPassword);
+  const updated = await prisma.user.update({
+    where: { id: user.id },
+    data: { passwordHash, mustChangePassword: false },
+  });
+
+  await rotateSession(updated);
+  await writeAuditLog({
+    actor: { id: updated.id, email: updated.email, role: updated.role },
+    actionType: AuditActionType.PASSWORD_CHANGED,
+    entityType: "User",
+    entityId: updated.id,
+    description: `${updated.fullName} changed their own password from their profile`,
+  });
+
+  return { success: true };
 }

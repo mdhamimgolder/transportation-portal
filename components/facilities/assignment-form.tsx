@@ -4,6 +4,7 @@ import { useActionState, useEffect, useState } from "react";
 import { useFormStatus } from "react-dom";
 import { assignRoute, type AssignRouteState } from "@/actions/route-assignment.actions";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import {
   Select,
   SelectContent,
@@ -42,10 +43,12 @@ export function AssignmentForm({
   target,
   options,
   existing,
+  pickupTimeMode = "select",
 }: {
   target: { weeklyScheduleDayId: string } | { adHocRequestId: string };
   options: VehicleDriverOption[];
   existing?: ExistingAssignment;
+  pickupTimeMode?: "select" | "text";
 }) {
   const [editing, setEditing] = useState(!existing);
   const [state, formAction] = useActionState(assignRoute, initialState);
@@ -101,18 +104,28 @@ export function AssignmentForm({
         </SelectContent>
       </Select>
 
-      <Select name="pickupTime" defaultValue={existing?.pickupTime}>
-        <SelectTrigger className="w-28">
-          <SelectValue placeholder="Time" />
-        </SelectTrigger>
-        <SelectContent>
-          {PICKUP_TIME_OPTIONS.map((option) => (
-            <SelectItem key={option.value} value={option.value}>
-              {option.label}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
+      {pickupTimeMode === "text" ? (
+        <Input
+          name="pickupTime"
+          defaultValue={existing?.pickupTime}
+          placeholder="e.g. 10:30 PM"
+          className="w-32"
+          required
+        />
+      ) : (
+        <Select name="pickupTime" defaultValue={existing?.pickupTime}>
+          <SelectTrigger className="w-28">
+            <SelectValue placeholder="Time" />
+          </SelectTrigger>
+          <SelectContent>
+            {PICKUP_TIME_OPTIONS.map((option) => (
+              <SelectItem key={option.value} value={option.value}>
+                {option.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      )}
 
       <SubmitButton />
       {existing ? (
