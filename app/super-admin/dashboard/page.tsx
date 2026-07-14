@@ -1,4 +1,4 @@
-import { ScrollText, UserRound, Users } from "lucide-react";
+import { BarChart3, UserRound, Users } from "lucide-react";
 import { requireRole } from "@/lib/rbac/guards";
 import { Role } from "@/lib/constants/enums";
 import { prisma } from "@/lib/prisma";
@@ -8,12 +8,10 @@ import { StatCard } from "@/components/shared/stat-card";
 export default async function SuperAdminDashboardPage() {
   const user = await requireRole([Role.SUPER_ADMIN]);
 
-  const dayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
-
-  const [totalUsers, employees, auditLast24h] = await Promise.all([
+  const [totalUsers, employees, assignmentsCount] = await Promise.all([
     prisma.user.count({ where: { isActive: true } }),
     prisma.user.count({ where: { isActive: true, role: Role.EMPLOYEE } }),
-    prisma.auditLog.count({ where: { createdAt: { gte: dayAgo } } }),
+    prisma.routeAssignment.count(),
   ]);
 
   const firstName = user.fullName.split(" ")[0];
@@ -40,11 +38,11 @@ export default async function SuperAdminDashboardPage() {
           icon={<UserRound className="size-5" />}
         />
         <StatCard
-          label="Audit events (24h)"
-          value={auditLast24h}
-          hint="Logged system changes"
-          icon={<ScrollText className="size-5" />}
-          href="/super-admin/audit-log"
+          label="Transport assignments"
+          value={assignmentsCount}
+          hint="All-time driver assignments"
+          icon={<BarChart3 className="size-5" />}
+          href="/super-admin/reports"
         />
       </div>
     </div>

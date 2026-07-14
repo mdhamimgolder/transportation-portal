@@ -3,20 +3,14 @@
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { hashPassword, verifyPassword } from "@/lib/auth/password";
-import {
-  createSession,
-  destroySession,
-  getSession,
-  rotateSession,
-} from "@/lib/auth/session";
+import { createSession, destroySession, rotateSession } from "@/lib/auth/session";
 import { requireAuth } from "@/lib/rbac/guards";
-import { writeAuditLog } from "@/lib/audit/log";
 import {
   loginSchema,
   changePasswordSchema,
   selfChangePasswordSchema,
 } from "@/lib/validation/schemas";
-import { AuditActionType, ROLE_HOME, type Role } from "@/lib/constants/enums";
+import { ROLE_HOME, type Role } from "@/lib/constants/enums";
 
 export type LoginActionState = {
   error?: string;
@@ -55,13 +49,6 @@ export async function loginAction(
     where: { id: user.id },
     data: { lastLoginAt: new Date() },
   });
-  await writeAuditLog({
-    actor: { id: user.id, email: user.email, role: user.role },
-    actionType: AuditActionType.USER_LOGIN,
-    entityType: "User",
-    entityId: user.id,
-    description: `${user.fullName} logged in`,
-  });
 
   const destination = user.mustChangePassword
     ? "/force-change-password"
@@ -71,16 +58,6 @@ export async function loginAction(
 }
 
 export async function logoutAction(): Promise<void> {
-  const session = await getSession();
-  if (session) {
-    await writeAuditLog({
-      actor: { id: session.id, email: session.email, role: session.role },
-      actionType: AuditActionType.USER_LOGOUT,
-      entityType: "User",
-      entityId: session.id,
-      description: `${session.fullName} logged out`,
-    });
-  }
   await destroySession();
   redirect("/login");
 }
@@ -112,13 +89,6 @@ export async function changePasswordAction(
   });
 
   await rotateSession(user);
-  await writeAuditLog({
-    actor: { id: user.id, email: user.email, role: user.role },
-    actionType: AuditActionType.PASSWORD_CHANGED,
-    entityType: "User",
-    entityId: user.id,
-    description: `${user.fullName} changed their password`,
-  });
 
   redirect(ROLE_HOME[user.role as Role]);
 }
@@ -161,13 +131,6 @@ export async function selfChangePasswordAction(
   });
 
   await rotateSession(updated);
-  await writeAuditLog({
-    actor: { id: updated.id, email: updated.email, role: updated.role },
-    actionType: AuditActionType.PASSWORD_CHANGED,
-    entityType: "User",
-    entityId: updated.id,
-    description: `${updated.fullName} changed their own password from their profile`,
-  });
 
   return { success: true };
 }

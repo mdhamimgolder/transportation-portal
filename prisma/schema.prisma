@@ -51,7 +51,6 @@ model User {
   reviewedContactChanges ContactChangeRequest[] @relation("ReviewerContactChangeRequests")
   pickupPointChangeRequests  PickupPointChangeRequest[] @relation("EmployeePickupPointChangeRequests")
   reviewedPickupPointChanges PickupPointChangeRequest[] @relation("ReviewerPickupPointChanges")
-  auditLogsAsActor       AuditLog[]             @relation("ActorAuditLogs")
   sessions               Session[]
 
   @@index([role])
@@ -256,32 +255,6 @@ model VehicleDriver {
   assignments RouteAssignment[]
 
   @@index([isActive])
-}
-
-// ── AUDIT LOG ─────────────────────────────────────────────────
-
-model AuditLog {
-  id String @id @default(cuid())
-
-  actorId    String?
-  actor      User?   @relation("ActorAuditLogs", fields: [actorId], references: [id])
-  actorEmail String? // denormalized snapshot, survives actor deactivation
-  actorRole  String?
-
-  actionType String // e.g. ADDRESS_CHANGE_APPROVED, PROFILE_EDITED, SCHEDULE_APPROVED, USER_BULK_CREATED
-  entityType String // User | AddressChangeRequest | WeeklySchedule | AdHocRequest | RouteAssignment | VehicleDriver
-  entityId   String
-
-  beforeValue String? // JSON-stringified snapshot
-  afterValue  String? // JSON-stringified snapshot
-  description String? // e.g. "Operations approved Employee X's address change"
-
-  createdAt DateTime @default(now())
-
-  @@index([actorId])
-  @@index([actionType])
-  @@index([entityType, entityId])
-  @@index([createdAt])
 }
 
 // ── APP SETTINGS ──────────────────────────────────────────────

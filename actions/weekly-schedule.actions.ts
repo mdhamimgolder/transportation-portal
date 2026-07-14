@@ -3,15 +3,10 @@
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { requireRole } from "@/lib/rbac/guards";
-import { writeAuditLog } from "@/lib/audit/log";
 import { getSubmissionWindow, getWeekDays } from "@/lib/date/week";
 import { getTransportSettings } from "@/lib/queries/settings";
 import { NO_TRANSPORT_VALUE, ARRIVAL_TIME_OPTIONS } from "@/lib/constants/arrival-times";
-import {
-  Role,
-  AuditActionType,
-  WeeklyScheduleStatus,
-} from "@/lib/constants/enums";
+import { Role, WeeklyScheduleStatus } from "@/lib/constants/enums";
 
 export type SubmitWeeklyScheduleState = {
   error?: string;
@@ -114,15 +109,6 @@ export async function submitWeeklySchedule(
     });
   }
 
-  await writeAuditLog({
-    actor: { id: session.id, email: session.email, role: session.role },
-    actionType: AuditActionType.SCHEDULE_SUBMITTED,
-    entityType: "WeeklySchedule",
-    entityId: scheduleId,
-    after: dayValues,
-    description: `${session.fullName} submitted a weekly schedule for the week of ${window.weekStartDate.toDateString()}`,
-  });
-
   revalidatePath("/employee/weekly");
   return { success: true };
 }
@@ -154,16 +140,6 @@ export async function approveSchedules(
         reviewedById: session.id,
         reviewedAt: new Date(),
       },
-    });
-
-    await writeAuditLog({
-      actor: { id: session.id, email: session.email, role: session.role },
-      actionType: AuditActionType.SCHEDULE_APPROVED,
-      entityType: "WeeklySchedule",
-      entityId: schedule.id,
-      before: { status: schedule.status },
-      after: { status: WeeklyScheduleStatus.APPROVED },
-      description: `${session.fullName} approved a weekly schedule (week of ${schedule.weekStartDate.toDateString()})`,
     });
   }
 
@@ -198,19 +174,13 @@ export async function editWeeklySchedule(
 
   const schedule = await prisma.weeklySchedule.findUnique({
     where: { id: scheduleId },
-    include: { days: true, employee: true },
+    include: { days: true },
   });
   if (!schedule) {
     return { error: "Schedule not found." };
   }
 
   const weekDates = getWeekDays(schedule.weekStartDate);
-  const beforeValues = Array.from({ length: 5 }, (_, i) => {
-    const day = schedule.days.find((d) => d.dayOfWeek === i + 1);
-    return day && day.needsTransport && day.arrivalTime
-      ? day.arrivalTime
-      : NO_TRANSPORT_VALUE;
-  });
 
   for (let i = 0; i < 5; i++) {
     const value = dayValues[i];
@@ -236,16 +206,6 @@ export async function editWeeklySchedule(
       },
     });
   }
-
-  await writeAuditLog({
-    actor: { id: session.id, email: session.email, role: session.role },
-    actionType: AuditActionType.SCHEDULE_EDITED,
-    entityType: "WeeklySchedule",
-    entityId: schedule.id,
-    before: beforeValues,
-    after: dayValues,
-    description: `${session.fullName} edited ${schedule.employee.fullName}'s weekly schedule (week of ${schedule.weekStartDate.toDateString()})`,
-  });
 
   revalidatePath("/operations/weekly-requests");
   return { success: true };
@@ -287,16 +247,6 @@ export async function rejectSchedule(
       reviewedById: session.id,
       reviewedAt: new Date(),
     },
-  });
-
-  await writeAuditLog({
-    actor: { id: session.id, email: session.email, role: session.role },
-    actionType: AuditActionType.SCHEDULE_REJECTED,
-    entityType: "WeeklySchedule",
-    entityId: scheduleId,
-    before: { status: schedule.status },
-    after: { status: WeeklyScheduleStatus.REJECTED, reason: reason.trim() },
-    description: `${session.fullName} rejected a weekly schedule (week of ${schedule.weekStartDate.toDateString()}): ${reason.trim()}`,
   });
 
   revalidatePath("/operations/weekly-requests");

@@ -6,12 +6,10 @@ import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { hashPassword } from "@/lib/auth/password";
 import { sendMail } from "@/lib/mailer";
-import { writeAuditLog } from "@/lib/audit/log";
 import {
   forgotPasswordSchema,
   resetPasswordSchema,
 } from "@/lib/validation/schemas";
-import { AuditActionType } from "@/lib/constants/enums";
 
 const RESET_TOKEN_TTL_MS = 60 * 60 * 1000; // 1 hour
 
@@ -99,14 +97,6 @@ export async function resetPasswordAction(
       passwordResetToken: null,
       passwordResetExpires: null,
     },
-  });
-
-  await writeAuditLog({
-    actor: { id: user.id, email: user.email, role: user.role },
-    actionType: AuditActionType.PASSWORD_CHANGED,
-    entityType: "User",
-    entityId: user.id,
-    description: `${user.fullName} reset their password via the forgot-password link`,
   });
 
   redirect("/login?reset=success");

@@ -3,10 +3,9 @@
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { requireRole } from "@/lib/rbac/guards";
-import { writeAuditLog } from "@/lib/audit/log";
 import { startOfToday } from "@/lib/date/week";
 import { ADHOC_ARRIVAL_TIME_OPTIONS } from "@/lib/constants/adhoc-arrival-times";
-import { Role, AuditActionType } from "@/lib/constants/enums";
+import { Role } from "@/lib/constants/enums";
 
 export type SubmitAdHocRequestState = {
   error?: string;
@@ -47,22 +46,13 @@ export async function submitAdHocRequest(
     };
   }
 
-  const request = await prisma.adHocRequest.create({
+  await prisma.adHocRequest.create({
     data: {
       employeeId: session.id,
       date: today,
       arrivalTime,
       reason: typeof reason === "string" && reason.trim() ? reason.trim() : null,
     },
-  });
-
-  await writeAuditLog({
-    actor: { id: session.id, email: session.email, role: session.role },
-    actionType: AuditActionType.ADHOC_SUBMITTED,
-    entityType: "AdHocRequest",
-    entityId: request.id,
-    after: { arrivalTime, reason: request.reason },
-    description: `${session.fullName} submitted an ad-hoc transport request for today at ${arrivalTime}`,
   });
 
   revalidatePath("/employee/adhoc");

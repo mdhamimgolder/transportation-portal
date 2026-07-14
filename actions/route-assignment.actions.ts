@@ -3,9 +3,8 @@
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { requireRole } from "@/lib/rbac/guards";
-import { writeAuditLog } from "@/lib/audit/log";
 import { sendMail } from "@/lib/mailer";
-import { Role, AuditActionType, AdHocStatus } from "@/lib/constants/enums";
+import { Role, AdHocStatus } from "@/lib/constants/enums";
 import type { SessionUser } from "@/lib/auth/session";
 
 export type AssignRouteState = {
@@ -57,15 +56,6 @@ async function upsertAssignmentForWeeklyDay(params: {
     body: `Hi ${employee.fullName},\n\nYour transport for ${day.date.toDateString()} has been arranged:\nDriver: ${vehicleDriver.driverName} (${vehicleDriver.contactNumber})\nVehicle: ${vehicleDriver.vehicleNumber}\nPickup time: ${pickupTime}\n\n- Facilities Team`,
   });
 
-  await writeAuditLog({
-    actor: { id: actor.id, email: actor.email, role: actor.role },
-    actionType: AuditActionType.ROUTE_ASSIGNED,
-    entityType: "RouteAssignment",
-    entityId: assignment.id,
-    after: { vehicleDriverId, pickupTime },
-    description: `${actor.fullName} assigned transport for ${employee.fullName} on ${day.date.toDateString()}`,
-  });
-
   return assignment;
 }
 
@@ -115,15 +105,6 @@ async function upsertAssignmentForAdHoc(params: {
     to: request.employee.email,
     subject: "Your ad-hoc transport has been arranged",
     body: `Hi ${request.employee.fullName},\n\nYour ad-hoc transport for ${request.date.toDateString()} has been arranged:\nDriver: ${vehicleDriver.driverName} (${vehicleDriver.contactNumber})\nVehicle: ${vehicleDriver.vehicleNumber}\nPickup time: ${pickupTime}\n\n- Facilities Team`,
-  });
-
-  await writeAuditLog({
-    actor: { id: actor.id, email: actor.email, role: actor.role },
-    actionType: AuditActionType.ROUTE_ASSIGNED,
-    entityType: "RouteAssignment",
-    entityId: assignment.id,
-    after: { vehicleDriverId, pickupTime },
-    description: `${actor.fullName} assigned ad-hoc transport for ${request.employee.fullName} on ${request.date.toDateString()}`,
   });
 
   return assignment;

@@ -3,10 +3,9 @@
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { requireRole } from "@/lib/rbac/guards";
-import { writeAuditLog } from "@/lib/audit/log";
 import { hashPassword } from "@/lib/auth/password";
 import { parseCsv } from "@/lib/csv";
-import { Role, ALL_ROLES, AuditActionType } from "@/lib/constants/enums";
+import { Role, ALL_ROLES } from "@/lib/constants/enums";
 
 function isValidRole(value: string): value is Role {
   return (ALL_ROLES as string[]).includes(value);
@@ -26,7 +25,7 @@ export async function createUserAction(
   _prevState: CreateUserState,
   formData: FormData
 ): Promise<CreateUserState> {
-  const session = await requireRole([Role.SUPER_ADMIN, Role.FACILITIES]);
+  await requireRole([Role.SUPER_ADMIN, Role.FACILITIES]);
 
   const fullName = requiredField(formData, "fullName");
   const email = requiredField(formData, "email");
@@ -73,15 +72,6 @@ export async function createUserAction(
     },
   });
 
-  await writeAuditLog({
-    actor: { id: session.id, email: session.email, role: session.role },
-    actionType: AuditActionType.USER_CREATED,
-    entityType: "User",
-    entityId: user.id,
-    after: { email: user.email, role: user.role, fullName: user.fullName },
-    description: `${session.fullName} created a ${role} account for ${user.fullName}`,
-  });
-
   revalidatePath("/super-admin/users");
   revalidatePath("/facilities/user-info");
   return { created: { email: user.email, fullName: user.fullName } };
@@ -98,7 +88,7 @@ export async function bulkCreateUsersAction(
   _prevState: BulkCreateUsersState,
   formData: FormData
 ): Promise<BulkCreateUsersState> {
-  const session = await requireRole([Role.SUPER_ADMIN, Role.FACILITIES]);
+  await requireRole([Role.SUPER_ADMIN, Role.FACILITIES]);
 
   const file = formData.get("file");
   if (!(file instanceof File) || file.size === 0) {
@@ -206,17 +196,6 @@ export async function bulkCreateUsersAction(
     created.push({ email: user.email, fullName: user.fullName });
   }
 
-  if (created.length > 0) {
-    await writeAuditLog({
-      actor: { id: session.id, email: session.email, role: session.role },
-      actionType: AuditActionType.USER_BULK_CREATED,
-      entityType: "User",
-      entityId: "bulk",
-      after: { count: created.length },
-      description: `${session.fullName} bulk-created ${created.length} account(s)`,
-    });
-  }
-
   revalidatePath("/super-admin/users");
   revalidatePath("/facilities/user-info");
   return { results: { created, skipped } };
@@ -249,16 +228,6 @@ export async function updateUserRoleAction(
 
   await prisma.user.update({ where: { id }, data: { role } });
 
-  await writeAuditLog({
-    actor: { id: session.id, email: session.email, role: session.role },
-    actionType: AuditActionType.USER_ROLE_CHANGED,
-    entityType: "User",
-    entityId: id,
-    before: { role: user.role },
-    after: { role },
-    description: `${session.fullName} changed ${user.fullName}'s role from ${user.role} to ${role}`,
-  });
-
   revalidatePath("/super-admin/users");
   return { success: true };
 }
@@ -279,16 +248,6 @@ export async function toggleUserActiveAction(formData: FormData): Promise<void> 
       deletedAt: nextActive ? null : new Date(),
       deletedBy: nextActive ? null : session.id,
     },
-  });
-
-  await writeAuditLog({
-    actor: { id: session.id, email: session.email, role: session.role },
-    actionType: nextActive
-      ? AuditActionType.USER_REACTIVATED
-      : AuditActionType.USER_DEACTIVATED,
-    entityType: "User",
-    entityId: id,
-    description: `${session.fullName} ${nextActive ? "reactivated" : "deactivated"} ${user.fullName}`,
   });
 
   revalidatePath("/super-admin/users");

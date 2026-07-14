@@ -3,12 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { requireRole } from "@/lib/rbac/guards";
-import { writeAuditLog } from "@/lib/audit/log";
-import {
-  Role,
-  AuditActionType,
-  AddressChangeStatus,
-} from "@/lib/constants/enums";
+import { Role, AddressChangeStatus } from "@/lib/constants/enums";
 
 export type ApproveAddressChangeState = {
   error?: string;
@@ -27,7 +22,6 @@ export async function approveAddressChange(
 
   const request = await prisma.addressChangeRequest.findUnique({
     where: { id: requestId },
-    include: { employee: true },
   });
   if (!request) {
     return { error: "Request not found." };
@@ -48,16 +42,6 @@ export async function approveAddressChange(
   await prisma.user.update({
     where: { id: request.employeeId },
     data: { address: request.newAddress },
-  });
-
-  await writeAuditLog({
-    actor: { id: session.id, email: session.email, role: session.role },
-    actionType: AuditActionType.ADDRESS_CHANGE_APPROVED,
-    entityType: "AddressChangeRequest",
-    entityId: request.id,
-    before: { address: request.oldAddress },
-    after: { address: request.newAddress },
-    description: `${session.fullName} approved ${request.employee.fullName}'s address change`,
   });
 
   revalidatePath("/operations/profile-approvals");
@@ -88,7 +72,6 @@ export async function rejectAddressChange(
 
   const request = await prisma.addressChangeRequest.findUnique({
     where: { id: requestId },
-    include: { employee: true },
   });
   if (!request) {
     return { error: "Request not found." };
@@ -105,16 +88,6 @@ export async function rejectAddressChange(
       reviewedById: session.id,
       reviewedAt: new Date(),
     },
-  });
-
-  await writeAuditLog({
-    actor: { id: session.id, email: session.email, role: session.role },
-    actionType: AuditActionType.ADDRESS_CHANGE_REJECTED,
-    entityType: "AddressChangeRequest",
-    entityId: request.id,
-    before: { status: request.status },
-    after: { status: AddressChangeStatus.REJECTED, reason: reason.trim() },
-    description: `${session.fullName} rejected ${request.employee.fullName}'s address change: ${reason.trim()}`,
   });
 
   revalidatePath("/operations/profile-approvals");

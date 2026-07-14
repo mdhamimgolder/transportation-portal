@@ -3,8 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { requireRole } from "@/lib/rbac/guards";
-import { writeAuditLog } from "@/lib/audit/log";
-import { Role, AuditActionType } from "@/lib/constants/enums";
+import { Role } from "@/lib/constants/enums";
 
 export type UpdateEmployeeProfileState = {
   error?: string;
@@ -26,7 +25,7 @@ export async function updateEmployeeProfileByFacilitiesAction(
   _prevState: UpdateEmployeeProfileState,
   formData: FormData
 ): Promise<UpdateEmployeeProfileState> {
-  const session = await requireRole([Role.FACILITIES]);
+  await requireRole([Role.FACILITIES]);
 
   const userId = formData.get("userId");
   if (typeof userId !== "string" || !userId) {
@@ -49,20 +48,6 @@ export async function updateEmployeeProfileByFacilitiesAction(
   await prisma.user.update({
     where: { id: userId },
     data: { contactNumber, address, pickupPoint },
-  });
-
-  await writeAuditLog({
-    actor: { id: session.id, email: session.email, role: session.role },
-    actionType: AuditActionType.PROFILE_EDITED_BY_FACILITIES,
-    entityType: "User",
-    entityId: userId,
-    before: {
-      contactNumber: employee.contactNumber,
-      address: employee.address,
-      pickupPoint: employee.pickupPoint,
-    },
-    after: { contactNumber, address, pickupPoint },
-    description: `${session.fullName} directly edited ${employee.fullName}'s profile`,
   });
 
   revalidatePath("/facilities/user-info");
