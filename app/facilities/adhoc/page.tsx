@@ -77,7 +77,7 @@ export default async function FacilitiesAdHocPage() {
                   <p className="text-xs text-muted-foreground">
                     {request.employee.email} &middot; {request.employee.contactNumber ?? "—"}
                   </p>
-                  <p className="text-xs text-muted-foreground">
+                  <p className="text-xs font-bold text-black dark:text-white">
                     {request.employee.address ?? "No address on file"}
                     {request.employee.pickupPoint
                       ? ` · Pick-up: ${request.employee.pickupPoint}`
