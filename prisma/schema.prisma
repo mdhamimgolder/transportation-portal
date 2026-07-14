@@ -198,6 +198,8 @@ model AdHocRequest {
   reason      String?
   status      String   @default("PENDING") // PENDING | ASSIGNED | CANCELLED
 
+  facilitiesComment String? // instructions/info Facilities shares with the employee
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

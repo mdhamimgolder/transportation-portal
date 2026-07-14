@@ -5,6 +5,7 @@ import { useFormStatus } from "react-dom";
 import { assignRoute, type AssignRouteState } from "@/actions/route-assignment.actions";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Select,
   SelectContent,
@@ -12,16 +13,15 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  VehicleDriverCombobox,
+  type VehicleDriverOption,
+} from "@/components/facilities/vehicle-driver-combobox";
 import { PICKUP_TIME_OPTIONS } from "@/lib/constants/pickup-times";
 
 const initialState: AssignRouteState = {};
 
-export type VehicleDriverOption = {
-  id: string;
-  driverName: string;
-  vehicleNumber: string;
-  vendor: string;
-};
+export type { VehicleDriverOption };
 
 export type ExistingAssignment = {
   vehicleDriverId: string;
@@ -43,40 +43,51 @@ export function AssignmentForm({
   target,
   options,
   existing,
+  existingComment,
   pickupTimeMode = "select",
 }: {
   target: { weeklyScheduleDayId: string } | { adHocRequestId: string };
   options: VehicleDriverOption[];
   existing?: ExistingAssignment;
+  existingComment?: string | null;
   pickupTimeMode?: "select" | "text";
 }) {
-  const [editing, setEditing] = useState(!existing);
+  const isAdHoc = "adHocRequestId" in target;
+  const [editing, setEditing] = useState(!existing && !existingComment);
   const [state, formAction] = useActionState(assignRoute, initialState);
 
   useEffect(() => {
     if (state.success) setEditing(false);
   }, [state.success]);
 
-  if (existing && !editing) {
+  if ((existing || existingComment) && !editing) {
     return (
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
-        <span className="font-medium">{existing.driverName}</span>
-        <span className="text-muted-foreground">{existing.vehicleNumber}</span>
-        <span className="text-muted-foreground">{existing.pickupTime}</span>
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          onClick={() => setEditing(true)}
-        >
-          Edit
-        </Button>
+      <div className="space-y-1.5 text-sm">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+          {existing ? (
+            <>
+              <span className="font-medium">{existing.driverName}</span>
+              <span className="text-muted-foreground">{existing.vehicleNumber}</span>
+              <span className="text-muted-foreground">{existing.pickupTime}</span>
+            </>
+          ) : (
+            <span className="text-muted-foreground">No vehicle assigned yet.</span>
+          )}
+          <Button type="button" variant="ghost" size="sm" onClick={() => setEditing(true)}>
+            Edit
+          </Button>
+        </div>
+        {existingComment ? (
+          <p className="rounded-md bg-muted/50 px-2 py-1.5 text-xs text-muted-foreground">
+            Note to employee: {existingComment}
+          </p>
+        ) : null}
       </div>
     );
   }
 
   return (
-    <form action={formAction} className="flex flex-wrap items-center gap-2">
+    <form action={formAction} className="flex flex-wrap items-start gap-2">
       {"weeklyScheduleDayId" in target ? (
         <input
           type="hidden"
@@ -91,18 +102,12 @@ export function AssignmentForm({
         />
       )}
 
-      <Select name="vehicleDriverId" defaultValue={existing?.vehicleDriverId}>
-        <SelectTrigger className="w-56">
-          <SelectValue placeholder="Vehicle & driver" />
-        </SelectTrigger>
-        <SelectContent>
-          {options.map((option) => (
-            <SelectItem key={option.id} value={option.id}>
-              {option.driverName} &middot; {option.vehicleNumber} ({option.vendor})
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
+      <VehicleDriverCombobox
+        name="vehicleDriverId"
+        options={options}
+        defaultValue={existing?.vehicleDriverId}
+        className="w-56"
+      />
 
       {pickupTimeMode === "text" ? (
         <Input
@@ -110,7 +115,6 @@ export function AssignmentForm({
           defaultValue={existing?.pickupTime}
           placeholder="e.g. 10:30 PM"
           className="w-32"
-          required
         />
       ) : (
         <Select name="pickupTime" defaultValue={existing?.pickupTime}>
@@ -127,8 +131,18 @@ export function AssignmentForm({
         </Select>
       )}
 
+      {isAdHoc ? (
+        <Textarea
+          name="comment"
+          defaultValue={existingComment ?? ""}
+          placeholder="Note to employee (optional -- can be sent without an assignment)"
+          className="w-64"
+          rows={1}
+        />
+      ) : null}
+
       <SubmitButton />
-      {existing ? (
+      {existing || existingComment ? (
         <Button
           type="button"
           variant="ghost"

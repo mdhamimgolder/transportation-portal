@@ -55,6 +55,11 @@ export default async function AdHocPage() {
                       {request.reason}
                     </p>
                   ) : null}
+                  {request.facilitiesComment ? (
+                    <p className="mt-1 rounded-md bg-muted/50 px-2 py-1 text-xs text-muted-foreground">
+                      Note from Facilities: {request.facilitiesComment}
+                    </p>
+                  ) : null}
                 </div>
                 <StatusBadge status={request.status} />
               </div>

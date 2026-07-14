@@ -12,6 +12,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { VehicleDriverFormDialog } from "@/components/facilities/vehicle-driver-form-dialog";
+import { VehicleDriverBulkUploadDialog } from "@/components/facilities/vehicle-driver-bulk-upload-dialog";
 
 export default async function VehiclesAndDriversPage() {
   await requireRole([Role.FACILITIES]);
@@ -30,7 +31,10 @@ export default async function VehiclesAndDriversPage() {
             Master list used for route assignment.
           </p>
         </div>
-        <VehicleDriverFormDialog />
+        <div className="flex items-center gap-2">
+          <VehicleDriverBulkUploadDialog />
+          <VehicleDriverFormDialog />
+        </div>
       </div>
 
       <div className="overflow-x-auto rounded-lg border">

@@ -77,6 +77,12 @@ export default async function FacilitiesAdHocPage() {
                   <p className="text-xs text-muted-foreground">
                     {request.employee.email} &middot; {request.employee.contactNumber ?? "—"}
                   </p>
+                  <p className="text-xs text-muted-foreground">
+                    {request.employee.address ?? "No address on file"}
+                    {request.employee.pickupPoint
+                      ? ` · Pick-up: ${request.employee.pickupPoint}`
+                      : ""}
+                  </p>
                 </CardHeader>
                 <CardContent className="space-y-2">
                   <p className="text-sm">
@@ -104,6 +110,7 @@ export default async function FacilitiesAdHocPage() {
                           }
                         : undefined
                     }
+                    existingComment={request.facilitiesComment}
                   />
                 </CardContent>
               </Card>

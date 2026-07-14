@@ -120,32 +120,48 @@ export async function assignRoute(
   const adHocRequestId = formData.get("adHocRequestId");
   const vehicleDriverId = formData.get("vehicleDriverId");
   const pickupTime = formData.get("pickupTime");
+  const commentRaw = formData.get("comment");
+  const comment = typeof commentRaw === "string" ? commentRaw.trim() : "";
 
-  if (typeof vehicleDriverId !== "string" || !vehicleDriverId) {
-    return { error: "Select a vehicle & driver." };
-  }
-  if (typeof pickupTime !== "string" || !pickupTime) {
-    return { error: "Select a pickup time." };
-  }
+  const hasFullAssignment =
+    typeof vehicleDriverId === "string" &&
+    vehicleDriverId.length > 0 &&
+    typeof pickupTime === "string" &&
+    pickupTime.length > 0;
 
   try {
     if (typeof weeklyScheduleDayId === "string" && weeklyScheduleDayId) {
+      if (!hasFullAssignment) {
+        return { error: "Select a vehicle & driver and a pickup time." };
+      }
       await upsertAssignmentForWeeklyDay({
         weeklyScheduleDayId,
-        vehicleDriverId,
-        pickupTime,
+        vehicleDriverId: vehicleDriverId as string,
+        pickupTime: pickupTime as string,
         actor: session,
       });
       revalidatePath("/facilities/route-planning");
     } else if (typeof adHocRequestId === "string" && adHocRequestId) {
-      await upsertAssignmentForAdHoc({
-        adHocRequestId,
-        vehicleDriverId,
-        pickupTime,
-        actor: session,
+      if (!hasFullAssignment && !comment) {
+        return {
+          error: "Provide a vehicle & pickup time, or a note for the employee.",
+        };
+      }
+      if (hasFullAssignment) {
+        await upsertAssignmentForAdHoc({
+          adHocRequestId,
+          vehicleDriverId: vehicleDriverId as string,
+          pickupTime: pickupTime as string,
+          actor: session,
+        });
+      }
+      await prisma.adHocRequest.update({
+        where: { id: adHocRequestId },
+        data: { facilitiesComment: comment || null },
       });
       revalidatePath("/facilities/adhoc");
       revalidatePath("/operations/adhoc");
+      revalidatePath("/employee/adhoc");
     } else {
       return { error: "Missing assignment target." };
     }
