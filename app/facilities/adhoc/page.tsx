@@ -7,19 +7,30 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { StatusBadge } from "@/components/shared/status-badge";
 import { AssignmentForm } from "@/components/facilities/assignment-form";
+import { cn } from "@/lib/utils";
 
 const ARRIVAL_TIME_LABELS = Object.fromEntries(
   ADHOC_ARRIVAL_TIME_OPTIONS.map((o) => [o.value, o.label])
 );
 
+const BORDER_BY_STATUS: Record<string, string> = {
+  PENDING: "border-l-amber",
+  APPROVED: "border-l-teal",
+  REJECTED: "border-l-red",
+};
+
 export default async function FacilitiesAdHocPage() {
   await requireRole([Role.FACILITIES]);
 
-  // Only Operations-approved requests that haven't been assigned yet show up
-  // here -- once assigned, the request moves to Allocation History instead.
+  // Visible as soon as an employee submits -- only assigned (or cancelled)
+  // requests drop off, since those have already moved to Allocation History.
   const [requests, vehicleDrivers] = await Promise.all([
     prisma.adHocRequest.findMany({
-      where: { status: AdHocStatus.APPROVED },
+      where: {
+        status: {
+          in: [AdHocStatus.PENDING, AdHocStatus.APPROVED, AdHocStatus.REJECTED],
+        },
+      },
       include: {
         employee: true,
         routeAssignment: { include: { vehicleDriver: true } },
@@ -44,8 +55,8 @@ export default async function FacilitiesAdHocPage() {
       <div>
         <h1 className="text-xl font-semibold">Ad-hoc Transport</h1>
         <p className="text-sm text-muted-foreground">
-          Operations-approved requests awaiting a vehicle assignment. Once
-          assigned, a request moves to Allocation History.
+          All same-day requests, as submitted. Assign a vehicle once
+          Operations approves -- assigned requests move to Allocation History.
         </p>
       </div>
 
@@ -55,7 +66,10 @@ export default async function FacilitiesAdHocPage() {
         <div className="space-y-3">
           {requests.map((request) => {
             return (
-              <Card key={request.id} className="border-l-4 border-l-amber">
+              <Card
+                key={request.id}
+                className={cn("border-l-4", BORDER_BY_STATUS[request.status])}
+              >
                 <CardHeader>
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <CardTitle className="text-base">
@@ -90,22 +104,33 @@ export default async function FacilitiesAdHocPage() {
                     </p>
                   ) : null}
 
-                  <AssignmentForm
-                    target={{ adHocRequestId: request.id }}
-                    options={options}
-                    pickupTimeMode="text"
-                    existing={
-                      request.routeAssignment
-                        ? {
-                            vehicleDriverId: request.routeAssignment.vehicleDriverId,
-                            driverName: request.routeAssignment.vehicleDriver.driverName,
-                            vehicleNumber: request.routeAssignment.vehicleDriver.vehicleNumber,
-                            pickupTime: request.routeAssignment.pickupTime,
-                          }
-                        : undefined
-                    }
-                    existingComment={request.facilitiesComment}
-                  />
+                  {request.status === AdHocStatus.PENDING ? (
+                    <p className="text-sm text-muted-foreground italic">
+                      Awaiting Operations approval.
+                    </p>
+                  ) : request.status === AdHocStatus.REJECTED ? (
+                    <p className="text-sm text-destructive">
+                      Declined by Operations
+                      {request.rejectReason ? `: ${request.rejectReason}` : "."}
+                    </p>
+                  ) : (
+                    <AssignmentForm
+                      target={{ adHocRequestId: request.id }}
+                      options={options}
+                      pickupTimeMode="text"
+                      existing={
+                        request.routeAssignment
+                          ? {
+                              vehicleDriverId: request.routeAssignment.vehicleDriverId,
+                              driverName: request.routeAssignment.vehicleDriver.driverName,
+                              vehicleNumber: request.routeAssignment.vehicleDriver.vehicleNumber,
+                              pickupTime: request.routeAssignment.pickupTime,
+                            }
+                          : undefined
+                      }
+                      existingComment={request.facilitiesComment}
+                    />
+                  )}
                 </CardContent>
               </Card>
             );
