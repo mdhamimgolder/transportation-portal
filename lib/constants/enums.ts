@@ -23,6 +23,8 @@ export type WeeklyScheduleStatus =
 
 export const AdHocStatus = {
   PENDING: "PENDING",
+  APPROVED: "APPROVED",
+  REJECTED: "REJECTED",
   ASSIGNED: "ASSIGNED",
   CANCELLED: "CANCELLED",
 } as const;

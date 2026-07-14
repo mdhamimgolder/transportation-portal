@@ -1,5 +1,5 @@
 import { requireRole } from "@/lib/rbac/guards";
-import { Role } from "@/lib/constants/enums";
+import { Role, AdHocStatus } from "@/lib/constants/enums";
 import { prisma } from "@/lib/prisma";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { StatusBadge } from "@/components/shared/status-badge";
@@ -58,6 +58,11 @@ export default async function AdHocPage() {
                   {request.facilitiesComment ? (
                     <p className="mt-1 rounded-md bg-muted/50 px-2 py-1 text-xs text-muted-foreground">
                       Note from Facilities: {request.facilitiesComment}
+                    </p>
+                  ) : null}
+                  {request.status === AdHocStatus.REJECTED && request.rejectReason ? (
+                    <p className="mt-1 text-xs text-destructive">
+                      Declined: {request.rejectReason}
                     </p>
                   ) : null}
                 </div>

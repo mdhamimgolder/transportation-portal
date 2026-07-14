@@ -196,7 +196,11 @@ model AdHocRequest {
   date        DateTime
   arrivalTime String // "HH:mm"
   reason      String?
-  status      String   @default("PENDING") // PENDING | ASSIGNED | CANCELLED
+  status      String   @default("PENDING") // PENDING | APPROVED | REJECTED | ASSIGNED | CANCELLED
+  rejectReason String?
+
+  reviewedById String?
+  reviewedAt   DateTime?
 
   facilitiesComment String? // instructions/info Facilities shares with the employee
 

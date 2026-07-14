@@ -5,7 +5,7 @@ import { prisma } from "@/lib/prisma";
 import { requireRole } from "@/lib/rbac/guards";
 import { startOfToday } from "@/lib/date/week";
 import { ADHOC_ARRIVAL_TIME_OPTIONS } from "@/lib/constants/adhoc-arrival-times";
-import { Role } from "@/lib/constants/enums";
+import { Role, AdHocStatus } from "@/lib/constants/enums";
 
 export type SubmitAdHocRequestState = {
   error?: string;
@@ -58,5 +58,88 @@ export async function submitAdHocRequest(
   revalidatePath("/employee/adhoc");
   revalidatePath("/operations/adhoc");
   revalidatePath("/facilities/adhoc");
+  return { success: true };
+}
+
+export type ApproveAdHocRequestState = {
+  error?: string;
+};
+
+export async function approveAdHocRequest(
+  _prevState: ApproveAdHocRequestState,
+  formData: FormData
+): Promise<ApproveAdHocRequestState> {
+  const session = await requireRole([Role.OPERATIONS]);
+
+  const requestId = formData.get("requestId");
+  if (typeof requestId !== "string" || !requestId) {
+    return { error: "Missing request." };
+  }
+
+  const request = await prisma.adHocRequest.findUnique({ where: { id: requestId } });
+  if (!request) {
+    return { error: "Request not found." };
+  }
+  if (request.status !== AdHocStatus.PENDING) {
+    return { error: "This request has already been reviewed." };
+  }
+
+  await prisma.adHocRequest.update({
+    where: { id: requestId },
+    data: {
+      status: AdHocStatus.APPROVED,
+      reviewedById: session.id,
+      reviewedAt: new Date(),
+    },
+  });
+
+  revalidatePath("/operations/adhoc");
+  revalidatePath("/facilities/adhoc");
+  revalidatePath("/employee/adhoc");
+  return {};
+}
+
+export type RejectAdHocRequestState = {
+  error?: string;
+  success?: boolean;
+};
+
+export async function rejectAdHocRequest(
+  _prevState: RejectAdHocRequestState,
+  formData: FormData
+): Promise<RejectAdHocRequestState> {
+  const session = await requireRole([Role.OPERATIONS]);
+
+  const requestId = formData.get("requestId");
+  const reason = formData.get("reason");
+
+  if (typeof requestId !== "string" || !requestId) {
+    return { error: "Missing request." };
+  }
+  if (typeof reason !== "string" || reason.trim().length === 0) {
+    return { error: "A rejection reason is required." };
+  }
+
+  const request = await prisma.adHocRequest.findUnique({ where: { id: requestId } });
+  if (!request) {
+    return { error: "Request not found." };
+  }
+  if (request.status !== AdHocStatus.PENDING) {
+    return { error: "This request has already been reviewed." };
+  }
+
+  await prisma.adHocRequest.update({
+    where: { id: requestId },
+    data: {
+      status: AdHocStatus.REJECTED,
+      rejectReason: reason.trim(),
+      reviewedById: session.id,
+      reviewedAt: new Date(),
+    },
+  });
+
+  revalidatePath("/operations/adhoc");
+  revalidatePath("/facilities/adhoc");
+  revalidatePath("/employee/adhoc");
   return { success: true };
 }

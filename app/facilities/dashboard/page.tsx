@@ -16,7 +16,7 @@ export default async function FacilitiesDashboardPage() {
         routeAssignment: null,
       },
     }),
-    prisma.adHocRequest.count({ where: { status: AdHocStatus.PENDING } }),
+    prisma.adHocRequest.count({ where: { status: AdHocStatus.APPROVED } }),
     prisma.vehicleDriver.count({ where: { isActive: true } }),
   ]);
 
@@ -40,7 +40,7 @@ export default async function FacilitiesDashboardPage() {
         <StatCard
           label="Urgent ad-hoc requests"
           value={pendingAdhoc}
-          hint="Same-day transport to assign"
+          hint="Approved, awaiting vehicle assignment"
           icon={<Zap className="size-5" />}
           href="/facilities/adhoc"
         />

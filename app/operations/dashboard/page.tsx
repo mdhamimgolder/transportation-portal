@@ -57,9 +57,9 @@ export default async function OperationsDashboardPage() {
           href="/operations/profile-approvals"
         />
         <StatCard
-          label="Active ad-hoc requests"
+          label="Ad-hoc requests to review"
           value={activeAdhoc}
-          hint="Awaiting Facilities assignment"
+          hint="Pending approval"
           icon={<Zap className="size-5" />}
           href="/operations/adhoc"
         />

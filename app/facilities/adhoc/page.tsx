@@ -1,5 +1,5 @@
 import { requireRole } from "@/lib/rbac/guards";
-import { Role } from "@/lib/constants/enums";
+import { Role, AdHocStatus } from "@/lib/constants/enums";
 import { prisma } from "@/lib/prisma";
 import { formatShortDate } from "@/lib/date/week";
 import { ADHOC_ARRIVAL_TIME_OPTIONS } from "@/lib/constants/adhoc-arrival-times";
@@ -7,7 +7,6 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { StatusBadge } from "@/components/shared/status-badge";
 import { AssignmentForm } from "@/components/facilities/assignment-form";
-import { cn } from "@/lib/utils";
 
 const ARRIVAL_TIME_LABELS = Object.fromEntries(
   ADHOC_ARRIVAL_TIME_OPTIONS.map((o) => [o.value, o.label])
@@ -16,9 +15,11 @@ const ARRIVAL_TIME_LABELS = Object.fromEntries(
 export default async function FacilitiesAdHocPage() {
   await requireRole([Role.FACILITIES]);
 
+  // Only Operations-approved requests that haven't been assigned yet show up
+  // here -- once assigned, the request moves to Allocation History instead.
   const [requests, vehicleDrivers] = await Promise.all([
     prisma.adHocRequest.findMany({
-      where: { status: { not: "CANCELLED" } },
+      where: { status: AdHocStatus.APPROVED },
       include: {
         employee: true,
         routeAssignment: { include: { vehicleDriver: true } },
@@ -43,8 +44,8 @@ export default async function FacilitiesAdHocPage() {
       <div>
         <h1 className="text-xl font-semibold">Ad-hoc Transport</h1>
         <p className="text-sm text-muted-foreground">
-          Urgent, single-day requests. These bypass Operations approval --
-          assign a vehicle & driver and pickup time as soon as possible.
+          Operations-approved requests awaiting a vehicle assignment. Once
+          assigned, a request moves to Allocation History.
         </p>
       </div>
 
@@ -53,15 +54,8 @@ export default async function FacilitiesAdHocPage() {
       ) : (
         <div className="space-y-3">
           {requests.map((request) => {
-            const isPending = request.status === "PENDING";
             return (
-              <Card
-                key={request.id}
-                className={cn(
-                  "border-l-4",
-                  isPending ? "border-l-red bg-red/5" : "border-l-green"
-                )}
-              >
+              <Card key={request.id} className="border-l-4 border-l-amber">
                 <CardHeader>
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <CardTitle className="text-base">

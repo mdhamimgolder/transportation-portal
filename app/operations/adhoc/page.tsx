@@ -1,9 +1,10 @@
 import { requireRole } from "@/lib/rbac/guards";
-import { Role } from "@/lib/constants/enums";
+import { Role, AdHocStatus } from "@/lib/constants/enums";
 import { prisma } from "@/lib/prisma";
 import { formatShortDate } from "@/lib/date/week";
 import { ADHOC_ARRIVAL_TIME_OPTIONS } from "@/lib/constants/adhoc-arrival-times";
 import { StatusBadge } from "@/components/shared/status-badge";
+import { AdHocApprovalActions } from "@/components/operations/adhoc-approval-actions";
 import {
   Table,
   TableBody,
@@ -30,8 +31,8 @@ export default async function OperationsAdHocPage() {
       <div>
         <h1 className="text-xl font-semibold">Ad-hoc Transport</h1>
         <p className="text-sm text-muted-foreground">
-          Read-only oversight of single-day requests. These bypass Operations
-          approval and go straight to Facilities for assignment.
+          Approve or decline single-day requests. Approved requests go to
+          Facilities for vehicle assignment.
         </p>
       </div>
 
@@ -47,12 +48,13 @@ export default async function OperationsAdHocPage() {
               <TableHead>Arrival Time</TableHead>
               <TableHead>Reason</TableHead>
               <TableHead>Status</TableHead>
+              <TableHead className="w-48">Actions</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {requests.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={8} className="text-center text-muted-foreground">
+                <TableCell colSpan={9} className="text-center text-muted-foreground">
                   No ad-hoc requests yet.
                 </TableCell>
               </TableRow>
@@ -76,6 +78,19 @@ export default async function OperationsAdHocPage() {
                   </TableCell>
                   <TableCell>
                     <StatusBadge status={request.status} />
+                    {request.status === AdHocStatus.REJECTED && request.rejectReason ? (
+                      <p className="mt-1 max-w-40 text-xs text-muted-foreground">
+                        {request.rejectReason}
+                      </p>
+                    ) : null}
+                  </TableCell>
+                  <TableCell>
+                    {request.status === AdHocStatus.PENDING ? (
+                      <AdHocApprovalActions
+                        requestId={request.id}
+                        employeeName={request.employee.fullName}
+                      />
+                    ) : null}
                   </TableCell>
                 </TableRow>
               ))
