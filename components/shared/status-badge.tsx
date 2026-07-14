@@ -2,10 +2,10 @@ import { cn } from "@/lib/utils";
 
 const STATUS_STYLES: Record<string, string> = {
   PENDING: "bg-amber/10 text-amber-foreground",
-  APPROVED: "bg-green/10 text-green-foreground",
-  ASSIGNED: "bg-green/10 text-green-foreground",
-  REJECTED: "bg-red/10 text-red-foreground",
-  CANCELLED: "bg-red/10 text-red-foreground",
+  APPROVED: "bg-green/15 text-green",
+  ASSIGNED: "bg-green/15 text-green",
+  REJECTED: "bg-red/15 text-red",
+  CANCELLED: "bg-red/15 text-red",
 };
 
 export function StatusBadge({ status }: { status: string }) {

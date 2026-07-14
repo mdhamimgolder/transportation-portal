@@ -55,8 +55,8 @@ export default async function FacilitiesAdHocPage() {
       <div>
         <h1 className="text-xl font-semibold">Ad-hoc Transport</h1>
         <p className="text-sm text-muted-foreground">
-          All same-day requests, as submitted. Assign a vehicle once
-          Operations approves -- assigned requests move to Allocation History.
+          All same-day requests, as submitted -- assign a vehicle right away.
+          Assigned requests move to Allocation History.
         </p>
       </div>
 
@@ -104,33 +104,29 @@ export default async function FacilitiesAdHocPage() {
                     </p>
                   ) : null}
 
-                  {request.status === AdHocStatus.PENDING ? (
-                    <p className="text-sm text-muted-foreground italic">
-                      Awaiting Operations approval.
-                    </p>
-                  ) : request.status === AdHocStatus.REJECTED ? (
+                  {request.status === AdHocStatus.REJECTED ? (
                     <p className="text-sm text-destructive">
                       Declined by Operations
                       {request.rejectReason ? `: ${request.rejectReason}` : "."}
                     </p>
-                  ) : (
-                    <AssignmentForm
-                      target={{ adHocRequestId: request.id }}
-                      options={options}
-                      pickupTimeMode="text"
-                      existing={
-                        request.routeAssignment
-                          ? {
-                              vehicleDriverId: request.routeAssignment.vehicleDriverId,
-                              driverName: request.routeAssignment.vehicleDriver.driverName,
-                              vehicleNumber: request.routeAssignment.vehicleDriver.vehicleNumber,
-                              pickupTime: request.routeAssignment.pickupTime,
-                            }
-                          : undefined
-                      }
-                      existingComment={request.facilitiesComment}
-                    />
-                  )}
+                  ) : null}
+
+                  <AssignmentForm
+                    target={{ adHocRequestId: request.id }}
+                    options={options}
+                    pickupTimeMode="text"
+                    existing={
+                      request.routeAssignment
+                        ? {
+                            vehicleDriverId: request.routeAssignment.vehicleDriverId,
+                            driverName: request.routeAssignment.vehicleDriver.driverName,
+                            vehicleNumber: request.routeAssignment.vehicleDriver.vehicleNumber,
+                            pickupTime: request.routeAssignment.pickupTime,
+                          }
+                        : undefined
+                    }
+                    existingComment={request.facilitiesComment}
+                  />
                 </CardContent>
               </Card>
             );
