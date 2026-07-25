@@ -88,8 +88,9 @@ export default async function ProfilePage() {
         <CardHeader>
           <CardTitle className="text-base">Profile Details</CardTitle>
         </CardHeader>
-        <CardContent className="grid grid-cols-2 gap-4">
+        <CardContent className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <ProfileField label="Employee ID" value={user.employeeCode ?? "—"} />
+          <ProfileField label="Department" value={user.department ?? "—"} />
           <ProfileField label="Name" value={user.fullName} />
           <ProfileField label="Email" value={user.email} />
           <ProfileField
@@ -97,7 +98,7 @@ export default async function ProfilePage() {
             value={user.contactNumber ?? "—"}
           />
           <ProfileField label="Pick-up Point" value={user.pickupPoint ?? "—"} />
-          <div className="col-span-2">
+          <div className="sm:col-span-2">
             <ProfileField label="Address" value={user.address ?? "—"} />
           </div>
         </CardContent>

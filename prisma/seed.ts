@@ -16,6 +16,7 @@ const TEST_USERS = [
     fullName: "Erin Employee",
     role: Role.EMPLOYEE,
     employeeCode: "EMP0001",
+    department: "Logistics",
   },
   {
     email: "operations@example.com",
@@ -55,18 +56,21 @@ async function main() {
 
   for (const testUser of TEST_USERS) {
     const employeeCode = "employeeCode" in testUser ? testUser.employeeCode : null;
+    const department = "department" in testUser ? testUser.department : null;
     await prisma.user.upsert({
       where: { email: testUser.email },
       update: {
         fullName: testUser.fullName,
         role: testUser.role,
         employeeCode,
+        department,
       },
       create: {
         email: testUser.email,
         fullName: testUser.fullName,
         role: testUser.role,
         employeeCode,
+        department,
         passwordHash,
         mustChangePassword: false,
         isBulkCreated: false,

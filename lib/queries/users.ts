@@ -49,6 +49,7 @@ export type EmployeeDirectoryRow = {
   id: string;
   fullName: string;
   employeeCode: string | null;
+  department: string | null;
   email: string;
   contactNumber: string | null;
   address: string | null;
@@ -67,6 +68,7 @@ export async function getEmployeeDirectory(q?: string): Promise<EmployeeDirector
     id: u.id,
     fullName: u.fullName,
     employeeCode: u.employeeCode,
+    department: u.department,
     email: u.email,
     contactNumber: u.contactNumber,
     address: u.address,
@@ -82,6 +84,7 @@ export async function getEmployeeDirectory(q?: string): Promise<EmployeeDirector
       r.fullName.toLowerCase().includes(needle) ||
       r.email.toLowerCase().includes(needle) ||
       (r.employeeCode?.toLowerCase().includes(needle) ?? false) ||
+      (r.department?.toLowerCase().includes(needle) ?? false) ||
       (r.contactNumber?.toLowerCase().includes(needle) ?? false) ||
       (r.address?.toLowerCase().includes(needle) ?? false)
   );

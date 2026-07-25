@@ -23,6 +23,7 @@ model User {
 
   fullName      String
   employeeCode  String? @unique // human-readable employee ID, e.g. "EMP0001"
+  department    String?
   contactNumber String?
   address       String? // free-text "live" value; changes flow through AddressChangeRequest
   pickupPoint   String? // designated pickup location for transport, editable directly by the employee

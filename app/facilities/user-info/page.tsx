@@ -50,6 +50,7 @@ export default async function FacilitiesUserInfoPage({
             <TableRow>
               <TableHead>Name</TableHead>
               <TableHead>Employee ID</TableHead>
+              <TableHead>Department</TableHead>
               <TableHead>Email</TableHead>
               <TableHead>Contact</TableHead>
               <TableHead>Address</TableHead>
@@ -61,7 +62,7 @@ export default async function FacilitiesUserInfoPage({
           <TableBody>
             {employees.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={8} className="text-center text-muted-foreground">
+                <TableCell colSpan={9} className="text-center text-muted-foreground">
                   No employees found.
                 </TableCell>
               </TableRow>
@@ -70,6 +71,7 @@ export default async function FacilitiesUserInfoPage({
                 <TableRow key={employee.id}>
                   <TableCell className="font-medium">{employee.fullName}</TableCell>
                   <TableCell>{employee.employeeCode ?? "—"}</TableCell>
+                  <TableCell>{employee.department ?? "—"}</TableCell>
                   <TableCell className="text-muted-foreground">
                     {employee.email}
                   </TableCell>

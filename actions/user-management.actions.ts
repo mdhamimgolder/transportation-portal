@@ -31,6 +31,7 @@ export async function createUserAction(
   const email = requiredField(formData, "email");
   const role = formData.get("role");
   const employeeCode = requiredField(formData, "employeeCode");
+  const department = requiredField(formData, "department");
   const contactNumber = requiredField(formData, "contactNumber");
   const address = requiredField(formData, "address");
   const pickupPoint = requiredField(formData, "pickupPoint");
@@ -42,6 +43,7 @@ export async function createUserAction(
     return { error: "Please select a valid role." };
   }
   if (!employeeCode) return { error: "Employee ID is required." };
+  if (!department) return { error: "Department is required." };
   if (!contactNumber) return { error: "Contact number is required." };
   if (!address) return { error: "Address is required." };
   if (!pickupPoint) return { error: "Pick-up point is required." };
@@ -63,6 +65,7 @@ export async function createUserAction(
       fullName,
       role,
       employeeCode,
+      department,
       contactNumber,
       address,
       pickupPoint,
@@ -108,6 +111,7 @@ export async function bulkCreateUsersAction(
     email: colIndex("email"),
     role: colIndex("role"),
     employeeCode: colIndex("employeecode"),
+    department: colIndex("department"),
     contactNumber: colIndex("contactnumber"),
     address: colIndex("address"),
     pickupPoint: colIndex("pickuppoint"),
@@ -118,6 +122,7 @@ export async function bulkCreateUsersAction(
     idx.email === -1 ||
     idx.role === -1 ||
     idx.employeeCode === -1 ||
+    idx.department === -1 ||
     idx.contactNumber === -1 ||
     idx.address === -1 ||
     idx.pickupPoint === -1 ||
@@ -125,7 +130,7 @@ export async function bulkCreateUsersAction(
   ) {
     return {
       error:
-        "CSV must include fullName, email, role, employeeCode, contactNumber, address, pickupPoint, and password columns.",
+        "CSV must include fullName, email, role, employeeCode, department, contactNumber, address, pickupPoint, and password columns.",
     };
   }
 
@@ -139,6 +144,7 @@ export async function bulkCreateUsersAction(
     const email = cols[idx.email]?.trim().toLowerCase();
     const role = cols[idx.role]?.trim().toUpperCase();
     const employeeCode = cols[idx.employeeCode]?.trim();
+    const department = cols[idx.department]?.trim();
     const contactNumber = cols[idx.contactNumber]?.trim();
     const address = cols[idx.address]?.trim();
     const pickupPoint = cols[idx.pickupPoint]?.trim();
@@ -149,6 +155,7 @@ export async function bulkCreateUsersAction(
       !email ||
       !role ||
       !employeeCode ||
+      !department ||
       !contactNumber ||
       !address ||
       !pickupPoint ||
@@ -157,7 +164,7 @@ export async function bulkCreateUsersAction(
       skipped.push({
         line,
         reason:
-          "Missing one or more required fields (fullName, email, role, employeeCode, contactNumber, address, pickupPoint, password).",
+          "Missing one or more required fields (fullName, email, role, employeeCode, department, contactNumber, address, pickupPoint, password).",
       });
       continue;
     }
@@ -184,6 +191,7 @@ export async function bulkCreateUsersAction(
         fullName,
         role,
         employeeCode,
+        department,
         contactNumber,
         address,
         pickupPoint,

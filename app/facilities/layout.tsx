@@ -34,9 +34,9 @@ export default async function FacilitiesLayout({
   ];
 
   return (
-    <div className="flex min-h-screen">
+    <div className="flex min-h-screen flex-col lg:flex-row">
       <NavSidebar user={user} title="Facilities" links={links} />
-      <main className="flex-1 px-6 py-8 lg:px-10">
+      <main className="flex-1 px-4 py-6 lg:px-10 lg:py-8">
         <div className="mx-auto w-full max-w-7xl space-y-6">{children}</div>
       </main>
     </div>

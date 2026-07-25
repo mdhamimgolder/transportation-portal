@@ -26,6 +26,7 @@ const SAMPLE_HEADERS = [
   "email",
   "role",
   "employeeCode",
+  "department",
   "contactNumber",
   "address",
   "pickupPoint",
@@ -36,6 +37,7 @@ const SAMPLE_ROW = [
   "jamie.rivera@example.com",
   "EMPLOYEE",
   "EMP0042",
+  "Logistics",
   "01700000000",
   "12 Example Street, Dhaka",
   "Gulshan Circle 2",
@@ -110,8 +112,8 @@ function BulkUploadDialogBody({ onDone }: { onDone: () => void }) {
         <p>
           Required CSV columns:{" "}
           <code className="font-mono">
-            fullName, email, role, employeeCode, contactNumber, address,
-            pickupPoint, password
+            fullName, email, role, employeeCode, department, contactNumber,
+            address, pickupPoint, password
           </code>
           . Role must be one of EMPLOYEE, OPERATIONS, FACILITIES, SUPER_ADMIN.
           Password must be at least 8 characters.

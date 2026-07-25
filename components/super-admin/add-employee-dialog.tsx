@@ -80,15 +80,19 @@ function AddEmployeeDialogBody({ onDone }: { onDone: () => void }) {
           </SelectContent>
         </Select>
       </div>
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <div className="space-y-2">
           <Label htmlFor="employeeCode">Employee ID</Label>
           <Input id="employeeCode" name="employeeCode" required disabled={pending} />
         </div>
         <div className="space-y-2">
-          <Label htmlFor="contactNumber">Contact number</Label>
-          <Input id="contactNumber" name="contactNumber" required disabled={pending} />
+          <Label htmlFor="department">Department</Label>
+          <Input id="department" name="department" required disabled={pending} />
         </div>
+      </div>
+      <div className="space-y-2">
+        <Label htmlFor="contactNumber">Contact number</Label>
+        <Input id="contactNumber" name="contactNumber" required disabled={pending} />
       </div>
       <div className="space-y-2">
         <Label htmlFor="address">Address</Label>
