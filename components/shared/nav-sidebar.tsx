@@ -190,15 +190,7 @@ function UserMenu({
   );
 }
 
-function BrandMark({
-  title,
-  subtitle,
-  expanded = true,
-}: {
-  title: string;
-  subtitle?: string;
-  expanded?: boolean;
-}) {
+function BrandMark({ expanded = true }: { expanded?: boolean }) {
   return (
     <div
       className={cn(
@@ -212,14 +204,14 @@ function BrandMark({
         alt=""
         className="size-7 shrink-0 rounded-md object-cover"
       />
-      <div className={cn("min-w-0", !expanded && "hidden")}>
-        <p className="truncate font-display text-sm font-medium leading-tight">
-          Transportation
-        </p>
-        <p className="truncate font-mono text-[11px] tracking-wide text-ink-foreground/50 uppercase">
-          {subtitle ?? title}
-        </p>
-      </div>
+      <p
+        className={cn(
+          "truncate font-display text-sm font-medium lowercase",
+          !expanded && "hidden"
+        )}
+      >
+        commure
+      </p>
     </div>
   );
 }
@@ -230,7 +222,6 @@ export function NavSidebar({
   links,
   forceExpanded = false,
   hideMenuLabel = false,
-  brandSubtitle,
 }: {
   user: SessionUser;
   title: string;
@@ -239,8 +230,6 @@ export function NavSidebar({
   forceExpanded?: boolean;
   /** Hide the "Menu" section label above the nav links. */
   hideMenuLabel?: boolean;
-  /** Overrides the caption under "Transportation" in the brand block (defaults to `title`). */
-  brandSubtitle?: string;
 }) {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [hovered, setHovered] = useState(false);
@@ -258,7 +247,7 @@ export function NavSidebar({
           >
             <SheetTitle className="sr-only">{title} navigation</SheetTitle>
             <Link href={homeHref} onClick={() => setMobileOpen(false)}>
-              <BrandMark title={title} subtitle={brandSubtitle} />
+              <BrandMark />
             </Link>
             <NavLinkList
               links={links}
@@ -288,8 +277,8 @@ export function NavSidebar({
             alt=""
             className="size-6 shrink-0 rounded-md object-cover"
           />
-          <p className="truncate font-display text-sm font-medium">
-            {title}
+          <p className="truncate font-display text-sm font-medium lowercase">
+            commure
           </p>
         </Link>
 
@@ -336,7 +325,7 @@ export function NavSidebar({
         )}
       >
         <Link href={homeHref}>
-          <BrandMark title={title} subtitle={brandSubtitle} expanded={isExpanded} />
+          <BrandMark expanded={isExpanded} />
         </Link>
         <NavLinkList links={links} expanded={isExpanded} hideMenuLabel={hideMenuLabel} />
         <div className="border-t border-ink-foreground/10 px-4 py-4">

@@ -23,7 +23,6 @@ export default async function EmployeeLayout({
         links={links}
         forceExpanded
         hideMenuLabel
-        brandSubtitle="Commure"
       />
       <main className="min-w-0 flex-1 px-4 py-6 lg:px-10 lg:py-8">
         <div className="mx-auto w-full max-w-7xl space-y-6">{children}</div>
