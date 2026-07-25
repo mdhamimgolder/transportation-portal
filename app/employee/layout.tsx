@@ -16,7 +16,7 @@ export default async function EmployeeLayout({
   const user = await requireRole([Role.EMPLOYEE]);
 
   return (
-    <div className="dark flex min-h-screen flex-col bg-background text-foreground lg:flex-row">
+    <div className="flex min-h-screen flex-col lg:flex-row">
       <NavSidebar
         user={user}
         title="Employee"
