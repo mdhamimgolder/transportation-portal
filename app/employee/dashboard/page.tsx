@@ -5,12 +5,12 @@ import { Role } from "@/lib/constants/enums";
 import { prisma } from "@/lib/prisma";
 import { getSubmissionWindow, startOfToday } from "@/lib/date/week";
 import { getTransportSettings } from "@/lib/queries/settings";
-import { PageHeader } from "@/components/shared/page-header";
 import { StatCard } from "@/components/shared/stat-card";
 import {
   TodaysScheduleCard,
   type TodaysScheduleEntry,
 } from "@/components/employee/todays-schedule-card";
+import { DeadlineBanner } from "@/components/employee/deadline-banner";
 import { Button } from "@/components/ui/button";
 
 export default async function EmployeeDashboardPage() {
@@ -77,11 +77,36 @@ export default async function EmployeeDashboardPage() {
   });
 
   return (
-    <div className="space-y-6">
-      <PageHeader
-        title={`Welcome back, ${firstName}`}
-        description={todayLabel}
-      />
+    <div className="space-y-7">
+      {/* Design 2a header: mono uppercase date eyebrow over a large display greeting,
+          pill CTAs on the right. */}
+      <div className="flex flex-wrap items-end justify-between gap-4">
+        <div>
+          <p className="font-mono text-xs font-medium tracking-[0.14em] text-muted-foreground uppercase">
+            {todayLabel}
+          </p>
+          <h1 className="mt-2 font-display text-4xl font-bold leading-[1.05] tracking-tight">
+            Welcome back,
+            <br />
+            {firstName}.
+          </h1>
+        </div>
+        <div className="flex flex-wrap gap-2.5">
+          <Button asChild size="lg" className="rounded-full">
+            <Link href="/employee/weekly">Submit weekly schedule</Link>
+          </Button>
+          <Button asChild size="lg" variant="outline" className="rounded-full">
+            <Link href="/employee/adhoc">Request ad-hoc transport</Link>
+          </Button>
+        </div>
+      </div>
+
+      {window.isOpen ? (
+        <DeadlineBanner
+          deadline={window.deadline.toISOString()}
+          opensAt={window.opensAt.toISOString()}
+        />
+      ) : null}
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
         <StatCard
@@ -99,18 +124,6 @@ export default async function EmployeeDashboardPage() {
           icon={<ClipboardList className="size-5" />}
           href="/employee/profile"
         />
-      </div>
-
-      <div className="rounded-xl border bg-card p-5">
-        <p className="text-sm font-medium">Quick actions</p>
-        <div className="mt-3 flex flex-wrap gap-2">
-          <Button asChild>
-            <Link href="/employee/weekly">Submit weekly schedule</Link>
-          </Button>
-          <Button asChild variant="outline">
-            <Link href="/employee/adhoc">Request ad-hoc transport</Link>
-          </Button>
-        </div>
       </div>
     </div>
   );

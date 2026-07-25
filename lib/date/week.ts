@@ -34,6 +34,8 @@ export type SubmissionWindow = {
   weekStartDate: Date;
   /** Saturday 12:00 PM deadline for that week. */
   deadline: Date;
+  /** When this window opened — exactly 7 days before `deadline`. */
+  opensAt: Date;
   isOpen: boolean;
 };
 
@@ -65,6 +67,7 @@ export function getSubmissionWindow(
   return {
     weekStartDate: candidateTargetMonday,
     deadline,
+    opensAt: new Date(deadline.getTime() - 7 * MS_PER_DAY),
     isOpen: now.getTime() <= deadline.getTime(),
   };
 }

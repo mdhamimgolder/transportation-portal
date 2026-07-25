@@ -16,8 +16,10 @@ export default async function EmployeeLayout({
   const user = await requireRole([Role.EMPLOYEE]);
 
   return (
-    <MobileNav user={user} links={links}>
-      {children}
-    </MobileNav>
+    <div className="dark min-h-screen bg-background text-foreground">
+      <MobileNav user={user} links={links}>
+        {children}
+      </MobileNav>
+    </div>
   );
 }
