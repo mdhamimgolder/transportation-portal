@@ -99,6 +99,42 @@ export async function approveAdHocRequest(
   return {};
 }
 
+export type ApproveAdHocRequestsState = {
+  error?: string;
+};
+
+export async function approveAdHocRequests(
+  _prevState: ApproveAdHocRequestsState,
+  formData: FormData
+): Promise<ApproveAdHocRequestsState> {
+  const session = await requireRole([Role.OPERATIONS]);
+
+  const ids = formData.getAll("requestId").filter((v): v is string => typeof v === "string");
+  if (ids.length === 0) {
+    return { error: "Select at least one request to approve." };
+  }
+
+  const requests = await prisma.adHocRequest.findMany({
+    where: { id: { in: ids }, status: AdHocStatus.PENDING },
+  });
+
+  for (const request of requests) {
+    await prisma.adHocRequest.update({
+      where: { id: request.id },
+      data: {
+        status: AdHocStatus.APPROVED,
+        reviewedById: session.id,
+        reviewedAt: new Date(),
+      },
+    });
+  }
+
+  revalidatePath("/operations/adhoc");
+  revalidatePath("/facilities/adhoc");
+  revalidatePath("/employee/adhoc");
+  return {};
+}
+
 export type RejectAdHocRequestState = {
   error?: string;
   success?: boolean;

@@ -7,6 +7,7 @@ import { getSubmissionWindow, getWeekDays } from "@/lib/date/week";
 import { getTransportSettings } from "@/lib/queries/settings";
 import { NO_TRANSPORT_VALUE, ARRIVAL_TIME_OPTIONS } from "@/lib/constants/arrival-times";
 import { Role, WeeklyScheduleStatus } from "@/lib/constants/enums";
+import { parseCsv } from "@/lib/csv";
 
 export type SubmitWeeklyScheduleState = {
   error?: string;
@@ -251,4 +252,159 @@ export async function rejectSchedule(
 
   revalidatePath("/operations/weekly-requests");
   return { success: true };
+}
+
+const ARRIVAL_LABEL_TO_VALUE = Object.fromEntries(
+  ARRIVAL_TIME_OPTIONS.map((o) => [o.label.toLowerCase(), o.value])
+);
+
+function parseDayCell(cell: string): string | null {
+  const trimmed = cell.trim();
+  if (!trimmed || trimmed.toLowerCase() === "not required") return NO_TRANSPORT_VALUE;
+  if (trimmed.toUpperCase() === NO_TRANSPORT_VALUE) return NO_TRANSPORT_VALUE;
+  const mapped = ARRIVAL_LABEL_TO_VALUE[trimmed.toLowerCase()];
+  if (mapped) return mapped;
+  if (VALID_DAY_VALUES.has(trimmed)) return trimmed;
+  return null;
+}
+
+export type BulkUploadWeeklyResultRow = { employeeName: string; email: string };
+export type BulkUploadWeeklySkipRow = { line: number; reason: string };
+export type BulkUploadWeeklyScheduleState = {
+  error?: string;
+  results?: { created: BulkUploadWeeklyResultRow[]; skipped: BulkUploadWeeklySkipRow[] };
+};
+
+export async function bulkUploadWeeklySchedules(
+  _prevState: BulkUploadWeeklyScheduleState,
+  formData: FormData
+): Promise<BulkUploadWeeklyScheduleState> {
+  const session = await requireRole([Role.OPERATIONS]);
+
+  const weekStartValue = formData.get("weekStartDate");
+  if (typeof weekStartValue !== "string" || !weekStartValue) {
+    return { error: "Select a week to upload for." };
+  }
+  const weekStartDate = new Date(weekStartValue);
+  if (Number.isNaN(weekStartDate.getTime())) {
+    return { error: "Invalid week." };
+  }
+  const weekDates = getWeekDays(weekStartDate);
+
+  const file = formData.get("file");
+  if (!(file instanceof File) || file.size === 0) {
+    return { error: "Please choose a CSV file." };
+  }
+
+  const text = await file.text();
+  const rows = parseCsv(text);
+  if (rows.length < 2) {
+    return { error: "The CSV file has no data rows." };
+  }
+
+  const header = rows[0].map((h) => h.trim().toLowerCase());
+  const colIndex = (name: string) => header.indexOf(name);
+  const idx = {
+    email: colIndex("employee email"),
+    monday: colIndex("monday"),
+    tuesday: colIndex("tuesday"),
+    wednesday: colIndex("wednesday"),
+    thursday: colIndex("thursday"),
+    friday: colIndex("friday"),
+  };
+  if (Object.values(idx).some((v) => v === -1)) {
+    return {
+      error:
+        "CSV must include Employee Email, Monday, Tuesday, Wednesday, Thursday, and Friday columns.",
+    };
+  }
+  const dayCols = [idx.monday, idx.tuesday, idx.wednesday, idx.thursday, idx.friday];
+
+  const created: BulkUploadWeeklyResultRow[] = [];
+  const skipped: BulkUploadWeeklySkipRow[] = [];
+
+  for (let i = 1; i < rows.length; i++) {
+    const line = i + 1;
+    const cols = rows[i];
+    const email = cols[idx.email]?.trim().toLowerCase();
+    if (!email) {
+      skipped.push({ line, reason: "Missing employee email." });
+      continue;
+    }
+
+    const employee = await prisma.user.findUnique({ where: { email } });
+    if (!employee || employee.role !== Role.EMPLOYEE || !employee.isActive) {
+      skipped.push({ line, reason: `No active employee found with email ${email}.` });
+      continue;
+    }
+
+    const dayValues: string[] = [];
+    let invalidCell: string | null = null;
+    for (const colIdx of dayCols) {
+      const parsed = parseDayCell(cols[colIdx] ?? "");
+      if (parsed === null) {
+        invalidCell = cols[colIdx];
+        break;
+      }
+      dayValues.push(parsed);
+    }
+    if (invalidCell !== null) {
+      skipped.push({ line, reason: `Invalid arrival time value "${invalidCell}".` });
+      continue;
+    }
+
+    const existing = await prisma.weeklySchedule.findUnique({
+      where: {
+        employeeId_weekStartDate: { employeeId: employee.id, weekStartDate },
+      },
+    });
+
+    const scheduleId = existing
+      ? existing.id
+      : (
+          await prisma.weeklySchedule.create({
+            data: { employeeId: employee.id, weekStartDate },
+          })
+        ).id;
+
+    await prisma.weeklySchedule.update({
+      where: { id: scheduleId },
+      data: {
+        status: WeeklyScheduleStatus.APPROVED,
+        rejectReason: null,
+        submittedAt: new Date(),
+        reviewedById: session.id,
+        reviewedAt: new Date(),
+      },
+    });
+
+    for (let d = 0; d < 5; d++) {
+      const value = dayValues[d];
+      const needsTransport = value !== NO_TRANSPORT_VALUE;
+      await prisma.weeklyScheduleDay.upsert({
+        where: {
+          weeklyScheduleId_dayOfWeek: { weeklyScheduleId: scheduleId, dayOfWeek: d + 1 },
+        },
+        update: {
+          needsTransport,
+          arrivalTime: needsTransport ? value : null,
+          date: weekDates[d],
+        },
+        create: {
+          weeklyScheduleId: scheduleId,
+          dayOfWeek: d + 1,
+          date: weekDates[d],
+          needsTransport,
+          arrivalTime: needsTransport ? value : null,
+        },
+      });
+    }
+
+    created.push({ employeeName: employee.fullName, email: employee.email });
+  }
+
+  revalidatePath("/operations/weekly-requests");
+  revalidatePath("/facilities/weekly-export");
+  revalidatePath("/employee/weekly");
+  return { results: { created, skipped } };
 }

@@ -8,17 +8,9 @@ import {
 import { prisma } from "@/lib/prisma";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { StatusBadge } from "@/components/shared/status-badge";
+import { ProfileDetailsCard } from "@/components/shared/profile-details-card";
 import { ProfileUpdateForm } from "@/components/employee/profile-update-form";
 import { ChangePasswordForm } from "@/components/employee/change-password-form";
-
-function ProfileField({ label, value }: { label: string; value: string }) {
-  return (
-    <div>
-      <p className="text-xs font-medium text-muted-foreground">{label}</p>
-      <p className="text-sm">{value}</p>
-    </div>
-  );
-}
 
 export default async function ProfilePage() {
   const session = await requireRole([Role.EMPLOYEE]);
@@ -84,25 +76,7 @@ export default async function ProfilePage() {
     <div className="space-y-4">
       <h1 className="text-xl font-semibold">My Profile</h1>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Profile Details</CardTitle>
-        </CardHeader>
-        <CardContent className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <ProfileField label="Employee ID" value={user.employeeCode ?? "—"} />
-          <ProfileField label="Department" value={user.department ?? "—"} />
-          <ProfileField label="Name" value={user.fullName} />
-          <ProfileField label="Email" value={user.email} />
-          <ProfileField
-            label="Contact Number"
-            value={user.contactNumber ?? "—"}
-          />
-          <ProfileField label="Pick-up Point" value={user.pickupPoint ?? "—"} />
-          <div className="sm:col-span-2">
-            <ProfileField label="Address" value={user.address ?? "—"} />
-          </div>
-        </CardContent>
-      </Card>
+      <ProfileDetailsCard user={user} showPickupPoint />
 
       <Card>
         <CardHeader>

@@ -23,7 +23,7 @@ export function AllocationHistoryTable({
       <Table>
         <TableHeader>
           <TableRow>
-            <TableHead>Employee</TableHead>
+            <TableHead className="sticky left-0 z-20 bg-background">Employee</TableHead>
             {showTypeColumn ? <TableHead>Type</TableHead> : null}
             <TableHead>Date</TableHead>
             <TableHead>Driver</TableHead>
@@ -44,7 +44,7 @@ export function AllocationHistoryTable({
           ) : (
             rows.map((row) => (
               <TableRow key={row.id}>
-                <TableCell>
+                <TableCell className="sticky left-0 z-10 bg-card">
                   <div className="flex items-center gap-2">
                     <span className="font-medium">{row.employeeName}</span>
                     {row.employeeCode ? (
@@ -64,7 +64,12 @@ export function AllocationHistoryTable({
                 <TableCell className="text-muted-foreground">{row.vendor}</TableCell>
                 <TableCell>{row.pickupTime}</TableCell>
                 <TableCell className="text-muted-foreground">
-                  {row.assignedAtLabel}
+                  <div className="flex flex-col gap-0.5">
+                    <span>{row.assignedAtLabel}</span>
+                    {row.assignedByName ? (
+                      <span className="text-xs">by {row.assignedByName}</span>
+                    ) : null}
+                  </div>
                 </TableCell>
               </TableRow>
             ))

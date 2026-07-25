@@ -41,7 +41,7 @@ export default async function VehiclesAndDriversPage() {
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead>Driver Name</TableHead>
+              <TableHead className="sticky left-0 z-20 bg-background">Driver Name</TableHead>
               <TableHead>Contact Number</TableHead>
               <TableHead>Vehicle No</TableHead>
               <TableHead>Vendor</TableHead>
@@ -58,7 +58,9 @@ export default async function VehiclesAndDriversPage() {
             ) : (
               records.map((record) => (
                 <TableRow key={record.id}>
-                  <TableCell className="font-medium">{record.driverName}</TableCell>
+                  <TableCell className="sticky left-0 z-10 bg-card font-medium">
+                    {record.driverName}
+                  </TableCell>
                   <TableCell>{record.contactNumber}</TableCell>
                   <TableCell>{record.vehicleNumber}</TableCell>
                   <TableCell>{record.vendor}</TableCell>

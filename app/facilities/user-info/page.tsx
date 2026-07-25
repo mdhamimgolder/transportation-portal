@@ -48,7 +48,7 @@ export default async function FacilitiesUserInfoPage({
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead>Name</TableHead>
+              <TableHead className="sticky left-0 z-20 bg-background">Name</TableHead>
               <TableHead>Employee ID</TableHead>
               <TableHead>Department</TableHead>
               <TableHead>Email</TableHead>
@@ -69,7 +69,9 @@ export default async function FacilitiesUserInfoPage({
             ) : (
               employees.map((employee) => (
                 <TableRow key={employee.id}>
-                  <TableCell className="font-medium">{employee.fullName}</TableCell>
+                  <TableCell className="sticky left-0 z-10 bg-card font-medium">
+                    {employee.fullName}
+                  </TableCell>
                   <TableCell>{employee.employeeCode ?? "—"}</TableCell>
                   <TableCell>{employee.department ?? "—"}</TableCell>
                   <TableCell className="text-muted-foreground">

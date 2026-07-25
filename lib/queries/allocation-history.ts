@@ -2,6 +2,7 @@ import "server-only";
 import { prisma } from "@/lib/prisma";
 import { formatShortDate } from "@/lib/date/week";
 import { MAX_UNFILTERED_ROWS } from "@/lib/constants/limits";
+import { getUserNamesByIds } from "@/lib/queries/user-names";
 
 export type AllocationHistoryRow = {
   id: string;
@@ -16,6 +17,7 @@ export type AllocationHistoryRow = {
   vendor: string;
   pickupTime: string;
   assignedAtLabel: string;
+  assignedByName: string | null;
 };
 
 export type AllocationHistoryFilters = {
@@ -71,6 +73,10 @@ export async function getAllocationHistory(
     take: MAX_UNFILTERED_ROWS,
   });
 
+  const assignerNames = await getUserNamesByIds(
+    assignments.map((a) => a.assignedById)
+  );
+
   const rows: AllocationHistoryRow[] = assignments.flatMap((assignment) => {
     const employee =
       assignment.weeklyScheduleDay?.weeklySchedule.employee ??
@@ -95,6 +101,7 @@ export async function getAllocationHistory(
         vendor: assignment.vehicleDriver.vendor,
         pickupTime: assignment.pickupTime,
         assignedAtLabel: formatShortDate(assignment.assignedAt),
+        assignedByName: assignerNames.get(assignment.assignedById) ?? null,
       },
     ];
   });

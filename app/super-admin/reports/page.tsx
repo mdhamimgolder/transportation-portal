@@ -87,7 +87,7 @@ export default async function SuperAdminReportsPage({
             <TableHeader>
               <TableRow>
                 <TableHead>Type</TableHead>
-                <TableHead>Employee Name</TableHead>
+                <TableHead className="sticky left-0 z-20 bg-background">Employee Name</TableHead>
                 <TableHead>Address</TableHead>
                 <TableHead>Contact Number</TableHead>
                 <TableHead>Date</TableHead>
@@ -107,7 +107,9 @@ export default async function SuperAdminReportsPage({
                 assignmentRows.map((r) => (
                   <TableRow key={r.id}>
                     <TableCell className="text-muted-foreground">{r.type}</TableCell>
-                    <TableCell className="font-medium">{r.employeeName}</TableCell>
+                    <TableCell className="sticky left-0 z-10 bg-card font-medium">
+                      {r.employeeName}
+                    </TableCell>
                     <TableCell className="max-w-56 truncate text-muted-foreground">
                       {r.address ?? "—"}
                     </TableCell>

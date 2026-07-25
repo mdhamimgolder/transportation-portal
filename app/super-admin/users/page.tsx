@@ -51,7 +51,7 @@ export default async function SuperAdminUsersPage({
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead>Name</TableHead>
+              <TableHead className="sticky left-0 z-20 bg-background">Name</TableHead>
               <TableHead>Email</TableHead>
               <TableHead>Employee ID</TableHead>
               <TableHead>Access role</TableHead>
@@ -70,7 +70,9 @@ export default async function SuperAdminUsersPage({
             ) : (
               users.map((user) => (
                 <TableRow key={user.id}>
-                  <TableCell className="font-medium">{user.fullName}</TableCell>
+                  <TableCell className="sticky left-0 z-10 bg-card font-medium">
+                    {user.fullName}
+                  </TableCell>
                   <TableCell className="text-muted-foreground">{user.email}</TableCell>
                   <TableCell>{user.employeeCode ?? "—"}</TableCell>
                   <TableCell>

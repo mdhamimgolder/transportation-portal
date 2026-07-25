@@ -96,7 +96,9 @@ export function RouteDaySheet({
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead>Employee Name</TableHead>
+              <TableHead className="sticky left-0 z-20 bg-background">
+                Employee Name
+              </TableHead>
               <TableHead>Address</TableHead>
               <TableHead>Pick-up Point</TableHead>
               <TableHead>Requested Arrival</TableHead>
@@ -115,7 +117,7 @@ export function RouteDaySheet({
 
               return (
                 <TableRow key={row.weeklyScheduleDayId}>
-                  <TableCell className="font-medium whitespace-nowrap">
+                  <TableCell className="sticky left-0 z-10 bg-card font-medium whitespace-nowrap">
                     <input
                       type="hidden"
                       name="weeklyScheduleDayId"

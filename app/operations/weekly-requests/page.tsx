@@ -1,9 +1,11 @@
 import { requireRole } from "@/lib/rbac/guards";
 import { Role } from "@/lib/constants/enums";
 import { prisma } from "@/lib/prisma";
-import { formatShortDate, getWeekDays } from "@/lib/date/week";
+import { formatShortDate, getWeekDays, getSubmissionWindow, DAY_LABELS } from "@/lib/date/week";
+import { getTransportSettings } from "@/lib/queries/settings";
 import { NO_TRANSPORT_VALUE, ARRIVAL_TIME_OPTIONS } from "@/lib/constants/arrival-times";
 import { MAX_UNFILTERED_ROWS } from "@/lib/constants/limits";
+import { getUserNamesByIds } from "@/lib/queries/user-names";
 import {
   WeeklyRequestsTable,
   type WeeklyRequestRow,
@@ -12,6 +14,9 @@ import {
   WeeklyRequestsFilters,
   type WeekOption,
 } from "@/components/operations/weekly-requests-filters";
+import { ExportCsvButton } from "@/components/facilities/export-csv-button";
+import { WeeklyScheduleBulkUploadDialog } from "@/components/operations/weekly-schedule-bulk-upload-dialog";
+import { excelSafeText } from "@/lib/csv";
 
 const ARRIVAL_TIME_LABELS = Object.fromEntries(
   ARRIVAL_TIME_OPTIONS.map((o) => [o.value, o.label])
@@ -57,6 +62,50 @@ export default async function WeeklyRequestsPage({
       )
     : schedules;
 
+  const reviewerNames = await getUserNamesByIds(
+    filteredSchedules.map((s) => s.reviewedById)
+  );
+
+  const employees = await prisma.user.findMany({
+    where: { role: Role.EMPLOYEE, isActive: true },
+    select: {
+      id: true,
+      fullName: true,
+      employeeCode: true,
+      email: true,
+      contactNumber: true,
+      address: true,
+    },
+    orderBy: { fullName: "asc" },
+  });
+
+  const settings = await getTransportSettings();
+  const onBehalfWindow = getSubmissionWindow(
+    new Date(),
+    settings.weeklyLockDayOfWeek,
+    settings.weeklyLockHour,
+    settings.weeklyLockMinute
+  );
+  const onBehalfWeekDates = getWeekDays(onBehalfWindow.weekStartDate);
+  const onBehalfWeekLabel = `${formatShortDate(onBehalfWeekDates[0])} – ${formatShortDate(onBehalfWeekDates[4])}`;
+  const onBehalfDays = onBehalfWeekDates.map((date, i) => ({
+    label: DAY_LABELS[i],
+    dateLabel: formatShortDate(date),
+  }));
+
+  const onBehalfWeekDateString = onBehalfWindow.weekStartDate.toDateString();
+  const uploadWeekOptions: WeekOption[] = weekOptions.some(
+    (w) => new Date(w.value).toDateString() === onBehalfWeekDateString
+  )
+    ? weekOptions
+    : [
+        {
+          value: onBehalfWindow.weekStartDate.toISOString(),
+          label: `${onBehalfWeekLabel} (current)`,
+        },
+        ...weekOptions,
+      ];
+
   const rows: WeeklyRequestRow[] = filteredSchedules.map((schedule) => {
     const days = Array.from({ length: 5 }, (_, i) => {
       const day = schedule.days.find((d) => d.dayOfWeek === i + 1);
@@ -71,6 +120,9 @@ export default async function WeeklyRequestsPage({
       id: schedule.id,
       status: schedule.status,
       rejectReason: schedule.rejectReason,
+      reviewerName: schedule.reviewedById
+        ? reviewerNames.get(schedule.reviewedById) ?? null
+        : null,
       weekLabel: formatShortDate(schedule.weekStartDate),
       employee: {
         fullName: schedule.employee.fullName,
@@ -83,18 +135,49 @@ export default async function WeeklyRequestsPage({
     };
   });
 
+  const exportCsvRows = rows.map((row) => [
+    row.employee.email,
+    row.employee.fullName,
+    row.employee.employeeCode ? excelSafeText(row.employee.employeeCode) : "—",
+    ...row.days.map((d) => d.display),
+  ]);
+
   return (
     <div className="space-y-4">
-      <div>
-        <h1 className="text-xl font-semibold">Weekly Requests</h1>
-        <p className="text-sm text-muted-foreground">
-          Review, edit, and approve employee weekly transport schedules.
-          Approved schedules become available to Facilities for route
-          planning.
-        </p>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="text-xl font-semibold">Weekly Requests</h1>
+          <p className="text-sm text-muted-foreground">
+            Review, edit, and approve employee weekly transport schedules.
+            Approved schedules become available to Facilities for route
+            planning.
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <ExportCsvButton
+            filename="weekly-requests-export.csv"
+            headers={[
+              "Employee Email",
+              "Employee Name",
+              "Employee ID",
+              "Monday",
+              "Tuesday",
+              "Wednesday",
+              "Thursday",
+              "Friday",
+            ]}
+            rows={exportCsvRows}
+          />
+          <WeeklyScheduleBulkUploadDialog weekOptions={uploadWeekOptions} />
+        </div>
       </div>
       <WeeklyRequestsFilters weekOptions={weekOptions} />
-      <WeeklyRequestsTable rows={rows} />
+      <WeeklyRequestsTable
+        rows={rows}
+        employees={employees}
+        onBehalfWeekLabel={onBehalfWeekLabel}
+        onBehalfDays={onBehalfDays}
+      />
     </div>
   );
 }

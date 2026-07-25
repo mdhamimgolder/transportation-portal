@@ -31,6 +31,7 @@ export default async function FacilitiesLayout({
       label: "Allocation History",
       icon: "history",
     },
+    { href: "/facilities/profile", label: "Profile", icon: "profile" },
   ];
 
   return (

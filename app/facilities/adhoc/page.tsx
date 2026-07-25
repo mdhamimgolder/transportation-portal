@@ -3,6 +3,7 @@ import { Role, AdHocStatus } from "@/lib/constants/enums";
 import { prisma } from "@/lib/prisma";
 import { formatShortDate } from "@/lib/date/week";
 import { ADHOC_ARRIVAL_TIME_OPTIONS } from "@/lib/constants/adhoc-arrival-times";
+import { getUserNamesByIds } from "@/lib/queries/user-names";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { StatusBadge } from "@/components/shared/status-badge";
@@ -49,6 +50,11 @@ export default async function FacilitiesAdHocPage() {
     vehicleNumber: v.vehicleNumber,
     vendor: v.vendor,
   }));
+
+  const reviewerNames = await getUserNamesByIds(requests.map((r) => r.reviewedById));
+  const assignerNames = await getUserNamesByIds(
+    requests.map((r) => r.routeAssignment?.assignedById)
+  );
 
   return (
     <div className="space-y-4">
@@ -106,8 +112,20 @@ export default async function FacilitiesAdHocPage() {
 
                   {request.status === AdHocStatus.REJECTED ? (
                     <p className="text-sm text-destructive">
-                      Declined by Operations
+                      Declined
+                      {request.reviewedById && reviewerNames.get(request.reviewedById)
+                        ? ` by ${reviewerNames.get(request.reviewedById)}`
+                        : " by Operations"}
                       {request.rejectReason ? `: ${request.rejectReason}` : "."}
+                    </p>
+                  ) : null}
+
+                  {request.status !== AdHocStatus.PENDING &&
+                  request.status !== AdHocStatus.REJECTED &&
+                  request.reviewedById &&
+                  reviewerNames.get(request.reviewedById) ? (
+                    <p className="text-xs text-muted-foreground">
+                      Approved by {reviewerNames.get(request.reviewedById)}
                     </p>
                   ) : null}
 
@@ -127,6 +145,13 @@ export default async function FacilitiesAdHocPage() {
                     }
                     existingComment={request.facilitiesComment}
                   />
+
+                  {request.routeAssignment &&
+                  assignerNames.get(request.routeAssignment.assignedById) ? (
+                    <p className="text-xs text-muted-foreground">
+                      Assigned by {assignerNames.get(request.routeAssignment.assignedById)}
+                    </p>
+                  ) : null}
                 </CardContent>
               </Card>
             );

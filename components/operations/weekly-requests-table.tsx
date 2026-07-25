@@ -23,11 +23,16 @@ import { RejectReasonDialog } from "@/components/operations/reject-reason-dialog
 import { EditWeeklyScheduleDialog } from "@/components/operations/edit-weekly-schedule-dialog";
 import { NO_TRANSPORT_VALUE } from "@/lib/constants/arrival-times";
 import { DAY_LABELS } from "@/lib/date/week";
+import {
+  CreateOnBehalfDialog,
+  type OnBehalfEmployeeOption,
+} from "@/components/operations/create-on-behalf-dialog";
 
 export type WeeklyRequestRow = {
   id: string;
   status: string;
   rejectReason: string | null;
+  reviewerName: string | null;
   weekLabel: string;
   employee: {
     fullName: string;
@@ -50,7 +55,17 @@ function ApproveSelectedButton() {
   );
 }
 
-export function WeeklyRequestsTable({ rows }: { rows: WeeklyRequestRow[] }) {
+export function WeeklyRequestsTable({
+  rows,
+  employees,
+  onBehalfWeekLabel,
+  onBehalfDays,
+}: {
+  rows: WeeklyRequestRow[];
+  employees: OnBehalfEmployeeOption[];
+  onBehalfWeekLabel: string;
+  onBehalfDays: { label: string; dateLabel: string }[];
+}) {
   const [state, formAction] = useActionState(approveSchedules, initialState);
   const pendingCount = rows.filter((r) => r.status === "PENDING").length;
 
@@ -67,7 +82,14 @@ export function WeeklyRequestsTable({ rows }: { rows: WeeklyRequestRow[] }) {
             </span>
           ) : null}
         </p>
-        <ApproveSelectedButton />
+        <div className="flex flex-col items-end gap-2">
+          <ApproveSelectedButton />
+          <CreateOnBehalfDialog
+            employees={employees}
+            weekLabel={onBehalfWeekLabel}
+            days={onBehalfDays}
+          />
+        </div>
       </div>
       {state.error ? (
         <p className="text-sm text-destructive">{state.error}</p>
@@ -77,8 +99,14 @@ export function WeeklyRequestsTable({ rows }: { rows: WeeklyRequestRow[] }) {
         <Table>
           <TableHeader className="bg-muted/40">
             <TableRow className="hover:bg-transparent">
-              <TableHead rowSpan={2} className="w-10 align-bottom"></TableHead>
-              <TableHead rowSpan={2} className="align-bottom">
+              <TableHead
+                rowSpan={2}
+                className="sticky left-0 z-20 w-10 bg-muted/40 align-bottom"
+              ></TableHead>
+              <TableHead
+                rowSpan={2}
+                className="sticky left-10 z-20 bg-muted/40 align-bottom"
+              >
                 Employee
               </TableHead>
               <TableHead rowSpan={2} className="min-w-56 align-bottom">
@@ -122,17 +150,19 @@ export function WeeklyRequestsTable({ rows }: { rows: WeeklyRequestRow[] }) {
                 </TableCell>
               </TableRow>
             ) : (
-              rows.map((row, index) => (
+              rows.map((row, index) => {
+                const rowBg = index % 2 === 1 ? "bg-muted/20" : "bg-card";
+                return (
                 <TableRow
                   key={row.id}
                   className={index % 2 === 1 ? "bg-muted/20" : undefined}
                 >
-                  <TableCell>
+                  <TableCell className={`sticky left-0 z-10 ${rowBg}`}>
                     {row.status === "PENDING" ? (
                       <Checkbox name="scheduleId" value={row.id} />
                     ) : null}
                   </TableCell>
-                  <TableCell>
+                  <TableCell className={`sticky left-10 z-10 ${rowBg}`}>
                     <div className="flex flex-col gap-0.5">
                       <span className="font-medium">{row.employee.fullName}</span>
                       {row.employee.employeeCode ? (
@@ -183,6 +213,12 @@ export function WeeklyRequestsTable({ rows }: { rows: WeeklyRequestRow[] }) {
                           {row.rejectReason}
                         </p>
                       ) : null}
+                      {row.reviewerName && row.status !== "PENDING" ? (
+                        <p className="max-w-40 text-xs text-muted-foreground">
+                          {row.status === "REJECTED" ? "Rejected" : "Approved"} by{" "}
+                          {row.reviewerName}
+                        </p>
+                      ) : null}
                     </div>
                   </TableCell>
                   <TableCell>
@@ -201,7 +237,8 @@ export function WeeklyRequestsTable({ rows }: { rows: WeeklyRequestRow[] }) {
                     </div>
                   </TableCell>
                 </TableRow>
-              ))
+                );
+              })
             )}
           </TableBody>
         </Table>
