@@ -6,6 +6,7 @@ import { SearchBox } from "@/components/shared/search-box";
 import { AddEmployeeDialog } from "@/components/super-admin/add-employee-dialog";
 import { BulkUploadDialog } from "@/components/super-admin/bulk-upload-dialog";
 import { UserRoleForm } from "@/components/super-admin/user-role-form";
+import { SetPasswordDialog } from "@/components/shared/set-password-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -57,7 +58,7 @@ export default async function SuperAdminUsersPage({
               <TableHead>Access role</TableHead>
               <TableHead>Status</TableHead>
               <TableHead>Last login</TableHead>
-              <TableHead className="w-24">Actions</TableHead>
+              <TableHead className="w-40">Actions</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -96,14 +97,17 @@ export default async function SuperAdminUsersPage({
                       : "Never"}
                   </TableCell>
                   <TableCell>
-                    {user.id === session.id ? null : (
-                      <form action={toggleUserActiveAction}>
-                        <input type="hidden" name="id" value={user.id} />
-                        <Button type="submit" variant="ghost" size="sm">
-                          {user.isActive ? "Deactivate" : "Reactivate"}
-                        </Button>
-                      </form>
-                    )}
+                    <div className="flex items-center gap-1">
+                      <SetPasswordDialog userId={user.id} fullName={user.fullName} />
+                      {user.id === session.id ? null : (
+                        <form action={toggleUserActiveAction}>
+                          <input type="hidden" name="id" value={user.id} />
+                          <Button type="submit" variant="ghost" size="sm">
+                            {user.isActive ? "Deactivate" : "Reactivate"}
+                          </Button>
+                        </form>
+                      )}
+                    </div>
                   </TableCell>
                 </TableRow>
               ))

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter, usePathname, useSearchParams } from "next/navigation";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -26,6 +26,13 @@ export function WeeklyRequestsFilters({
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const [q, setQ] = useState(searchParams.get("q") ?? "");
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+    };
+  }, []);
 
   function updateParams(next: Record<string, string | undefined>) {
     const params = new URLSearchParams(searchParams.toString());
@@ -36,28 +43,27 @@ export function WeeklyRequestsFilters({
         params.delete(key);
       }
     }
-    router.push(params.toString() ? `${pathname}?${params}` : pathname);
+    router.replace(params.toString() ? `${pathname}?${params}` : pathname, {
+      scroll: false,
+    });
+  }
+
+  function handleSearchChange(value: string) {
+    setQ(value);
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => {
+      updateParams({ q: value.trim() || undefined });
+    }, 250);
   }
 
   return (
     <div className="flex flex-wrap items-center gap-2">
-      <form
-        className="flex items-center gap-2"
-        onSubmit={(e) => {
-          e.preventDefault();
-          updateParams({ q: q.trim() || undefined });
-        }}
-      >
-        <Input
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-          placeholder="Search by name or email"
-          className="w-64"
-        />
-        <Button type="submit" variant="outline" size="sm">
-          Search
-        </Button>
-      </form>
+      <Input
+        value={q}
+        onChange={(e) => handleSearchChange(e.target.value)}
+        placeholder="Search by name or email"
+        className="w-64"
+      />
 
       <Select
         value={searchParams.get("week") ?? "all"}
@@ -85,7 +91,7 @@ export function WeeklyRequestsFilters({
           size="sm"
           onClick={() => {
             setQ("");
-            router.push(pathname);
+            router.replace(pathname, { scroll: false });
           }}
         >
           Clear filters

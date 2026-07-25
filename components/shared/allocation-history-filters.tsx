@@ -1,10 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter, usePathname, useSearchParams } from "next/navigation";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Button } from "@/components/ui/button";
 import {
   Select,
   SelectContent,
@@ -21,6 +20,13 @@ export function AllocationHistoryFilters() {
   const [from, setFrom] = useState(searchParams.get("from") ?? "");
   const [to, setTo] = useState(searchParams.get("to") ?? "");
   const [q, setQ] = useState(searchParams.get("q") ?? "");
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+    };
+  }, []);
 
   function pushParams(next: { from?: string; to?: string; q?: string; type?: string }) {
     const params = new URLSearchParams(searchParams.toString());
@@ -44,7 +50,17 @@ export function AllocationHistoryFilters() {
     if (merged.q?.trim()) params.set("q", merged.q.trim());
     else params.delete("q");
 
-    router.push(params.toString() ? `${pathname}?${params}` : pathname);
+    router.replace(params.toString() ? `${pathname}?${params}` : pathname, {
+      scroll: false,
+    });
+  }
+
+  function handleSearchChange(value: string) {
+    setQ(value);
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => {
+      pushParams({ q: value });
+    }, 250);
   }
 
   return (
@@ -91,26 +107,15 @@ export function AllocationHistoryFilters() {
         />
       </div>
 
-      <form
-        className="flex items-end gap-2"
-        onSubmit={(e) => {
-          e.preventDefault();
-          pushParams({ q });
-        }}
-      >
-        <div className="space-y-1">
-          <Label className="text-xs text-muted-foreground">Search</Label>
-          <Input
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-            placeholder="Name or email"
-            className="w-64"
-          />
-        </div>
-        <Button type="submit" variant="outline" size="sm">
-          Search
-        </Button>
-      </form>
+      <div className="space-y-1">
+        <Label className="text-xs text-muted-foreground">Search</Label>
+        <Input
+          value={q}
+          onChange={(e) => handleSearchChange(e.target.value)}
+          placeholder="Name or email"
+          className="w-64"
+        />
+      </div>
     </div>
   );
 }

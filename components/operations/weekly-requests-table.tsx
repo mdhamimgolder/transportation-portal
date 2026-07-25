@@ -98,37 +98,19 @@ export function WeeklyRequestsTable({
       <div className="overflow-x-auto rounded-lg border shadow-sm">
         <Table>
           <TableHeader className="bg-muted/40">
+            {/* A single sticky column (checkbox + Employee combined into one
+                cell) -- two separate sticky columns with a hardcoded offset
+                between them is fragile: an empty checkbox cell doesn't
+                reliably render at its requested width under the table's
+                auto layout algorithm, so the offset drifts and the sticky
+                Employee cell visually overlaps the next column (confirmed
+                on mobile). One sticky cell has no such offset to get wrong. */}
             <TableRow className="hover:bg-transparent">
-              <TableHead
-                rowSpan={2}
-                className="sticky left-0 z-20 w-10 bg-muted/40 align-bottom"
-              ></TableHead>
-              <TableHead
-                rowSpan={2}
-                className="sticky left-10 z-20 bg-muted/40 align-bottom"
-              >
+              <TableHead className="sticky left-0 z-20 bg-muted/40">
                 Employee
               </TableHead>
-              <TableHead rowSpan={2} className="min-w-56 align-bottom">
-                Contact Info
-              </TableHead>
-              <TableHead rowSpan={2} className="align-bottom">
-                Week
-              </TableHead>
-              <TableHead
-                colSpan={5}
-                className="border-l text-center text-xs tracking-wide text-muted-foreground uppercase"
-              >
-                Weekly Schedule
-              </TableHead>
-              <TableHead rowSpan={2} className="align-bottom">
-                Status
-              </TableHead>
-              <TableHead rowSpan={2} className="align-bottom">
-                Actions
-              </TableHead>
-            </TableRow>
-            <TableRow className="hover:bg-transparent">
+              <TableHead className="min-w-56">Contact Info</TableHead>
+              <TableHead>Week</TableHead>
               {DAY_LABELS.map((label, i) => (
                 <TableHead
                   key={label}
@@ -137,13 +119,15 @@ export function WeeklyRequestsTable({
                   {label.slice(0, 3)}
                 </TableHead>
               ))}
+              <TableHead>Status</TableHead>
+              <TableHead>Actions</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {rows.length === 0 ? (
               <TableRow>
                 <TableCell
-                  colSpan={12}
+                  colSpan={10}
                   className="py-10 text-center text-muted-foreground"
                 >
                   No weekly submissions yet.
@@ -157,18 +141,20 @@ export function WeeklyRequestsTable({
                   className={index % 2 === 1 ? "bg-muted/20" : undefined}
                 >
                   <TableCell className="sticky left-0 z-10 bg-card">
-                    {row.status === "PENDING" ? (
-                      <Checkbox name="scheduleId" value={row.id} />
-                    ) : null}
-                  </TableCell>
-                  <TableCell className="sticky left-10 z-10 bg-card">
-                    <div className="flex flex-col gap-0.5">
-                      <span className="font-medium">{row.employee.fullName}</span>
-                      {row.employee.employeeCode ? (
-                        <Badge variant="secondary" className="w-fit font-normal">
-                          {row.employee.employeeCode}
-                        </Badge>
-                      ) : null}
+                    <div className="flex items-center gap-2">
+                      {row.status === "PENDING" ? (
+                        <Checkbox name="scheduleId" value={row.id} />
+                      ) : (
+                        <span className="inline-block size-4" />
+                      )}
+                      <div className="flex flex-col gap-0.5">
+                        <span className="font-medium">{row.employee.fullName}</span>
+                        {row.employee.employeeCode ? (
+                          <Badge variant="secondary" className="w-fit font-normal">
+                            {row.employee.employeeCode}
+                          </Badge>
+                        ) : null}
+                      </div>
                     </div>
                   </TableCell>
                   <TableCell className="whitespace-normal">

@@ -1,9 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter, usePathname, useSearchParams } from "next/navigation";
 import { Input } from "@/components/ui/input";
-import { Button } from "@/components/ui/button";
 
 export function SearchBox({
   placeholder,
@@ -16,27 +15,33 @@ export function SearchBox({
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const [q, setQ] = useState(searchParams.get(paramName) ?? "");
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+    };
+  }, []);
+
+  function handleChange(value: string) {
+    setQ(value);
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => {
+      const params = new URLSearchParams(searchParams.toString());
+      if (value.trim()) params.set(paramName, value.trim());
+      else params.delete(paramName);
+      router.replace(params.toString() ? `${pathname}?${params}` : pathname, {
+        scroll: false,
+      });
+    }, 250);
+  }
 
   return (
-    <form
-      className="flex items-center gap-2"
-      onSubmit={(e) => {
-        e.preventDefault();
-        const params = new URLSearchParams(searchParams.toString());
-        if (q.trim()) params.set(paramName, q.trim());
-        else params.delete(paramName);
-        router.push(params.toString() ? `${pathname}?${params}` : pathname);
-      }}
-    >
-      <Input
-        value={q}
-        onChange={(e) => setQ(e.target.value)}
-        placeholder={placeholder}
-        className="w-72"
-      />
-      <Button type="submit" variant="outline" size="sm">
-        Search
-      </Button>
-    </form>
+    <Input
+      value={q}
+      onChange={(e) => handleChange(e.target.value)}
+      placeholder={placeholder}
+      className="w-72"
+    />
   );
 }

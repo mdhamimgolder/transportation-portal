@@ -100,8 +100,7 @@ export function AdHocTable({
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead className="sticky left-0 z-20 w-10 bg-background"></TableHead>
-              <TableHead className="sticky left-10 z-20 bg-background">Employee</TableHead>
+              <TableHead className="sticky left-0 z-20 bg-background">Employee</TableHead>
               <TableHead>Employee ID</TableHead>
               <TableHead>Email</TableHead>
               <TableHead>Contact Number</TableHead>
@@ -115,20 +114,26 @@ export function AdHocTable({
           <TableBody>
             {requests.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={10} className="text-center text-muted-foreground">
+                <TableCell colSpan={9} className="text-center text-muted-foreground">
                   No ad-hoc requests yet.
                 </TableCell>
               </TableRow>
             ) : (
               requests.map((request) => (
                 <TableRow key={request.id}>
-                  <TableCell className="sticky left-0 z-10 bg-card">
-                    {request.status === AdHocStatus.PENDING ? (
-                      <Checkbox name="requestId" value={request.id} form={BULK_FORM_ID} />
-                    ) : null}
-                  </TableCell>
-                  <TableCell className="sticky left-10 z-10 bg-card font-medium">
-                    {request.employee.fullName}
+                  <TableCell className="sticky left-0 z-10 bg-card font-medium">
+                    <div className="flex items-center gap-2">
+                      {request.status === AdHocStatus.PENDING ? (
+                        <Checkbox
+                          name="requestId"
+                          value={request.id}
+                          form={BULK_FORM_ID}
+                        />
+                      ) : (
+                        <span className="inline-block size-4" />
+                      )}
+                      {request.employee.fullName}
+                    </div>
                   </TableCell>
                   <TableCell>{request.employee.employeeCode ?? "—"}</TableCell>
                   <TableCell>{request.employee.email}</TableCell>

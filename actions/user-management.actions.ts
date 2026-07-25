@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { requireRole } from "@/lib/rbac/guards";
 import { hashPassword } from "@/lib/auth/password";
@@ -259,4 +260,50 @@ export async function toggleUserActiveAction(formData: FormData): Promise<void> 
   });
 
   revalidatePath("/super-admin/users");
+}
+
+const setUserPasswordSchema = z
+  .object({
+    userId: z.string().min(1, "Missing user."),
+    newPassword: z.string().min(8, "Password must be at least 8 characters"),
+    confirmPassword: z.string().min(1, "Please confirm the password"),
+  })
+  .refine((data) => data.newPassword === data.confirmPassword, {
+    message: "Passwords do not match",
+    path: ["confirmPassword"],
+  });
+
+export type SetUserPasswordState = { error?: string; success?: boolean };
+
+export async function setUserPasswordAction(
+  _prevState: SetUserPasswordState,
+  formData: FormData
+): Promise<SetUserPasswordState> {
+  const session = await requireRole([Role.SUPER_ADMIN, Role.FACILITIES]);
+
+  const parsed = setUserPasswordSchema.safeParse({
+    userId: formData.get("userId"),
+    newPassword: formData.get("newPassword"),
+    confirmPassword: formData.get("confirmPassword"),
+  });
+  if (!parsed.success) {
+    return { error: parsed.error.issues[0]?.message ?? "Invalid input." };
+  }
+
+  const user = await prisma.user.findUnique({ where: { id: parsed.data.userId } });
+  if (!user) return { error: "User not found." };
+
+  if (session.role === Role.FACILITIES && user.role !== Role.EMPLOYEE) {
+    return { error: "You can only set passwords for employees." };
+  }
+
+  const passwordHash = await hashPassword(parsed.data.newPassword);
+  await prisma.user.update({
+    where: { id: user.id },
+    data: { passwordHash },
+  });
+
+  revalidatePath("/super-admin/users");
+  revalidatePath("/facilities/user-info");
+  return { success: true };
 }

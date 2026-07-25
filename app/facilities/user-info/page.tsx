@@ -5,6 +5,7 @@ import { SearchBox } from "@/components/shared/search-box";
 import { AddEmployeeDialog } from "@/components/super-admin/add-employee-dialog";
 import { BulkUploadDialog } from "@/components/super-admin/bulk-upload-dialog";
 import { EditEmployeeProfileDialog } from "@/components/facilities/edit-employee-profile-dialog";
+import { SetPasswordDialog } from "@/components/shared/set-password-dialog";
 import { Badge } from "@/components/ui/badge";
 import {
   Table,
@@ -56,7 +57,7 @@ export default async function FacilitiesUserInfoPage({
               <TableHead>Address</TableHead>
               <TableHead>Pick-up point</TableHead>
               <TableHead>Status</TableHead>
-              <TableHead className="w-16">Actions</TableHead>
+              <TableHead className="w-40">Actions</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -88,13 +89,16 @@ export default async function FacilitiesUserInfoPage({
                     </Badge>
                   </TableCell>
                   <TableCell>
-                    <EditEmployeeProfileDialog
-                      userId={employee.id}
-                      fullName={employee.fullName}
-                      contactNumber={employee.contactNumber}
-                      address={employee.address}
-                      pickupPoint={employee.pickupPoint}
-                    />
+                    <div className="flex items-center gap-1">
+                      <EditEmployeeProfileDialog
+                        userId={employee.id}
+                        fullName={employee.fullName}
+                        contactNumber={employee.contactNumber}
+                        address={employee.address}
+                        pickupPoint={employee.pickupPoint}
+                      />
+                      <SetPasswordDialog userId={employee.id} fullName={employee.fullName} />
+                    </div>
                   </TableCell>
                 </TableRow>
               ))
