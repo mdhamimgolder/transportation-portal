@@ -21,6 +21,10 @@ import {
 } from "@/components/ui/table";
 import { StatusBadge } from "@/components/shared/status-badge";
 import { AdHocApprovalActions } from "@/components/operations/adhoc-approval-actions";
+import {
+  CreateAdHocOnBehalfDialog,
+  type OnBehalfEmployeeOption,
+} from "@/components/operations/create-on-behalf-dialog";
 
 const ARRIVAL_TIME_LABELS = Object.fromEntries(
   ADHOC_ARRIVAL_TIME_OPTIONS.map((o) => [o.value, o.label])
@@ -54,7 +58,13 @@ function ApproveSelectedButton() {
   );
 }
 
-export function AdHocTable({ requests }: { requests: AdHocRequestRow[] }) {
+export function AdHocTable({
+  requests,
+  employees,
+}: {
+  requests: AdHocRequestRow[];
+  employees: OnBehalfEmployeeOption[];
+}) {
   const [state, formAction] = useActionState(approveAdHocRequests, initialState);
   const pendingCount = requests.filter((r) => r.status === AdHocStatus.PENDING).length;
 
@@ -79,7 +89,10 @@ export function AdHocTable({ requests }: { requests: AdHocRequestRow[] }) {
             </span>
           ) : null}
         </p>
-        {pendingCount > 0 ? <ApproveSelectedButton /> : null}
+        <div className="flex flex-col items-end gap-2">
+          {pendingCount > 0 ? <ApproveSelectedButton /> : null}
+          <CreateAdHocOnBehalfDialog employees={employees} />
+        </div>
       </div>
       {state.error ? <p className="text-sm text-destructive">{state.error}</p> : null}
 

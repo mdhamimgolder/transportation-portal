@@ -123,6 +123,24 @@ function EmployeePicker({
   );
 }
 
+function EmployeeInfoPanel({ selected }: { selected: OnBehalfEmployeeOption }) {
+  return (
+    <div className="grid grid-cols-1 gap-x-4 gap-y-1 rounded-md border bg-muted/30 p-3 text-sm sm:grid-cols-2">
+      <p>
+        <span className="text-muted-foreground">Email:</span> {selected.email}
+      </p>
+      <p>
+        <span className="text-muted-foreground">Contact:</span>{" "}
+        {selected.contactNumber ?? "—"}
+      </p>
+      <p className="sm:col-span-2">
+        <span className="text-muted-foreground">Address:</span>{" "}
+        {selected.address ?? "—"}
+      </p>
+    </div>
+  );
+}
+
 function SubmitButton() {
   const { pending } = useFormStatus();
   return (
@@ -133,9 +151,8 @@ function SubmitButton() {
 }
 
 const weeklyInitialState: CreateWeeklyScheduleOnBehalfState = {};
-const adhocInitialState: CreateAdHocRequestOnBehalfState = {};
 
-export function CreateOnBehalfDialog({
+export function CreateWeeklyOnBehalfDialog({
   employees,
   weekLabel,
   days,
@@ -145,26 +162,16 @@ export function CreateOnBehalfDialog({
   days: { label: string; dateLabel: string }[];
 }) {
   const [open, setOpen] = useState(false);
-  const [mode, setMode] = useState<"weekly" | "adhoc">("weekly");
   const [selected, setSelected] = useState<OnBehalfEmployeeOption | null>(null);
   const [dayValues, setDayValues] = useState<string[]>(
     Array.from({ length: 5 }, () => NO_TRANSPORT_VALUE)
   );
-  const [adhocDate, setAdhocDate] = useState("");
-  const [adhocTime, setAdhocTime] = useState("");
-  const [adhocReason, setAdhocReason] = useState("");
 
   const [weeklyState, weeklyAction] = useActionState(
     createWeeklyScheduleOnBehalf,
     weeklyInitialState
   );
-  const [adhocState, adhocAction] = useActionState(
-    createAdHocRequestOnBehalf,
-    adhocInitialState
-  );
-
   const handledWeekly = useRef<CreateWeeklyScheduleOnBehalfState>(weeklyInitialState);
-  const handledAdhoc = useRef<CreateAdHocRequestOnBehalfState>(adhocInitialState);
 
   useEffect(() => {
     if (weeklyState.success && weeklyState !== handledWeekly.current) {
@@ -173,16 +180,6 @@ export function CreateOnBehalfDialog({
       setDayValues(Array.from({ length: 5 }, () => NO_TRANSPORT_VALUE));
     }
   }, [weeklyState]);
-
-  useEffect(() => {
-    if (adhocState.success && adhocState !== handledAdhoc.current) {
-      handledAdhoc.current = adhocState;
-      setSelected(null);
-      setAdhocDate("");
-      setAdhocTime("");
-      setAdhocReason("");
-    }
-  }, [adhocState]);
 
   function setDay(index: number, value: string) {
     setDayValues((prev) => prev.map((v, i) => (i === index ? value : v)));
@@ -197,150 +194,171 @@ export function CreateOnBehalfDialog({
       </DialogTrigger>
       <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-xl">
         <DialogHeader>
-          <DialogTitle>Create on behalf of an employee</DialogTitle>
+          <DialogTitle>Create weekly schedule on behalf of an employee</DialogTitle>
           <DialogDescription>
             For an employee who missed the submission window. This is saved as
             already approved -- it skips the normal review step.
           </DialogDescription>
         </DialogHeader>
 
-        <div className="flex gap-2">
-          <Button
-            type="button"
-            size="sm"
-            variant={mode === "weekly" ? "default" : "outline"}
-            onClick={() => setMode("weekly")}
-          >
-            Weekly schedule
-          </Button>
-          <Button
-            type="button"
-            size="sm"
-            variant={mode === "adhoc" ? "default" : "outline"}
-            onClick={() => setMode("adhoc")}
-          >
-            Ad-hoc request
-          </Button>
+        <div className="space-y-2">
+          <Label>Employee</Label>
+          <EmployeePicker employees={employees} selected={selected} onSelect={setSelected} />
         </div>
+
+        {selected ? <EmployeeInfoPanel selected={selected} /> : null}
+
+        <form action={weeklyAction} className="space-y-4">
+          <input type="hidden" name="employeeId" value={selected?.id ?? ""} />
+          <p className="text-sm text-muted-foreground">
+            Week of {weekLabel} -- select an arrival time for each day.
+          </p>
+          <div className="grid grid-cols-[repeat(auto-fit,minmax(9rem,1fr))] gap-2">
+            {days.map((day, index) => (
+              <div key={day.label} className="rounded-md border p-2">
+                <p className="text-xs font-semibold">{day.label}</p>
+                <p className="mb-1 text-xs text-muted-foreground">{day.dateLabel}</p>
+                <input type="hidden" name={`day-${index}`} value={dayValues[index]} />
+                <Select value={dayValues[index]} onValueChange={(v) => setDay(index, v)}>
+                  <SelectTrigger className="w-full min-w-0">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value={NO_TRANSPORT_VALUE}>Not Required</SelectItem>
+                    {ARRIVAL_TIME_OPTIONS.map((o) => (
+                      <SelectItem key={o.value} value={o.value}>
+                        {o.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            ))}
+          </div>
+          {weeklyState.error ? (
+            <p className="text-sm text-destructive">{weeklyState.error}</p>
+          ) : null}
+          {weeklyState.success ? (
+            <p className="text-sm text-green-foreground">
+              Weekly schedule created and approved for {weeklyState.employeeName}.
+            </p>
+          ) : null}
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setOpen(false)}>
+              Close
+            </Button>
+            <SubmitButton />
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+const adhocInitialState: CreateAdHocRequestOnBehalfState = {};
+
+export function CreateAdHocOnBehalfDialog({
+  employees,
+}: {
+  employees: OnBehalfEmployeeOption[];
+}) {
+  const [open, setOpen] = useState(false);
+  const [selected, setSelected] = useState<OnBehalfEmployeeOption | null>(null);
+  const [adhocDate, setAdhocDate] = useState("");
+  const [adhocTime, setAdhocTime] = useState("");
+  const [adhocReason, setAdhocReason] = useState("");
+
+  const [adhocState, adhocAction] = useActionState(
+    createAdHocRequestOnBehalf,
+    adhocInitialState
+  );
+  const handledAdhoc = useRef<CreateAdHocRequestOnBehalfState>(adhocInitialState);
+
+  useEffect(() => {
+    if (adhocState.success && adhocState !== handledAdhoc.current) {
+      handledAdhoc.current = adhocState;
+      setSelected(null);
+      setAdhocDate("");
+      setAdhocTime("");
+      setAdhocReason("");
+    }
+  }, [adhocState]);
+
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger asChild>
+        <Button type="button" variant="outline">
+          Create on behalf of employee
+        </Button>
+      </DialogTrigger>
+      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle>Create ad-hoc request on behalf of an employee</DialogTitle>
+          <DialogDescription>
+            For an employee who needs a same-day request logged for them. This
+            is saved as already approved -- it goes straight to Facilities.
+          </DialogDescription>
+        </DialogHeader>
 
         <div className="space-y-2">
           <Label>Employee</Label>
           <EmployeePicker employees={employees} selected={selected} onSelect={setSelected} />
         </div>
 
-        {selected ? (
-          <div className="grid grid-cols-1 gap-x-4 gap-y-1 rounded-md border bg-muted/30 p-3 text-sm sm:grid-cols-2">
-            <p>
-              <span className="text-muted-foreground">Email:</span> {selected.email}
-            </p>
-            <p>
-              <span className="text-muted-foreground">Contact:</span>{" "}
-              {selected.contactNumber ?? "—"}
-            </p>
-            <p className="sm:col-span-2">
-              <span className="text-muted-foreground">Address:</span>{" "}
-              {selected.address ?? "—"}
-            </p>
-          </div>
-        ) : null}
+        {selected ? <EmployeeInfoPanel selected={selected} /> : null}
 
-        {mode === "weekly" ? (
-          <form key="weekly" action={weeklyAction} className="space-y-4">
-            <input type="hidden" name="employeeId" value={selected?.id ?? ""} />
-            <p className="text-sm text-muted-foreground">
-              Week of {weekLabel} -- select an arrival time for each day.
+        <form action={adhocAction} className="space-y-4">
+          <input type="hidden" name="employeeId" value={selected?.id ?? ""} />
+          <div className="space-y-2">
+            <Label htmlFor="onbehalf-date">Date</Label>
+            <Input
+              id="onbehalf-date"
+              type="date"
+              name="date"
+              value={adhocDate}
+              onChange={(e) => setAdhocDate(e.target.value)}
+              required
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="onbehalf-arrival">Arrival time</Label>
+            <Select name="arrivalTime" value={adhocTime} onValueChange={setAdhocTime} required>
+              <SelectTrigger className="w-full" id="onbehalf-arrival">
+                <SelectValue placeholder="Select a time" />
+              </SelectTrigger>
+              <SelectContent>
+                {ADHOC_ARRIVAL_TIME_OPTIONS.map((o) => (
+                  <SelectItem key={o.value} value={o.value}>
+                    {o.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="onbehalf-reason">Reason (optional)</Label>
+            <Textarea
+              id="onbehalf-reason"
+              name="reason"
+              value={adhocReason}
+              onChange={(e) => setAdhocReason(e.target.value)}
+            />
+          </div>
+          {adhocState.error ? (
+            <p className="text-sm text-destructive">{adhocState.error}</p>
+          ) : null}
+          {adhocState.success ? (
+            <p className="text-sm text-green-foreground">
+              Ad-hoc request created and approved for {adhocState.employeeName}.
             </p>
-            <div className="grid grid-cols-[repeat(auto-fit,minmax(9rem,1fr))] gap-2">
-              {days.map((day, index) => (
-                <div key={day.label} className="rounded-md border p-2">
-                  <p className="text-xs font-semibold">{day.label}</p>
-                  <p className="mb-1 text-xs text-muted-foreground">{day.dateLabel}</p>
-                  <input type="hidden" name={`day-${index}`} value={dayValues[index]} />
-                  <Select value={dayValues[index]} onValueChange={(v) => setDay(index, v)}>
-                    <SelectTrigger className="w-full min-w-0">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value={NO_TRANSPORT_VALUE}>Not Required</SelectItem>
-                      {ARRIVAL_TIME_OPTIONS.map((o) => (
-                        <SelectItem key={o.value} value={o.value}>
-                          {o.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-              ))}
-            </div>
-            {weeklyState.error ? (
-              <p className="text-sm text-destructive">{weeklyState.error}</p>
-            ) : null}
-            {weeklyState.success ? (
-              <p className="text-sm text-green-foreground">
-                Weekly schedule created and approved for {weeklyState.employeeName}.
-              </p>
-            ) : null}
-            <DialogFooter>
-              <Button type="button" variant="outline" onClick={() => setOpen(false)}>
-                Close
-              </Button>
-              <SubmitButton />
-            </DialogFooter>
-          </form>
-        ) : (
-          <form key="adhoc" action={adhocAction} className="space-y-4">
-            <input type="hidden" name="employeeId" value={selected?.id ?? ""} />
-            <div className="space-y-2">
-              <Label htmlFor="onbehalf-date">Date</Label>
-              <Input
-                id="onbehalf-date"
-                type="date"
-                name="date"
-                value={adhocDate}
-                onChange={(e) => setAdhocDate(e.target.value)}
-                required
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="onbehalf-arrival">Arrival time</Label>
-              <Select name="arrivalTime" value={adhocTime} onValueChange={setAdhocTime} required>
-                <SelectTrigger className="w-full" id="onbehalf-arrival">
-                  <SelectValue placeholder="Select a time" />
-                </SelectTrigger>
-                <SelectContent>
-                  {ADHOC_ARRIVAL_TIME_OPTIONS.map((o) => (
-                    <SelectItem key={o.value} value={o.value}>
-                      {o.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="onbehalf-reason">Reason (optional)</Label>
-              <Textarea
-                id="onbehalf-reason"
-                name="reason"
-                value={adhocReason}
-                onChange={(e) => setAdhocReason(e.target.value)}
-              />
-            </div>
-            {adhocState.error ? (
-              <p className="text-sm text-destructive">{adhocState.error}</p>
-            ) : null}
-            {adhocState.success ? (
-              <p className="text-sm text-green-foreground">
-                Ad-hoc request created and approved for {adhocState.employeeName}.
-              </p>
-            ) : null}
-            <DialogFooter>
-              <Button type="button" variant="outline" onClick={() => setOpen(false)}>
-                Close
-              </Button>
-              <SubmitButton />
-            </DialogFooter>
-          </form>
-        )}
+          ) : null}
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setOpen(false)}>
+              Close
+            </Button>
+            <SubmitButton />
+          </DialogFooter>
+        </form>
       </DialogContent>
     </Dialog>
   );

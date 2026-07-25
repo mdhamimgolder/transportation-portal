@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
@@ -14,6 +14,8 @@ import {
   LogOut,
   Map,
   Menu,
+  PanelLeftClose,
+  PanelLeftOpen,
   ScrollText,
   Settings,
   UserCheck,
@@ -73,15 +75,22 @@ function initialsOf(name: string): string {
 function NavLinkList({
   links,
   onNavigate,
+  collapsed = false,
 }: {
   links: NavLink[];
   onNavigate?: () => void;
+  collapsed?: boolean;
 }) {
   const pathname = usePathname();
 
   return (
-    <nav className="flex-1 space-y-0.5 overflow-y-auto px-3 py-2">
-      <p className="px-3 pb-1.5 text-[11px] font-semibold tracking-wider text-ink-foreground/40 uppercase">
+    <nav className="flex-1 space-y-0.5 overflow-y-auto overflow-x-hidden px-3 py-2">
+      <p
+        className={cn(
+          "px-3 pb-1.5 text-[11px] font-semibold tracking-wider whitespace-nowrap text-ink-foreground/40 uppercase",
+          collapsed && "hidden group-hover/sidebar:block"
+        )}
+      >
         Menu
       </p>
       {links.map((link) => {
@@ -93,6 +102,7 @@ function NavLinkList({
             key={link.href}
             href={link.href}
             onClick={onNavigate}
+            title={collapsed ? link.label : undefined}
             className={cn(
               "flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
               active
@@ -100,15 +110,28 @@ function NavLinkList({
                 : "text-ink-foreground/60 hover:bg-ink-foreground/5 hover:text-ink-foreground"
             )}
           >
-            {Icon ? <Icon className="size-4 shrink-0" /> : null}
-            <span className="flex-1 truncate">{link.label}</span>
+            <span className="relative shrink-0">
+              {Icon ? <Icon className="size-4" /> : null}
+              {collapsed && link.badge ? (
+                <span className="absolute -top-1 -right-1 size-2 rounded-full bg-amber group-hover/sidebar:hidden" />
+              ) : null}
+            </span>
+            <span
+              className={cn(
+                "flex-1 truncate whitespace-nowrap",
+                collapsed && "hidden group-hover/sidebar:inline"
+              )}
+            >
+              {link.label}
+            </span>
             {link.badge ? (
               <span
                 className={cn(
                   "flex h-5 min-w-5 items-center justify-center rounded-full px-1.5 font-mono text-[11px] font-semibold",
                   active
                     ? "bg-amber text-amber-foreground"
-                    : "bg-amber/90 text-amber-foreground"
+                    : "bg-amber/90 text-amber-foreground",
+                  collapsed && "hidden group-hover/sidebar:flex"
                 )}
               >
                 {link.badge}
@@ -124,9 +147,11 @@ function NavLinkList({
 function UserMenu({
   user,
   align = "start",
+  collapsed = false,
 }: {
   user: SessionUser;
   align?: "start" | "end";
+  collapsed?: boolean;
 }) {
   return (
     <DropdownMenu>
@@ -139,7 +164,12 @@ function UserMenu({
           <div className="flex size-9 shrink-0 items-center justify-center rounded-full bg-ink-foreground/10 text-xs font-semibold text-ink-foreground">
             {initialsOf(user.fullName)}
           </div>
-          <div className="min-w-0 flex-1">
+          <div
+            className={cn(
+              "min-w-0 flex-1",
+              collapsed && "hidden group-hover/sidebar:block"
+            )}
+          >
             <p className="truncate text-sm font-medium text-ink-foreground">
               {user.fullName}
             </p>
@@ -166,16 +196,29 @@ function UserMenu({
   );
 }
 
-function BrandMark({ title }: { title: string }) {
+function BrandMark({
+  title,
+  collapsed = false,
+}: {
+  title: string;
+  collapsed?: boolean;
+}) {
   return (
-    <div className="flex items-center gap-3 px-5 py-5">
+    <div
+      className={cn(
+        "flex items-center gap-3 py-5",
+        collapsed ? "justify-center px-2" : "px-5"
+      )}
+    >
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img
         src="/commure-logo.jpeg"
         alt=""
         className="size-7 shrink-0 rounded-md object-cover"
       />
-      <div className="min-w-0">
+      <div
+        className={cn("min-w-0", collapsed && "hidden group-hover/sidebar:block")}
+      >
         <p className="truncate font-display text-sm font-medium leading-tight">
           Transportation
         </p>
@@ -187,6 +230,8 @@ function BrandMark({ title }: { title: string }) {
   );
 }
 
+const SIDEBAR_COLLAPSE_STORAGE_KEY = "nav-sidebar-collapsed";
+
 export function NavSidebar({
   user,
   title,
@@ -197,7 +242,22 @@ export function NavSidebar({
   links: NavLink[];
 }) {
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [collapsed, setCollapsed] = useState(false);
+  const [hydrated, setHydrated] = useState(false);
   const homeHref = links[0]?.href ?? "/";
+
+  useEffect(() => {
+    setCollapsed(localStorage.getItem(SIDEBAR_COLLAPSE_STORAGE_KEY) === "1");
+    setHydrated(true);
+  }, []);
+
+  function toggleCollapsed() {
+    setCollapsed((prev) => {
+      const next = !prev;
+      localStorage.setItem(SIDEBAR_COLLAPSE_STORAGE_KEY, next ? "1" : "0");
+      return next;
+    });
+  }
 
   return (
     <>
@@ -270,13 +330,49 @@ export function NavSidebar({
       </header>
 
       {/* Desktop sidebar -- shown at the lg breakpoint and up */}
-      <aside className="sticky top-0 hidden h-screen w-64 shrink-0 flex-col bg-ink text-ink-foreground lg:flex">
-        <Link href={homeHref}>
-          <BrandMark title={title} />
-        </Link>
-        <NavLinkList links={links} />
-        <div className="border-t border-ink-foreground/10 px-4 py-4">
-          <UserMenu user={user} />
+      <aside
+        className={cn(
+          "group/sidebar sticky top-0 hidden h-screen shrink-0 lg:block",
+          collapsed ? "w-16" : "w-64"
+        )}
+      >
+        <div
+          className={cn(
+            "flex h-full w-64 flex-col bg-ink text-ink-foreground",
+            hydrated && "transition-[width] duration-200 ease-out",
+            collapsed &&
+              "absolute inset-y-0 left-0 z-40 w-16 overflow-hidden group-hover/sidebar:w-64 group-hover/sidebar:overflow-visible group-hover/sidebar:shadow-2xl"
+          )}
+        >
+          <Link href={homeHref}>
+            <BrandMark title={title} collapsed={collapsed} />
+          </Link>
+
+          <button
+            type="button"
+            onClick={toggleCollapsed}
+            title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+            className="mx-3 mb-1 flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-ink-foreground/60 transition-colors hover:bg-ink-foreground/5 hover:text-ink-foreground"
+          >
+            {collapsed ? (
+              <PanelLeftOpen className="size-4 shrink-0" />
+            ) : (
+              <PanelLeftClose className="size-4 shrink-0" />
+            )}
+            <span
+              className={cn(
+                "flex-1 truncate text-left whitespace-nowrap",
+                collapsed && "hidden group-hover/sidebar:inline"
+              )}
+            >
+              Collapse
+            </span>
+          </button>
+
+          <NavLinkList links={links} collapsed={collapsed} />
+          <div className="border-t border-ink-foreground/10 px-4 py-4">
+            <UserMenu user={user} collapsed={collapsed} />
+          </div>
         </div>
       </aside>
     </>

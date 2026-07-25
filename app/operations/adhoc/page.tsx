@@ -20,6 +20,19 @@ export default async function OperationsAdHocPage() {
       : null,
   }));
 
+  const employees = await prisma.user.findMany({
+    where: { role: Role.EMPLOYEE, isActive: true },
+    select: {
+      id: true,
+      fullName: true,
+      employeeCode: true,
+      email: true,
+      contactNumber: true,
+      address: true,
+    },
+    orderBy: { fullName: "asc" },
+  });
+
   return (
     <div className="space-y-4">
       <div>
@@ -30,7 +43,7 @@ export default async function OperationsAdHocPage() {
         </p>
       </div>
 
-      <AdHocTable requests={rows} />
+      <AdHocTable requests={rows} employees={employees} />
     </div>
   );
 }

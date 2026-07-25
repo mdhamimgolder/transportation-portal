@@ -24,7 +24,7 @@ import { EditWeeklyScheduleDialog } from "@/components/operations/edit-weekly-sc
 import { NO_TRANSPORT_VALUE } from "@/lib/constants/arrival-times";
 import { DAY_LABELS } from "@/lib/date/week";
 import {
-  CreateOnBehalfDialog,
+  CreateWeeklyOnBehalfDialog,
   type OnBehalfEmployeeOption,
 } from "@/components/operations/create-on-behalf-dialog";
 
@@ -84,7 +84,7 @@ export function WeeklyRequestsTable({
         </p>
         <div className="flex flex-col items-end gap-2">
           <ApproveSelectedButton />
-          <CreateOnBehalfDialog
+          <CreateWeeklyOnBehalfDialog
             employees={employees}
             weekLabel={onBehalfWeekLabel}
             days={onBehalfDays}
@@ -151,18 +151,17 @@ export function WeeklyRequestsTable({
               </TableRow>
             ) : (
               rows.map((row, index) => {
-                const rowBg = index % 2 === 1 ? "bg-muted/20" : "bg-card";
                 return (
                 <TableRow
                   key={row.id}
                   className={index % 2 === 1 ? "bg-muted/20" : undefined}
                 >
-                  <TableCell className={`sticky left-0 z-10 ${rowBg}`}>
+                  <TableCell className="sticky left-0 z-10 bg-card">
                     {row.status === "PENDING" ? (
                       <Checkbox name="scheduleId" value={row.id} />
                     ) : null}
                   </TableCell>
-                  <TableCell className={`sticky left-10 z-10 ${rowBg}`}>
+                  <TableCell className="sticky left-10 z-10 bg-card">
                     <div className="flex flex-col gap-0.5">
                       <span className="font-medium">{row.employee.fullName}</span>
                       {row.employee.employeeCode ? (
