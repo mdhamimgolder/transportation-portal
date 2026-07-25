@@ -74,10 +74,12 @@ function NavLinkList({
   links,
   onNavigate,
   expanded = true,
+  hideMenuLabel = false,
 }: {
   links: NavLink[];
   onNavigate?: () => void;
   expanded?: boolean;
+  hideMenuLabel?: boolean;
 }) {
   const pathname = usePathname();
 
@@ -86,7 +88,7 @@ function NavLinkList({
       <p
         className={cn(
           "px-3 pb-1.5 text-[11px] font-semibold tracking-wider whitespace-nowrap text-ink-foreground/40 uppercase",
-          !expanded && "hidden"
+          (!expanded || hideMenuLabel) && "hidden"
         )}
       >
         Menu
@@ -190,9 +192,11 @@ function UserMenu({
 
 function BrandMark({
   title,
+  subtitle,
   expanded = true,
 }: {
   title: string;
+  subtitle?: string;
   expanded?: boolean;
 }) {
   return (
@@ -213,7 +217,7 @@ function BrandMark({
           Transportation
         </p>
         <p className="truncate font-mono text-[11px] tracking-wide text-ink-foreground/50 uppercase">
-          {title}
+          {subtitle ?? title}
         </p>
       </div>
     </div>
@@ -224,13 +228,23 @@ export function NavSidebar({
   user,
   title,
   links,
+  forceExpanded = false,
+  hideMenuLabel = false,
+  brandSubtitle,
 }: {
   user: SessionUser;
   title: string;
   links: NavLink[];
+  /** Keep the desktop sidebar permanently expanded -- no hover-driven collapse/expand. */
+  forceExpanded?: boolean;
+  /** Hide the "Menu" section label above the nav links. */
+  hideMenuLabel?: boolean;
+  /** Overrides the caption under "Transportation" in the brand block (defaults to `title`). */
+  brandSubtitle?: string;
 }) {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [hovered, setHovered] = useState(false);
+  const isExpanded = forceExpanded || hovered;
   const homeHref = links[0]?.href ?? "/";
 
   return (
@@ -244,9 +258,13 @@ export function NavSidebar({
           >
             <SheetTitle className="sr-only">{title} navigation</SheetTitle>
             <Link href={homeHref} onClick={() => setMobileOpen(false)}>
-              <BrandMark title={title} />
+              <BrandMark title={title} subtitle={brandSubtitle} />
             </Link>
-            <NavLinkList links={links} onNavigate={() => setMobileOpen(false)} />
+            <NavLinkList
+              links={links}
+              onNavigate={() => setMobileOpen(false)}
+              hideMenuLabel={hideMenuLabel}
+            />
             <div className="border-t border-ink-foreground/10 px-4 py-4">
               <UserMenu user={user} />
             </div>
@@ -303,25 +321,26 @@ export function NavSidebar({
         </DropdownMenu>
       </header>
 
-      {/* Desktop sidebar -- shown at the lg breakpoint and up. Always
+      {/* Desktop sidebar -- shown at the lg breakpoint and up. By default
           icon-only; hovering smoothly widens it in place (the content area
           shrinks to match, same as a normal flex sibling) and it eases back
           down the moment the pointer leaves -- no overlay, so nothing from
-          the page behind it can show through. */}
+          the page behind it can show through. `forceExpanded` pins it open
+          and ignores hover entirely, for roles that want a static sidebar. */}
       <aside
         onMouseEnter={() => setHovered(true)}
         onMouseLeave={() => setHovered(false)}
         className={cn(
           "sticky top-0 hidden h-screen shrink-0 flex-col bg-ink text-ink-foreground transition-[width] duration-200 ease-in-out lg:flex",
-          hovered ? "w-64" : "w-16"
+          isExpanded ? "w-64" : "w-16"
         )}
       >
         <Link href={homeHref}>
-          <BrandMark title={title} expanded={hovered} />
+          <BrandMark title={title} subtitle={brandSubtitle} expanded={isExpanded} />
         </Link>
-        <NavLinkList links={links} expanded={hovered} />
+        <NavLinkList links={links} expanded={isExpanded} hideMenuLabel={hideMenuLabel} />
         <div className="border-t border-ink-foreground/10 px-4 py-4">
-          <UserMenu user={user} expanded={hovered} />
+          <UserMenu user={user} expanded={isExpanded} />
         </div>
       </aside>
     </>
