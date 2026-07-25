@@ -303,27 +303,25 @@ export function NavSidebar({
         </DropdownMenu>
       </header>
 
-      {/* Desktop sidebar -- shown at the lg breakpoint and up. Always icon-only;
-          hovering flies the full labeled menu out over the content (doesn't
-          reflow it) and retracts instantly the moment the pointer leaves. */}
+      {/* Desktop sidebar -- shown at the lg breakpoint and up. Always
+          icon-only; hovering smoothly widens it in place (the content area
+          shrinks to match, same as a normal flex sibling) and it eases back
+          down the moment the pointer leaves -- no overlay, so nothing from
+          the page behind it can show through. */}
       <aside
         onMouseEnter={() => setHovered(true)}
         onMouseLeave={() => setHovered(false)}
-        className="sticky top-0 hidden h-screen w-16 shrink-0 lg:block"
+        className={cn(
+          "sticky top-0 hidden h-screen shrink-0 flex-col bg-ink text-ink-foreground transition-[width] duration-200 ease-in-out lg:flex",
+          hovered ? "w-64" : "w-16"
+        )}
       >
-        <div
-          className={cn(
-            "absolute inset-y-0 left-0 z-40 flex h-full flex-col bg-ink text-ink-foreground",
-            hovered ? "w-64 overflow-visible shadow-2xl" : "w-16 overflow-hidden"
-          )}
-        >
-          <Link href={homeHref}>
-            <BrandMark title={title} expanded={hovered} />
-          </Link>
-          <NavLinkList links={links} expanded={hovered} />
-          <div className="border-t border-ink-foreground/10 px-4 py-4">
-            <UserMenu user={user} expanded={hovered} />
-          </div>
+        <Link href={homeHref}>
+          <BrandMark title={title} expanded={hovered} />
+        </Link>
+        <NavLinkList links={links} expanded={hovered} />
+        <div className="border-t border-ink-foreground/10 px-4 py-4">
+          <UserMenu user={user} expanded={hovered} />
         </div>
       </aside>
     </>
