@@ -107,7 +107,7 @@ export function AdHocTable({
               <TableHead>Date</TableHead>
               <TableHead>Arrival Time</TableHead>
               <TableHead>Reason</TableHead>
-              <TableHead>Status</TableHead>
+              <TableHead className="w-44">Status</TableHead>
               <TableHead className="w-48">Actions</TableHead>
             </TableRow>
           </TableHeader>
@@ -120,7 +120,10 @@ export function AdHocTable({
               </TableRow>
             ) : (
               requests.map((request) => (
-                <TableRow key={request.id}>
+                <TableRow
+                  key={request.id}
+                  className="relative transition-transform duration-150 hover:z-10 hover:scale-[1.012] hover:bg-muted/70 hover:shadow-md"
+                >
                   <TableCell className="sticky left-0 z-10 bg-card font-medium">
                     <div className="flex items-center gap-2">
                       {request.status === AdHocStatus.PENDING ? (
@@ -147,19 +150,27 @@ export function AdHocTable({
                   <TableCell className="max-w-48 truncate">
                     {request.reason ?? "—"}
                   </TableCell>
-                  <TableCell>
-                    <StatusBadge status={request.status} />
-                    {request.status === AdHocStatus.REJECTED && request.rejectReason ? (
-                      <p className="mt-1 max-w-40 text-xs text-muted-foreground">
-                        {request.rejectReason}
-                      </p>
-                    ) : null}
-                    {request.reviewerName && request.status !== AdHocStatus.PENDING ? (
-                      <p className="mt-1 max-w-40 text-xs text-muted-foreground">
-                        {request.status === AdHocStatus.REJECTED ? "Rejected" : "Approved"} by{" "}
-                        {request.reviewerName}
-                      </p>
-                    ) : null}
+                  <TableCell className="align-top">
+                    <div className="flex flex-col items-start gap-1 py-0.5">
+                      <StatusBadge status={request.status} />
+                      {request.status === AdHocStatus.REJECTED && request.rejectReason ? (
+                        <p
+                          className="max-w-40 truncate text-xs text-muted-foreground"
+                          title={request.rejectReason}
+                        >
+                          {request.rejectReason}
+                        </p>
+                      ) : null}
+                      {request.reviewerName && request.status !== AdHocStatus.PENDING ? (
+                        <p
+                          className="max-w-40 truncate text-xs text-muted-foreground"
+                          title={`${request.status === AdHocStatus.REJECTED ? "Rejected" : "Approved"} by ${request.reviewerName}`}
+                        >
+                          {request.status === AdHocStatus.REJECTED ? "Rejected" : "Approved"} by{" "}
+                          {request.reviewerName}
+                        </p>
+                      ) : null}
+                    </div>
                   </TableCell>
                   <TableCell>
                     {request.status === AdHocStatus.PENDING ? (
@@ -167,7 +178,9 @@ export function AdHocTable({
                         requestId={request.id}
                         employeeName={request.employee.fullName}
                       />
-                    ) : null}
+                    ) : (
+                      <span className="text-xs text-muted-foreground">—</span>
+                    )}
                   </TableCell>
                 </TableRow>
               ))

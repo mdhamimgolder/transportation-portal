@@ -43,7 +43,10 @@ export function AllocationHistoryTable({
             </TableRow>
           ) : (
             rows.map((row) => (
-              <TableRow key={row.id}>
+              <TableRow
+                key={row.id}
+                className="relative transition-transform duration-150 hover:z-10 hover:scale-[1.012] hover:bg-muted/70 hover:shadow-md"
+              >
                 <TableCell className="sticky left-0 z-10 bg-card">
                   <div className="flex items-center gap-2">
                     <span className="font-medium">{row.employeeName}</span>
