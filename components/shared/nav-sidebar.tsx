@@ -75,11 +75,15 @@ function NavLinkList({
   onNavigate,
   expanded = true,
   hideMenuLabel = false,
+  activeAccentClassName,
+  activeDotClassName,
 }: {
   links: NavLink[];
   onNavigate?: () => void;
   expanded?: boolean;
   hideMenuLabel?: boolean;
+  activeAccentClassName?: string;
+  activeDotClassName?: string;
 }) {
   const pathname = usePathname();
 
@@ -106,7 +110,7 @@ function NavLinkList({
             className={cn(
               "flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
               active
-                ? "bg-ink-foreground/10 text-ink-foreground"
+                ? (activeAccentClassName ?? "bg-ink-foreground/10 text-ink-foreground")
                 : "text-ink-foreground/60 hover:bg-ink-foreground/5 hover:text-ink-foreground"
             )}
           >
@@ -124,6 +128,9 @@ function NavLinkList({
             >
               {link.label}
             </span>
+            {active && activeDotClassName ? (
+              <span className={cn("size-1.5 shrink-0 rounded-full", activeDotClassName)} />
+            ) : null}
             {link.badge && expanded ? (
               <span
                 className={cn(
@@ -147,10 +154,14 @@ function UserMenu({
   user,
   align = "start",
   expanded = true,
+  avatarClassName,
+  avatarTextClassName,
 }: {
   user: SessionUser;
   align?: "start" | "end";
   expanded?: boolean;
+  avatarClassName?: string;
+  avatarTextClassName?: string;
 }) {
   return (
     <DropdownMenu>
@@ -160,7 +171,13 @@ function UserMenu({
           className="flex min-w-0 flex-1 items-center gap-3 rounded-lg text-left outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
           aria-label="Account options"
         >
-          <div className="flex size-9 shrink-0 items-center justify-center rounded-full bg-ink-foreground/10 text-xs font-semibold text-ink-foreground">
+          <div
+            className={cn(
+              "flex size-9 shrink-0 items-center justify-center rounded-full text-xs font-semibold",
+              avatarClassName ?? "bg-ink-foreground/10",
+              avatarTextClassName ?? "text-ink-foreground"
+            )}
+          >
             {initialsOf(user.fullName)}
           </div>
           <div className={cn("min-w-0 flex-1", !expanded && "hidden")}>
@@ -222,6 +239,10 @@ export function NavSidebar({
   links,
   forceExpanded = false,
   hideMenuLabel = false,
+  activeAccentClassName,
+  activeDotClassName,
+  avatarClassName,
+  avatarTextClassName,
 }: {
   user: SessionUser;
   title: string;
@@ -230,6 +251,14 @@ export function NavSidebar({
   forceExpanded?: boolean;
   /** Hide the "Menu" section label above the nav links. */
   hideMenuLabel?: boolean;
+  /** Background + text classes for the active nav pill; falls back to the neutral default. */
+  activeAccentClassName?: string;
+  /** Classes for the solid dot shown next to the active link's label; omit to render no dot. */
+  activeDotClassName?: string;
+  /** Background classes for the account avatar circle; falls back to the neutral default. */
+  avatarClassName?: string;
+  /** Text classes for the account avatar initials; falls back to the neutral default. */
+  avatarTextClassName?: string;
 }) {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [hovered, setHovered] = useState(false);
@@ -253,9 +282,15 @@ export function NavSidebar({
               links={links}
               onNavigate={() => setMobileOpen(false)}
               hideMenuLabel={hideMenuLabel}
+              activeAccentClassName={activeAccentClassName}
+              activeDotClassName={activeDotClassName}
             />
             <div className="border-t border-ink-foreground/10 px-4 py-4">
-              <UserMenu user={user} />
+              <UserMenu
+                user={user}
+                avatarClassName={avatarClassName}
+                avatarTextClassName={avatarTextClassName}
+              />
             </div>
           </SheetContent>
           <Button
@@ -327,9 +362,20 @@ export function NavSidebar({
         <Link href={homeHref}>
           <BrandMark expanded={isExpanded} />
         </Link>
-        <NavLinkList links={links} expanded={isExpanded} hideMenuLabel={hideMenuLabel} />
+        <NavLinkList
+          links={links}
+          expanded={isExpanded}
+          hideMenuLabel={hideMenuLabel}
+          activeAccentClassName={activeAccentClassName}
+          activeDotClassName={activeDotClassName}
+        />
         <div className="border-t border-ink-foreground/10 px-4 py-4">
-          <UserMenu user={user} expanded={isExpanded} />
+          <UserMenu
+            user={user}
+            expanded={isExpanded}
+            avatarClassName={avatarClassName}
+            avatarTextClassName={avatarTextClassName}
+          />
         </div>
       </aside>
     </>

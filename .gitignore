@@ -40,3 +40,6 @@ ds-bundle/
 .design-sync/.cache/
 .design-sync/learnings/
 .design-sync/node_modules
+
+# archived pre-crash fastapi scaffold (not part of this project)
+/_archived-fastapi-scaffold-2026-07-27/

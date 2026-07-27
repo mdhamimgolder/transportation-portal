@@ -92,7 +92,11 @@ export default async function EmployeeDashboardPage() {
           </h1>
         </div>
         <div className="flex flex-wrap gap-2.5">
-          <Button asChild size="lg" className="rounded-full">
+          <Button
+            asChild
+            size="lg"
+            className="rounded-full bg-[#aef2ff] text-[#001014] hover:bg-[#d3f8ff]"
+          >
             <Link href="/employee/weekly">Submit weekly schedule</Link>
           </Button>
           <Button asChild size="lg" variant="outline" className="rounded-full">
@@ -115,6 +119,10 @@ export default async function EmployeeDashboardPage() {
           hint={window.isOpen ? "Submissions open" : "Window closed"}
           icon={<CalendarDays className="size-5" />}
           href="/employee/weekly"
+          className="bg-black border-transparent"
+          valueClassName="text-[#aef2ff]"
+          labelClassName="text-white/70"
+          hintClassName="text-white/50"
         />
         <TodaysScheduleCard entries={todaysScheduleEntries} />
         <StatCard

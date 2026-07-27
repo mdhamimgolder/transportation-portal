@@ -119,7 +119,7 @@ export function WeeklyRequestsTable({
                   {label.slice(0, 3)}
                 </TableHead>
               ))}
-              <TableHead>Status</TableHead>
+              <TableHead className="w-44">Status</TableHead>
               <TableHead>Actions</TableHead>
             </TableRow>
           </TableHeader>
@@ -138,7 +138,9 @@ export function WeeklyRequestsTable({
                 return (
                 <TableRow
                   key={row.id}
-                  className={index % 2 === 1 ? "bg-muted/20" : undefined}
+                  className={`relative transition-transform duration-150 hover:z-10 hover:scale-[1.012] hover:bg-muted/70 hover:shadow-md ${
+                    index % 2 === 1 ? "bg-muted/20" : ""
+                  }`}
                 >
                   <TableCell className="sticky left-0 z-10 bg-card">
                     <div className="flex items-center gap-2">
@@ -190,16 +192,22 @@ export function WeeklyRequestsTable({
                       {day.display}
                     </TableCell>
                   ))}
-                  <TableCell>
-                    <div className="flex flex-col gap-1">
+                  <TableCell className="align-top">
+                    <div className="flex flex-col items-start gap-1 py-0.5">
                       <StatusBadge status={row.status} />
                       {row.status === "REJECTED" && row.rejectReason ? (
-                        <p className="max-w-40 text-xs text-muted-foreground">
+                        <p
+                          className="max-w-40 truncate text-xs text-muted-foreground"
+                          title={row.rejectReason}
+                        >
                           {row.rejectReason}
                         </p>
                       ) : null}
                       {row.reviewerName && row.status !== "PENDING" ? (
-                        <p className="max-w-40 text-xs text-muted-foreground">
+                        <p
+                          className="max-w-40 truncate text-xs text-muted-foreground"
+                          title={`${row.status === "REJECTED" ? "Rejected" : "Approved"} by ${row.reviewerName}`}
+                        >
                           {row.status === "REJECTED" ? "Rejected" : "Approved"} by{" "}
                           {row.reviewerName}
                         </p>
@@ -208,17 +216,21 @@ export function WeeklyRequestsTable({
                   </TableCell>
                   <TableCell>
                     <div className="flex items-center gap-2">
-                      <EditWeeklyScheduleDialog
-                        scheduleId={row.id}
-                        employeeName={row.employee.fullName}
-                        initialValues={row.days.map((d) => d.value)}
-                      />
                       {row.status === "PENDING" ? (
-                        <RejectReasonDialog
-                          scheduleId={row.id}
-                          employeeName={row.employee.fullName}
-                        />
-                      ) : null}
+                        <>
+                          <EditWeeklyScheduleDialog
+                            scheduleId={row.id}
+                            employeeName={row.employee.fullName}
+                            initialValues={row.days.map((d) => d.value)}
+                          />
+                          <RejectReasonDialog
+                            scheduleId={row.id}
+                            employeeName={row.employee.fullName}
+                          />
+                        </>
+                      ) : (
+                        <span className="text-xs text-muted-foreground">—</span>
+                      )}
                     </div>
                   </TableCell>
                 </TableRow>

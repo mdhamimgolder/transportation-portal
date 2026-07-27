@@ -7,27 +7,43 @@ export function StatCard({
   hint,
   icon,
   href,
+  className,
+  valueClassName,
+  labelClassName,
+  hintClassName,
 }: {
   label: string;
   value: string | number;
   hint?: string;
   icon?: React.ReactNode;
   href?: string;
+  className?: string;
+  valueClassName?: string;
+  labelClassName?: string;
+  hintClassName?: string;
 }) {
   const body = (
     <div
       className={cn(
         "flex items-start justify-between gap-4 rounded-xl border bg-card p-5",
-        href && "transition-colors hover:border-teal/50"
+        href && "transition-colors hover:border-teal/50",
+        className
       )}
     >
       <div className="min-w-0 space-y-1">
-        <p className="text-sm text-muted-foreground">{label}</p>
-        <p className="font-mono text-3xl font-medium tracking-tight tabular-nums">
+        <p className={cn("text-sm text-muted-foreground", labelClassName)}>{label}</p>
+        <p
+          className={cn(
+            "font-mono text-3xl font-medium tracking-tight tabular-nums",
+            valueClassName
+          )}
+        >
           {value}
         </p>
         {hint ? (
-          <p className="truncate text-xs text-muted-foreground">{hint}</p>
+          <p className={cn("truncate text-xs text-muted-foreground", hintClassName)}>
+            {hint}
+          </p>
         ) : null}
       </div>
       {icon ? (

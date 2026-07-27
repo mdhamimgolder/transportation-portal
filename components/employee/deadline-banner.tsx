@@ -38,19 +38,19 @@ export function DeadlineBanner({
       : 0;
 
   return (
-    <div className="flex flex-wrap items-center gap-x-6 gap-y-2 rounded-xl border border-primary/35 bg-gradient-to-r from-primary/15 to-primary/5 px-6 py-4">
-      <p className="font-mono text-xs font-medium tracking-[0.12em] text-primary uppercase">
+    <div className="flex flex-wrap items-center gap-x-6 gap-y-2 rounded-xl border border-[rgba(174,242,255,0.35)] bg-black px-6 py-4">
+      <p className="font-mono text-xs font-medium tracking-[0.12em] text-[#aef2ff] uppercase">
         Submission deadline
       </p>
-      <p className="font-display text-2xl font-bold tracking-tight tabular-nums">
+      <p className="font-display text-2xl font-bold tracking-tight tabular-nums text-white">
         {formatRemaining(remaining)}
       </p>
-      <p className="text-sm text-muted-foreground">
+      <p className="text-sm text-white/60">
         until weekly schedule closes
       </p>
-      <div className="ml-auto h-1.5 w-full max-w-[220px] overflow-hidden rounded-full bg-foreground/10">
+      <div className="ml-auto h-1.5 w-full max-w-[220px] overflow-hidden rounded-full bg-white/10">
         <div
-          className="h-full rounded-full bg-primary"
+          className="h-full rounded-full bg-[#aef2ff]"
           style={{ width: `${progress}%` }}
         />
       </div>

@@ -23,6 +23,10 @@ export default async function EmployeeLayout({
         links={links}
         forceExpanded
         hideMenuLabel
+        activeAccentClassName="bg-[rgba(174,242,255,0.14)] text-[#aef2ff]"
+        activeDotClassName="bg-[#aef2ff]"
+        avatarClassName="bg-[#0e2a33]"
+        avatarTextClassName="text-[#aef2ff]"
       />
       <main className="min-w-0 flex-1 px-4 py-6 lg:px-10 lg:py-8">
         <div className="mx-auto w-full max-w-7xl space-y-6">{children}</div>
