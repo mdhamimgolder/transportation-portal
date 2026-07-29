@@ -1,5 +1,6 @@
 import { MapPin } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { cn } from "@/lib/utils";
 
 export type TodaysScheduleEntry = {
   id: string;
@@ -23,12 +24,23 @@ function formatCompactTime(raw: string): string {
   return `${displayHour}:${minute}${period}`;
 }
 
-export function TodaysScheduleCard({ entries }: { entries: TodaysScheduleEntry[] }) {
+export function TodaysScheduleCard({
+  entries,
+  className,
+}: {
+  entries: TodaysScheduleEntry[];
+  className?: string;
+}) {
   return (
-    <div className="flex items-start justify-between gap-4 rounded-xl border bg-card p-5">
+    <div
+      className={cn(
+        "flex items-start justify-between gap-4 rounded-xl border bg-card p-5",
+        className
+      )}
+    >
       <div className="min-w-0 flex-1 space-y-3">
         <div className="flex items-center justify-between gap-2">
-          <p className="text-sm text-muted-foreground">Today&apos;s Schedule</p>
+          <p className="text-sm text-muted-foreground">Today&apos;s schedule</p>
           {entries.length > 0 ? (
             <span className="font-mono text-xs text-muted-foreground">
               {entries.length} trip{entries.length === 1 ? "" : "s"}
@@ -40,23 +52,21 @@ export function TodaysScheduleCard({ entries }: { entries: TodaysScheduleEntry[]
         ) : (
           <div className="divide-y">
             {entries.map((entry) => (
-              <div key={entry.id} className="space-y-0.5 py-2 text-sm first:pt-0 last:pb-0">
-                <div className="flex items-center justify-between gap-2">
-                  <p className="min-w-0 truncate">
-                    <span className="font-mono font-semibold tabular-nums">
-                      {formatCompactTime(entry.pickupTime)}
-                    </span>{" "}
-                    <span className="font-medium text-teal">{entry.driverName}</span>
-                    <span className="text-muted-foreground">
-                      {" "}
-                      &middot; {entry.contactNumber}
-                    </span>
-                  </p>
-                  <Badge variant="secondary" className="shrink-0 font-normal">
-                    {entry.requestType}
-                  </Badge>
-                </div>
-                <p className="text-xs text-muted-foreground">Vehicle {entry.vehicleNumber}</p>
+              <div
+                key={entry.id}
+                className="flex items-center justify-between gap-2 py-2 text-sm first:pt-0 last:pb-0"
+                title={`Vehicle ${entry.vehicleNumber}`}
+              >
+                <p className="min-w-0 truncate">
+                  <span className="font-mono font-semibold tabular-nums">
+                    {formatCompactTime(entry.pickupTime)}
+                  </span>{" "}
+                  <span className="font-medium text-teal">{entry.driverName}</span>
+                  <span className="text-muted-foreground"> &middot; {entry.contactNumber}</span>
+                </p>
+                <Badge variant="secondary" className="shrink-0 font-normal">
+                  {entry.requestType}
+                </Badge>
               </div>
             ))}
           </div>

@@ -124,15 +124,17 @@ export default async function EmployeeDashboardPage() {
               ? "Upcoming weekly schedule submission open"
               : "Upcoming weekly schedule submission closed"
           }
+          className="sm:row-span-2"
         />
-        <TodaysScheduleCard entries={todaysScheduleEntries} />
         <StatCard
           label="Pending profile requests"
           value={pendingAddress + pendingContact + pendingPickupPoint}
           hint="Awaiting Operations review"
           icon={<ClipboardList className="size-5" />}
           href="/employee/profile"
+          className="sm:col-span-2"
         />
+        <TodaysScheduleCard entries={todaysScheduleEntries} className="sm:col-span-2" />
       </div>
     </div>
   );

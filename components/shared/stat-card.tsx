@@ -54,5 +54,13 @@ export function StatCard({
     </div>
   );
 
-  return href ? <Link href={href}>{body}</Link> : body;
+  // display:contents so the <Link> itself doesn't become the grid/flex item --
+  // the inner div (which carries `className`, e.g. col-span/row-span) does.
+  return href ? (
+    <Link href={href} className="contents">
+      {body}
+    </Link>
+  ) : (
+    body
+  );
 }
