@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { CalendarDays, ClipboardList } from "lucide-react";
+import { ClipboardList } from "lucide-react";
 import { requireRole } from "@/lib/rbac/guards";
 import { Role } from "@/lib/constants/enums";
 import { prisma } from "@/lib/prisma";
@@ -124,10 +124,9 @@ export default async function EmployeeDashboardPage() {
               ? "Upcoming weekly schedule submission open"
               : "Upcoming weekly schedule submission closed"
           }
-          icon={<CalendarDays className="size-5" />}
           href="/employee/weekly"
           className="bg-black border-transparent"
-          valueClassName="text-[#aef2ff]"
+          valueClassName="w-full text-center text-xl text-[#aef2ff]"
           labelClassName="text-white/70"
           hintClassName="text-white/50"
         />

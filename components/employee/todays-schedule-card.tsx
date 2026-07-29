@@ -18,21 +18,24 @@ export function TodaysScheduleCard({ entries }: { entries: TodaysScheduleEntry[]
         {entries.length === 0 ? (
           <p className="text-sm text-muted-foreground">No pick-up scheduled today.</p>
         ) : (
-          <div className="space-y-3">
+          <div className="divide-y">
             {entries.map((entry) => (
-              <div key={entry.id} className="space-y-1 text-sm">
-                <div className="flex items-center gap-2">
-                  <p className="font-mono text-lg font-medium tracking-tight tabular-nums">
+              <div
+                key={entry.id}
+                className="flex items-center justify-between gap-3 py-2 text-sm first:pt-0 last:pb-0"
+              >
+                <div className="min-w-0">
+                  <p className="font-mono text-base font-medium tracking-tight tabular-nums">
                     {entry.pickupTime}
                   </p>
-                  <Badge variant="secondary" className="w-fit font-normal">
-                    {entry.requestType}
-                  </Badge>
+                  <p className="truncate text-muted-foreground">
+                    {entry.driverName} &middot; {entry.contactNumber} &middot;{" "}
+                    {entry.vehicleNumber}
+                  </p>
                 </div>
-                <p className="text-muted-foreground">
-                  {entry.driverName} &middot; {entry.contactNumber}
-                </p>
-                <p className="text-muted-foreground">Vehicle {entry.vehicleNumber}</p>
+                <Badge variant="secondary" className="shrink-0 font-normal">
+                  {entry.requestType}
+                </Badge>
               </div>
             ))}
           </div>
