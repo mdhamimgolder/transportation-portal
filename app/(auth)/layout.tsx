@@ -34,22 +34,14 @@ export default function AuthLayout({
         </div>
       </div>
 
-      <div className="flex w-full flex-1 flex-col items-center justify-center bg-paper px-6 py-12 lg:w-1/2">
-        <div className="mb-8 flex items-center gap-2.5 lg:hidden">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src="/commure-logo.jpeg"
-            alt=""
-            className="size-9 rounded-lg"
-          />
-          <span className="font-display text-lg font-medium tracking-tight">
-            Transportation Portal
-          </span>
+      <div className="flex w-full flex-1 items-center justify-center bg-paper px-6 py-12 lg:w-1/2">
+        <div className="w-full max-w-sm overflow-hidden rounded-2xl border bg-card shadow-sm">
+          <div className="h-1 bg-[#aef2ff]" />
+          <div className="px-8 pt-7 pb-8">{children}</div>
+          <div className="flex items-center justify-center border-t px-8 py-3 font-mono text-[11px] tracking-wide text-muted-foreground uppercase">
+            <span>Internal transport management</span>
+          </div>
         </div>
-        <div className="w-full max-w-sm">{children}</div>
-        <p className="mt-8 font-mono text-xs tracking-wide text-muted-foreground uppercase">
-          Internal transport management
-        </p>
       </div>
     </div>
   );

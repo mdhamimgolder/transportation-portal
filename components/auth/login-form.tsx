@@ -5,6 +5,7 @@ import { useActionState } from "react";
 import { useFormStatus } from "react-dom";
 import { loginAction, type LoginActionState } from "@/actions/auth.actions";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
@@ -29,17 +30,26 @@ export function LoginForm() {
   return (
     <form action={formAction} className="space-y-4">
       <div className="space-y-2">
-        <Label htmlFor="email">Email</Label>
+        <Label htmlFor="email">Work email</Label>
         <Input
           id="email"
           name="email"
           type="email"
           autoComplete="email"
+          placeholder="name@company.com"
           required
         />
       </div>
       <div className="space-y-2">
-        <Label htmlFor="password">Password</Label>
+        <div className="flex items-center justify-between">
+          <Label htmlFor="password">Password</Label>
+          <Link
+            href="/forgot-password"
+            className="text-xs font-medium underline underline-offset-4"
+          >
+            Forgot password?
+          </Link>
+        </div>
         <Input
           id="password"
           name="password"
@@ -47,19 +57,22 @@ export function LoginForm() {
           autoComplete="current-password"
           required
         />
-        <div className="text-right">
-          <Link
-            href="/forgot-password"
-            className="text-xs text-muted-foreground underline underline-offset-4"
-          >
-            Forgot password?
-          </Link>
-        </div>
+        <p className="text-xs text-muted-foreground">
+          8+ characters. Case-sensitive.
+        </p>
+      </div>
+      <div className="flex items-center gap-2">
+        <Checkbox id="rememberMe" name="rememberMe" />
+        <Label htmlFor="rememberMe" className="text-sm font-normal text-muted-foreground">
+          Keep me signed in on this device
+        </Label>
       </div>
       {state.error ? (
         <p className="text-sm text-destructive">{state.error}</p>
       ) : null}
-      <SubmitButton />
+      <div className="pt-1">
+        <SubmitButton />
+      </div>
     </form>
   );
 }

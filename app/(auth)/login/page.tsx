@@ -19,12 +19,12 @@ export default async function LoginPage({
 
   return (
     <div>
-      <div className="mb-8">
-        <h1 className="font-display text-2xl font-medium tracking-tight text-foreground">
-          Sign in
+      <div className="mb-6">
+        <h1 className="font-display text-2xl font-bold tracking-tight text-foreground">
+          Sign in to your account
         </h1>
         <p className="mt-1.5 text-sm text-muted-foreground">
-          Use your work email to access the portal.
+          Use your work email to access schedules and fleet assignments.
         </p>
       </div>
       {reset === "success" ? (
