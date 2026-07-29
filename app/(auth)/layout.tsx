@@ -24,8 +24,8 @@ export default function AuthLayout({
         </div>
 
         <div className="max-w-sm">
-          <p className="font-display text-2xl leading-snug">
-            Every route, on schedule.
+          <p className="font-display text-2xl leading-snug text-[#aef2ff]">
+            Every route, one schedule.
           </p>
           <p className="mt-2 text-sm text-ink-foreground/60">
             Weekly schedules, ad-hoc pickups, and vehicle assignments for the

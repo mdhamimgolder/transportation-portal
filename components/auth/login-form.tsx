@@ -13,7 +13,12 @@ const initialState: LoginActionState = {};
 function SubmitButton() {
   const { pending } = useFormStatus();
   return (
-    <Button type="submit" size="lg" className="w-full" disabled={pending}>
+    <Button
+      type="submit"
+      size="lg"
+      className="w-full bg-[#aef2ff] text-[#001014] hover:bg-[#d3f8ff]"
+      disabled={pending}
+    >
       {pending ? "Signing in…" : "Sign in"}
     </Button>
   );
