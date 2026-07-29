@@ -9,6 +9,13 @@ export default defineConfig({
     path: "prisma/migrations",
   },
   datasource: {
-    url: process.env["DATABASE_URL"],
+    // CLI commands (migrate deploy, migrate dev, db push, ...) need a direct
+    // connection -- PgBouncer's transaction pooling mode doesn't support the
+    // session-scoped advisory lock Migrate uses, which causes deploys to
+    // intermittently hang/fail acquiring it. The app itself is unaffected:
+    // lib/prisma.ts reads DATABASE_URL directly and keeps using the pooled
+    // connection at runtime. Falls back to DATABASE_URL if DIRECT_URL isn't
+    // set yet (e.g. before it's added to Vercel).
+    url: process.env["DIRECT_URL"] ?? process.env["DATABASE_URL"],
   },
 });
