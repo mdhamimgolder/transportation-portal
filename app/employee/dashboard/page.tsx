@@ -3,7 +3,7 @@ import { CalendarDays, ClipboardList } from "lucide-react";
 import { requireRole } from "@/lib/rbac/guards";
 import { Role } from "@/lib/constants/enums";
 import { prisma } from "@/lib/prisma";
-import { getSubmissionWindow, startOfToday } from "@/lib/date/week";
+import { getMondayOfWeek, getSubmissionWindow, startOfToday } from "@/lib/date/week";
 import { getTransportSettings } from "@/lib/queries/settings";
 import { StatCard } from "@/components/shared/stat-card";
 import {
@@ -24,6 +24,7 @@ export default async function EmployeeDashboardPage() {
     settings.weeklyLockMinute
   );
   const today = startOfToday();
+  const thisWeekStartDate = getMondayOfWeek(today);
 
   const [currentSchedule, todaysAssignments, pendingAddress, pendingContact, pendingPickupPoint] =
     await Promise.all([
@@ -31,7 +32,7 @@ export default async function EmployeeDashboardPage() {
         where: {
           employeeId_weekStartDate: {
             employeeId: user.id,
-            weekStartDate: window.weekStartDate,
+            weekStartDate: thisWeekStartDate,
           },
         },
         select: { status: true },
@@ -67,6 +68,8 @@ export default async function EmployeeDashboardPage() {
     pickupTime: a.pickupTime,
     driverName: a.vehicleDriver.driverName,
     contactNumber: a.vehicleDriver.contactNumber,
+    vehicleNumber: a.vehicleDriver.vehicleNumber,
+    requestType: a.weeklyScheduleDayId ? "Weekly Schedule" : "Ad-hoc Request",
   }));
 
   const firstName = user.fullName.split(" ")[0];
@@ -116,7 +119,11 @@ export default async function EmployeeDashboardPage() {
         <StatCard
           label="This week's schedule"
           value={currentSchedule ? currentSchedule.status.toLowerCase() : "Not submitted"}
-          hint={window.isOpen ? "Submissions open" : "Window closed"}
+          hint={
+            window.isOpen
+              ? "Upcoming weekly schedule submission open"
+              : "Upcoming weekly schedule submission closed"
+          }
           icon={<CalendarDays className="size-5" />}
           href="/employee/weekly"
           className="bg-black border-transparent"
