@@ -10,6 +10,7 @@ import {
   TodaysScheduleCard,
   type TodaysScheduleEntry,
 } from "@/components/employee/todays-schedule-card";
+import { ThisWeekScheduleCard } from "@/components/employee/this-week-schedule-card";
 import { DeadlineBanner } from "@/components/employee/deadline-banner";
 import { Button } from "@/components/ui/button";
 
@@ -69,7 +70,7 @@ export default async function EmployeeDashboardPage() {
     driverName: a.vehicleDriver.driverName,
     contactNumber: a.vehicleDriver.contactNumber,
     vehicleNumber: a.vehicleDriver.vehicleNumber,
-    requestType: a.weeklyScheduleDayId ? "Weekly Schedule" : "Ad-hoc Request",
+    requestType: a.weeklyScheduleDayId ? "Weekly" : "Ad-hoc",
   }));
 
   const firstName = user.fullName.split(" ")[0];
@@ -116,19 +117,13 @@ export default async function EmployeeDashboardPage() {
       ) : null}
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-        <StatCard
-          label="This week's schedule"
-          value={currentSchedule ? currentSchedule.status.toLowerCase() : "Not submitted"}
+        <ThisWeekScheduleCard
+          status={currentSchedule?.status ?? null}
           hint={
             window.isOpen
               ? "Upcoming weekly schedule submission open"
               : "Upcoming weekly schedule submission closed"
           }
-          href="/employee/weekly"
-          className="bg-black border-transparent"
-          valueClassName="w-full text-center text-xl text-[#aef2ff]"
-          labelClassName="text-white/70"
-          hintClassName="text-white/50"
         />
         <TodaysScheduleCard entries={todaysScheduleEntries} />
         <StatCard

@@ -30,7 +30,7 @@ export function StatCard({
         className
       )}
     >
-      <div className="min-w-0 flex-1 space-y-1">
+      <div className="min-w-0 space-y-1">
         <p className={cn("text-sm text-muted-foreground", labelClassName)}>{label}</p>
         <p
           className={cn(
