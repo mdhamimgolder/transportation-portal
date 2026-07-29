@@ -71,12 +71,12 @@ export function TodaysScheduleCard({
             <TableBody>
               {entries.map((entry) => (
                 <TableRow key={entry.id}>
-                  <TableCell className="font-mono font-semibold tabular-nums">
+                  <TableCell className="font-mono font-semibold tabular-nums text-black">
                     {formatCompactTime(entry.pickupTime)}
                   </TableCell>
-                  <TableCell className="font-medium text-teal">{entry.driverName}</TableCell>
-                  <TableCell className="text-muted-foreground">{entry.contactNumber}</TableCell>
-                  <TableCell className="text-muted-foreground">{entry.vehicleNumber}</TableCell>
+                  <TableCell className="font-medium text-black">{entry.driverName}</TableCell>
+                  <TableCell className="text-black">{entry.contactNumber}</TableCell>
+                  <TableCell className="text-black">{entry.vehicleNumber}</TableCell>
                   <TableCell>
                     <Badge variant="secondary" className="font-normal">
                       {entry.requestType}

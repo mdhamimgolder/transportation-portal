@@ -27,12 +27,11 @@ export function ThisWeekScheduleCard({
       <p className="font-mono text-xs font-medium tracking-[0.12em] text-white/70 uppercase">
         This week&apos;s schedule
       </p>
-      <div className="flex justify-center pt-3">
+      <div className="flex flex-1 items-center justify-center">
         <span className="rounded-full bg-[#aef2ff] px-4 py-1 text-xl font-semibold text-[#001014]">
           {label}
         </span>
       </div>
-      <div className="flex-1" />
       <p className="text-xs text-white/50">{hint}</p>
       <Button
         asChild
