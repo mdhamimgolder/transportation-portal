@@ -10,12 +10,17 @@ export type TodaysScheduleEntry = {
   requestType: string;
 };
 
-function formatCompactTime(hhmm: string): string {
-  const [hourStr, minuteStr] = hhmm.split(":");
-  const hour = Number(hourStr);
+/** Facilities' pickup-time field isn't format-enforced, so real data includes
+ *  things like "10.00" or "2.20 AM" alongside proper "HH:mm" -- only compact
+ *  the ones that actually match, and leave anything else exactly as stored. */
+function formatCompactTime(raw: string): string {
+  const match = raw.match(/^(\d{1,2}):(\d{2})$/);
+  if (!match) return raw;
+  const hour = Number(match[1]);
+  const minute = match[2];
   const period = hour < 12 ? "a" : "p";
   const displayHour = hour % 12 === 0 ? 12 : hour % 12;
-  return `${displayHour}:${minuteStr.padStart(2, "0")}${period}`;
+  return `${displayHour}:${minute}${period}`;
 }
 
 export function TodaysScheduleCard({ entries }: { entries: TodaysScheduleEntry[] }) {
