@@ -41,15 +41,7 @@ export function LoginForm() {
         />
       </div>
       <div className="space-y-2">
-        <div className="flex items-center justify-between">
-          <Label htmlFor="password">Password</Label>
-          <Link
-            href="/forgot-password"
-            className="text-xs font-medium underline underline-offset-4"
-          >
-            Forgot password?
-          </Link>
-        </div>
+        <Label htmlFor="password">Password</Label>
         <Input
           id="password"
           name="password"
@@ -57,9 +49,15 @@ export function LoginForm() {
           autoComplete="current-password"
           required
         />
-        <p className="text-xs text-muted-foreground">
-          8+ characters. Case-sensitive.
-        </p>
+        <div className="flex items-center justify-between gap-2">
+          <p className="text-xs text-muted-foreground">8+ characters. Case-sensitive.</p>
+          <Link
+            href="/forgot-password"
+            className="shrink-0 text-xs font-medium underline underline-offset-4"
+          >
+            Forgot password?
+          </Link>
+        </div>
       </div>
       <div className="flex items-center gap-2">
         <Checkbox id="rememberMe" name="rememberMe" />

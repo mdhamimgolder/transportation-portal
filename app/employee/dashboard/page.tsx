@@ -1,11 +1,9 @@
 import Link from "next/link";
-import { ClipboardList } from "lucide-react";
 import { requireRole } from "@/lib/rbac/guards";
 import { Role } from "@/lib/constants/enums";
 import { prisma } from "@/lib/prisma";
 import { getMondayOfWeek, getSubmissionWindow, startOfToday } from "@/lib/date/week";
 import { getTransportSettings } from "@/lib/queries/settings";
-import { StatCard } from "@/components/shared/stat-card";
 import {
   TodaysScheduleCard,
   type TodaysScheduleEntry,
@@ -27,42 +25,32 @@ export default async function EmployeeDashboardPage() {
   const today = startOfToday();
   const thisWeekStartDate = getMondayOfWeek(today);
 
-  const [currentSchedule, todaysAssignments, pendingAddress, pendingContact, pendingPickupPoint] =
-    await Promise.all([
-      prisma.weeklySchedule.findUnique({
-        where: {
-          employeeId_weekStartDate: {
-            employeeId: user.id,
-            weekStartDate: thisWeekStartDate,
-          },
+  const [currentSchedule, todaysAssignments] = await Promise.all([
+    prisma.weeklySchedule.findUnique({
+      where: {
+        employeeId_weekStartDate: {
+          employeeId: user.id,
+          weekStartDate: thisWeekStartDate,
         },
-        select: { status: true },
-      }),
-      prisma.routeAssignment.findMany({
-        where: {
-          OR: [
-            {
-              weeklyScheduleDay: {
-                date: today,
-                weeklySchedule: { employeeId: user.id },
-              },
+      },
+      select: { status: true },
+    }),
+    prisma.routeAssignment.findMany({
+      where: {
+        OR: [
+          {
+            weeklyScheduleDay: {
+              date: today,
+              weeklySchedule: { employeeId: user.id },
             },
-            { adHocRequest: { employeeId: user.id, date: today } },
-          ],
-        },
-        include: { vehicleDriver: true },
-        orderBy: { pickupTime: "asc" },
-      }),
-      prisma.addressChangeRequest.count({
-        where: { employeeId: user.id, status: "PENDING" },
-      }),
-      prisma.contactChangeRequest.count({
-        where: { employeeId: user.id, status: "PENDING" },
-      }),
-      prisma.pickupPointChangeRequest.count({
-        where: { employeeId: user.id, status: "PENDING" },
-      }),
-    ]);
+          },
+          { adHocRequest: { employeeId: user.id, date: today } },
+        ],
+      },
+      include: { vehicleDriver: true },
+      orderBy: { pickupTime: "asc" },
+    }),
+  ]);
 
   const todaysScheduleEntries: TodaysScheduleEntry[] = todaysAssignments.map((a) => ({
     id: a.id,
@@ -70,8 +58,14 @@ export default async function EmployeeDashboardPage() {
     driverName: a.vehicleDriver.driverName,
     contactNumber: a.vehicleDriver.contactNumber,
     vehicleNumber: a.vehicleDriver.vehicleNumber,
-    requestType: a.weeklyScheduleDayId ? "Weekly" : "Ad-hoc",
+    requestType: a.weeklyScheduleDayId ? "Weekly schedule" : "Ad-hoc request",
   }));
+
+  const weeklyEntries = todaysScheduleEntries.filter((e) => e.requestType === "Weekly schedule");
+  const adhocEntries = todaysScheduleEntries.filter((e) => e.requestType === "Ad-hoc request");
+  // Normally weekly and ad-hoc pickups share a single card. Only split into two
+  // when an employee has both assigned for today, so each stays easy to read.
+  const isDoubleAssigned = weeklyEntries.length > 0 && adhocEntries.length > 0;
 
   const firstName = user.fullName.split(" ")[0];
   const todayLabel = new Date().toLocaleDateString(undefined, {
@@ -116,7 +110,11 @@ export default async function EmployeeDashboardPage() {
         />
       ) : null}
 
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+      <div
+        className={`mx-auto grid max-w-3xl grid-cols-1 gap-4 ${
+          isDoubleAssigned ? "sm:grid-cols-3" : "sm:grid-cols-2"
+        }`}
+      >
         <ThisWeekScheduleCard
           status={currentSchedule?.status ?? null}
           hint={
@@ -124,17 +122,15 @@ export default async function EmployeeDashboardPage() {
               ? "Upcoming weekly schedule submission open"
               : "Upcoming weekly schedule submission closed"
           }
-          className="sm:row-span-2"
         />
-        <StatCard
-          label="Pending profile requests"
-          value={pendingAddress + pendingContact + pendingPickupPoint}
-          hint="Awaiting Operations review"
-          icon={<ClipboardList className="size-5" />}
-          href="/employee/profile"
-          className="sm:col-span-2"
-        />
-        <TodaysScheduleCard entries={todaysScheduleEntries} className="sm:col-span-2" />
+        {isDoubleAssigned ? (
+          <>
+            <TodaysScheduleCard entries={weeklyEntries} title="Today's schedule" />
+            <TodaysScheduleCard entries={adhocEntries} title="Today's ad-hoc" />
+          </>
+        ) : (
+          <TodaysScheduleCard entries={todaysScheduleEntries} />
+        )}
       </div>
     </div>
   );

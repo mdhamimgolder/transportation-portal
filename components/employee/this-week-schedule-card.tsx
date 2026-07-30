@@ -20,18 +20,19 @@ export function ThisWeekScheduleCard({
   return (
     <div
       className={cn(
-        "flex h-full min-h-56 flex-col rounded-xl border border-transparent bg-black p-5",
+        "flex h-full flex-col rounded-xl border border-transparent bg-black p-5",
         className
       )}
     >
-      <p className="font-mono text-xs font-medium tracking-[0.12em] text-white/70 uppercase">
-        This week&apos;s schedule
-      </p>
-      <div className="flex flex-1 items-center justify-center">
-        <span className="rounded-full bg-[#aef2ff] px-4 py-1 text-xl font-semibold text-[#001014]">
+      <div className="flex items-center justify-between gap-2">
+        <p className="font-mono text-xs font-medium tracking-[0.12em] text-white/70 uppercase">
+          This week&apos;s schedule
+        </p>
+        <span className="shrink-0 rounded-full bg-[#aef2ff] px-2.5 py-0.5 text-[11px] font-semibold text-[#001014]">
           {label}
         </span>
       </div>
+      <div className="flex-1" />
       <p className="text-xs text-white/50">{hint}</p>
       <Button
         asChild
