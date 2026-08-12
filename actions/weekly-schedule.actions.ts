@@ -3,37 +3,37 @@
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { requireRole } from "@/lib/rbac/guards";
-import { getSubmissionWindow, getWeekDays } from "@/lib/date/week";
-import { getTransportSettings } from "@/lib/queries/settings";
+import { getWeekDays } from "@/lib/date/week";
 import { NO_TRANSPORT_VALUE, ARRIVAL_TIME_OPTIONS } from "@/lib/constants/arrival-times";
 import { Role, WeeklyScheduleStatus } from "@/lib/constants/enums";
 import { parseCsv } from "@/lib/csv";
-
-export type SubmitWeeklyScheduleState = {
-  error?: string;
-  success?: boolean;
-};
 
 const VALID_DAY_VALUES = new Set([
   NO_TRANSPORT_VALUE,
   ...ARRIVAL_TIME_OPTIONS.map((o) => o.value),
 ]);
 
-export async function submitWeeklySchedule(
-  _prevState: SubmitWeeklyScheduleState,
-  formData: FormData
-): Promise<SubmitWeeklyScheduleState> {
-  const session = await requireRole([Role.EMPLOYEE]);
+export type SubmitMyScheduleState = {
+  error?: string;
+  success?: boolean;
+};
 
-  const settings = await getTransportSettings();
-  const window = getSubmissionWindow(
-    new Date(),
-    settings.weeklyLockDayOfWeek,
-    settings.weeklyLockHour,
-    settings.weeklyLockMinute
-  );
-  if (!window.isOpen) {
-    return { error: "The submission window for this week has closed." };
+/** Operations staff submitting their own weekly transport schedule. Unlike the
+ *  old employee self-submit flow, there's no lock window and no review step --
+ *  it's saved as already approved, same as the on-behalf/bulk-upload paths. */
+export async function submitMySchedule(
+  _prevState: SubmitMyScheduleState,
+  formData: FormData
+): Promise<SubmitMyScheduleState> {
+  const session = await requireRole([Role.OPERATIONS]);
+
+  const weekStartValue = formData.get("weekStartDate");
+  if (typeof weekStartValue !== "string" || !weekStartValue) {
+    return { error: "Missing week." };
+  }
+  const weekStartDate = new Date(weekStartValue);
+  if (Number.isNaN(weekStartDate.getTime())) {
+    return { error: "Invalid week." };
   }
 
   const dayValues: string[] = [];
@@ -45,45 +45,35 @@ export async function submitWeeklySchedule(
     dayValues.push(value);
   }
 
-  const weekDates = getWeekDays(window.weekStartDate);
+  const weekDates = getWeekDays(weekStartDate);
 
   const existing = await prisma.weeklySchedule.findUnique({
     where: {
       employeeId_weekStartDate: {
         employeeId: session.id,
-        weekStartDate: window.weekStartDate,
+        weekStartDate,
       },
     },
   });
-
-  if (existing && existing.status === WeeklyScheduleStatus.APPROVED) {
-    return {
-      error:
-        "This week's schedule has already been approved and can no longer be changed.",
-    };
-  }
 
   const scheduleId = existing
     ? existing.id
     : (
         await prisma.weeklySchedule.create({
-          data: {
-            employeeId: session.id,
-            weekStartDate: window.weekStartDate,
-          },
+          data: { employeeId: session.id, weekStartDate },
         })
       ).id;
 
-  if (existing) {
-    await prisma.weeklySchedule.update({
-      where: { id: existing.id },
-      data: {
-        status: WeeklyScheduleStatus.PENDING,
-        rejectReason: null,
-        submittedAt: new Date(),
-      },
-    });
-  }
+  await prisma.weeklySchedule.update({
+    where: { id: scheduleId },
+    data: {
+      status: WeeklyScheduleStatus.APPROVED,
+      rejectReason: null,
+      submittedAt: new Date(),
+      reviewedById: session.id,
+      reviewedAt: new Date(),
+    },
+  });
 
   for (let i = 0; i < 5; i++) {
     const value = dayValues[i];
@@ -110,7 +100,9 @@ export async function submitWeeklySchedule(
     });
   }
 
-  revalidatePath("/employee/weekly");
+  revalidatePath("/operations/my-schedule");
+  revalidatePath("/operations/weekly-requests");
+  revalidatePath("/facilities/weekly-export");
   return { success: true };
 }
 
@@ -405,6 +397,5 @@ export async function bulkUploadWeeklySchedules(
 
   revalidatePath("/operations/weekly-requests");
   revalidatePath("/facilities/weekly-export");
-  revalidatePath("/employee/weekly");
   return { results: { created, skipped } };
 }

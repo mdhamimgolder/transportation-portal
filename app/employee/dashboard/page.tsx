@@ -2,26 +2,17 @@ import Link from "next/link";
 import { requireRole } from "@/lib/rbac/guards";
 import { Role } from "@/lib/constants/enums";
 import { prisma } from "@/lib/prisma";
-import { getMondayOfWeek, getSubmissionWindow, startOfToday } from "@/lib/date/week";
-import { getTransportSettings } from "@/lib/queries/settings";
+import { getMondayOfWeek, startOfToday } from "@/lib/date/week";
 import {
   TodaysScheduleCard,
   type TodaysScheduleEntry,
 } from "@/components/employee/todays-schedule-card";
 import { ThisWeekScheduleCard } from "@/components/employee/this-week-schedule-card";
-import { DeadlineBanner } from "@/components/employee/deadline-banner";
 import { Button } from "@/components/ui/button";
 
 export default async function EmployeeDashboardPage() {
   const user = await requireRole([Role.EMPLOYEE]);
 
-  const settings = await getTransportSettings();
-  const window = getSubmissionWindow(
-    new Date(),
-    settings.weeklyLockDayOfWeek,
-    settings.weeklyLockHour,
-    settings.weeklyLockMinute
-  );
   const today = startOfToday();
   const thisWeekStartDate = getMondayOfWeek(today);
 
@@ -76,8 +67,6 @@ export default async function EmployeeDashboardPage() {
 
   return (
     <div className="space-y-7">
-      {/* Design 2a header: mono uppercase date eyebrow over a large display greeting,
-          pill CTAs on the right. */}
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
           <p className="font-mono text-xs font-medium tracking-[0.14em] text-muted-foreground uppercase">
@@ -95,20 +84,10 @@ export default async function EmployeeDashboardPage() {
             size="lg"
             className="rounded-full bg-[#aef2ff] text-[#001014] hover:bg-[#d3f8ff]"
           >
-            <Link href="/employee/weekly">Submit weekly schedule</Link>
-          </Button>
-          <Button asChild size="lg" variant="outline" className="rounded-full">
             <Link href="/employee/adhoc">Request ad-hoc transport</Link>
           </Button>
         </div>
       </div>
-
-      {window.isOpen ? (
-        <DeadlineBanner
-          deadline={window.deadline.toISOString()}
-          opensAt={window.opensAt.toISOString()}
-        />
-      ) : null}
 
       <div
         className={`mx-auto grid max-w-3xl grid-cols-1 gap-4 ${
@@ -117,11 +96,7 @@ export default async function EmployeeDashboardPage() {
       >
         <ThisWeekScheduleCard
           status={currentSchedule?.status ?? null}
-          hint={
-            window.isOpen
-              ? "Upcoming weekly schedule submission open"
-              : "Upcoming weekly schedule submission closed"
-          }
+          hint="Set by Operations for the current week"
         />
         {isDoubleAssigned ? (
           <>

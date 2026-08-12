@@ -37,6 +37,7 @@ export default async function OperationsLayout({
       label: "Allocation History",
       icon: "history",
     },
+    { href: "/operations/my-schedule", label: "My Schedule", icon: "weekly" },
     { href: "/operations/profile", label: "Profile", icon: "profile" },
   ];
 

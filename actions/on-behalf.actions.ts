@@ -112,7 +112,6 @@ export async function createWeeklyScheduleOnBehalf(
 
   revalidatePath("/operations/weekly-requests");
   revalidatePath("/facilities/weekly-export");
-  revalidatePath("/employee/weekly");
   return { success: true, employeeName: employee.fullName };
 }
 

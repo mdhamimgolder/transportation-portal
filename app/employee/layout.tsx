@@ -5,7 +5,6 @@ import type { NavLink } from "@/components/shared/nav-sidebar";
 
 const links: NavLink[] = [
   { href: "/employee/dashboard", label: "Dashboard", icon: "dashboard" },
-  { href: "/employee/weekly", label: "Weekly Schedule", icon: "weekly" },
   { href: "/employee/adhoc", label: "Ad-hoc Request", icon: "adhoc" },
   { href: "/employee/profile", label: "Profile", icon: "profile" },
 ];

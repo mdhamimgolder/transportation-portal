@@ -15,7 +15,7 @@ export function ThisWeekScheduleCard({
   hint: string;
   className?: string;
 }) {
-  const label = toTitleCase(status ?? "not submitted");
+  const label = toTitleCase(status ?? "not set");
 
   return (
     <div

@@ -3,8 +3,8 @@
 import { useActionState, useEffect, useState } from "react";
 import { useFormStatus } from "react-dom";
 import {
-  submitWeeklySchedule,
-  type SubmitWeeklyScheduleState,
+  submitMySchedule,
+  type SubmitMyScheduleState,
 } from "@/actions/weekly-schedule.actions";
 import { NO_TRANSPORT_VALUE, ARRIVAL_TIME_OPTIONS } from "@/lib/constants/arrival-times";
 import { Button } from "@/components/ui/button";
@@ -24,32 +24,32 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 
-const initialState: SubmitWeeklyScheduleState = {};
+const initialState: SubmitMyScheduleState = {};
 
 type DayInfo = {
   label: string;
   dateLabel: string;
 };
 
-function SubmitButton({ disabled }: { disabled: boolean }) {
+function SubmitButton() {
   const { pending } = useFormStatus();
   return (
-    <Button type="submit" disabled={disabled || pending}>
-      {pending ? "Submitting..." : "Submit schedule"}
+    <Button type="submit" disabled={pending}>
+      {pending ? "Saving..." : "Save schedule"}
     </Button>
   );
 }
 
-export function WeeklyScheduleForm({
+export function MyScheduleForm({
+  weekStartDate,
   days,
   initialValues,
-  disabled,
 }: {
+  weekStartDate: string;
   days: DayInfo[];
   initialValues: string[];
-  disabled: boolean;
 }) {
-  const [state, formAction] = useActionState(submitWeeklySchedule, initialState);
+  const [state, formAction] = useActionState(submitMySchedule, initialState);
   const [values, setValues] = useState<string[]>(initialValues);
   const [confirmOpen, setConfirmOpen] = useState(false);
 
@@ -69,18 +69,13 @@ export function WeeklyScheduleForm({
 
   return (
     <form action={formAction} className="space-y-4">
+      <input type="hidden" name="weekStartDate" value={weekStartDate} />
       <div className="flex items-center justify-between">
         <p className="text-sm text-muted-foreground">
           Select your arrival time for each day, or mark a day as not needing
           transport.
         </p>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          disabled={disabled}
-          onClick={applySameTimeToAll}
-        >
+        <Button type="button" variant="outline" size="sm" onClick={applySameTimeToAll}>
           Same time for all days
         </Button>
       </div>
@@ -96,11 +91,7 @@ export function WeeklyScheduleForm({
             </CardHeader>
             <CardContent>
               <input type="hidden" name={`day-${index}`} value={values[index]} />
-              <Select
-                value={values[index]}
-                onValueChange={(value) => setDay(index, value)}
-                disabled={disabled}
-              >
+              <Select value={values[index]} onValueChange={(value) => setDay(index, value)}>
                 <SelectTrigger className="w-full min-w-0">
                   <SelectValue className="truncate" />
                 </SelectTrigger>
@@ -122,28 +113,19 @@ export function WeeklyScheduleForm({
         <p className="text-sm text-destructive">{state.error}</p>
       ) : null}
 
-      <SubmitButton disabled={disabled} />
+      <SubmitButton />
 
       <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Schedule submitted</DialogTitle>
+            <DialogTitle>Schedule saved</DialogTitle>
           </DialogHeader>
           <p className="text-sm text-muted-foreground">
-            Your weekly transport schedule has been submitted for approval.
+            Your weekly transport schedule has been saved and approved.
           </p>
           <DialogFooter>
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => setConfirmOpen(false)}
-            >
+            <Button type="button" onClick={() => setConfirmOpen(false)}>
               Close
-            </Button>
-            <Button type="button" asChild>
-              <a href="#history" onClick={() => setConfirmOpen(false)}>
-                Check History
-              </a>
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -1,52 +1,14 @@
 import { requireRole } from "@/lib/rbac/guards";
 import { Role } from "@/lib/constants/enums";
 import { prisma } from "@/lib/prisma";
-import { getSubmissionWindow, getWeekDays, DAY_LABELS, formatShortDate } from "@/lib/date/week";
-import { getTransportSettings } from "@/lib/queries/settings";
-import { NO_TRANSPORT_VALUE, ARRIVAL_TIME_OPTIONS } from "@/lib/constants/arrival-times";
-import { WeeklyScheduleForm } from "@/components/employee/weekly-schedule-form";
-import { CountdownTimer } from "@/components/shared/countdown-timer";
+import { getWeekDays, DAY_LABELS, formatShortDate } from "@/lib/date/week";
+import { ARRIVAL_TIME_OPTIONS } from "@/lib/constants/arrival-times";
 import { StatusBadge } from "@/components/shared/status-badge";
 
 export default async function WeeklySchedulePage() {
   const session = await requireRole([Role.EMPLOYEE]);
 
-  const settings = await getTransportSettings();
-  const window = getSubmissionWindow(
-    new Date(),
-    settings.weeklyLockDayOfWeek,
-    settings.weeklyLockHour,
-    settings.weeklyLockMinute
-  );
-  const weekDates = getWeekDays(window.weekStartDate);
-
-  const existing = await prisma.weeklySchedule.findUnique({
-    where: {
-      employeeId_weekStartDate: {
-        employeeId: session.id,
-        weekStartDate: window.weekStartDate,
-      },
-    },
-    include: { days: true },
-  });
-
-  const initialValues = Array.from({ length: 5 }, (_, i) => {
-    const day = existing?.days.find((d) => d.dayOfWeek === i + 1);
-    if (!day) return NO_TRANSPORT_VALUE;
-    return day.needsTransport && day.arrivalTime
-      ? day.arrivalTime
-      : NO_TRANSPORT_VALUE;
-  });
-
-  const isLockedByApproval = existing?.status === "APPROVED";
-  const disabled = !window.isOpen || isLockedByApproval;
-
-  const days = weekDates.map((date, i) => ({
-    label: DAY_LABELS[i],
-    dateLabel: formatShortDate(date),
-  }));
-
-  const pastSchedules = await prisma.weeklySchedule.findMany({
+  const schedules = await prisma.weeklySchedule.findMany({
     where: { employeeId: session.id },
     include: { days: true },
     orderBy: { weekStartDate: "desc" },
@@ -59,98 +21,58 @@ export default async function WeeklySchedulePage() {
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div>
-          <h1 className="text-xl font-semibold">Weekly Transport</h1>
-          <p className="text-sm text-muted-foreground">
-            Week of {formatShortDate(weekDates[0])} –{" "}
-            {formatShortDate(weekDates[4])}
-          </p>
-        </div>
-        {existing ? <StatusBadge status={existing.status} /> : null}
+      <div>
+        <h1 className="text-xl font-semibold">Weekly Transport</h1>
+        <p className="text-sm text-muted-foreground">
+          Your weekly transport schedule, set by Operations.
+        </p>
       </div>
 
-      {window.isOpen ? (
+      {schedules.length === 0 ? (
         <p className="text-sm text-muted-foreground">
-          Submissions lock in{" "}
-          <span className="font-medium text-foreground">
-            <CountdownTimer deadline={window.deadline.toISOString()} />
-          </span>{" "}
-          ({window.deadline.toLocaleDateString(undefined, { weekday: "long" })}{" "}
-          {window.deadline.toLocaleTimeString(undefined, {
-            hour: "numeric",
-            minute: "2-digit",
-          })}
-          ).
+          No weekly schedule has been set yet.
         </p>
       ) : (
-        <p className="text-sm text-destructive">
-          The submission window for this week has closed.
-        </p>
-      )}
-
-      {isLockedByApproval ? (
-        <p className="text-sm text-muted-foreground">
-          This schedule has been approved and can no longer be changed.
-        </p>
-      ) : null}
-
-      <WeeklyScheduleForm
-        days={days}
-        initialValues={initialValues}
-        disabled={disabled}
-      />
-
-      <div id="history" className="space-y-2 scroll-mt-6">
-        <h2 className="text-sm font-semibold text-muted-foreground">
-          Submission History
-        </h2>
-        {pastSchedules.length === 0 ? (
-          <p className="text-sm text-muted-foreground">
-            No weekly schedules submitted yet.
-          </p>
-        ) : (
-          <div className="space-y-3">
-            {pastSchedules.map((schedule) => {
-              const scheduleWeekDates = getWeekDays(schedule.weekStartDate);
-              return (
-                <div key={schedule.id} className="rounded-lg border p-3">
-                  <div className="mb-2 flex items-center justify-between gap-3">
-                    <p className="text-sm font-medium">
-                      Week of {formatShortDate(scheduleWeekDates[0])} –{" "}
-                      {formatShortDate(scheduleWeekDates[4])}
-                    </p>
-                    <StatusBadge status={schedule.status} />
-                  </div>
-                  <div className="grid grid-cols-[repeat(auto-fit,minmax(7rem,1fr))] gap-2">
-                    {scheduleWeekDates.map((date, i) => {
-                      const day = schedule.days.find((d) => d.dayOfWeek === i + 1);
-                      const arrivalLabel =
-                        day && day.needsTransport && day.arrivalTime
-                          ? ARRIVAL_TIME_LABELS[day.arrivalTime] ?? day.arrivalTime
-                          : "Not Required";
-                      return (
-                        <div key={i} className="rounded-md bg-muted/40 px-2.5 py-1.5">
-                          <p className="text-xs font-medium text-muted-foreground">
-                            {DAY_LABELS[i]}
-                          </p>
-                          <p className="text-xs">{formatShortDate(date)}</p>
-                          <p className="text-sm font-medium">{arrivalLabel}</p>
-                        </div>
-                      );
-                    })}
-                  </div>
-                  {schedule.status === "REJECTED" && schedule.rejectReason ? (
-                    <p className="mt-2 text-xs text-muted-foreground">
-                      Reason: {schedule.rejectReason}
-                    </p>
-                  ) : null}
+        <div className="space-y-3">
+          {schedules.map((schedule) => {
+            const weekDates = getWeekDays(schedule.weekStartDate);
+            return (
+              <div key={schedule.id} className="rounded-lg border p-3">
+                <div className="mb-2 flex items-center justify-between gap-3">
+                  <p className="text-sm font-medium">
+                    Week of {formatShortDate(weekDates[0])} –{" "}
+                    {formatShortDate(weekDates[4])}
+                  </p>
+                  <StatusBadge status={schedule.status} />
                 </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
+                <div className="grid grid-cols-[repeat(auto-fit,minmax(7rem,1fr))] gap-2">
+                  {weekDates.map((date, i) => {
+                    const day = schedule.days.find((d) => d.dayOfWeek === i + 1);
+                    const arrivalLabel =
+                      day && day.needsTransport && day.arrivalTime
+                        ? ARRIVAL_TIME_LABELS[day.arrivalTime] ?? day.arrivalTime
+                        : "Not Required";
+                    return (
+                      <div key={i} className="rounded-md bg-muted/40 px-2.5 py-1.5">
+                        <p className="text-xs font-medium text-muted-foreground">
+                          {DAY_LABELS[i]}
+                        </p>
+                        <p className="text-xs">{formatShortDate(date)}</p>
+                        <p className="text-sm font-medium">{arrivalLabel}</p>
+                      </div>
+                    );
+                  })}
+                </div>
+                {schedule.status === "REJECTED" && schedule.rejectReason ? (
+                  <p className="mt-2 text-xs text-muted-foreground">
+                    Reason: {schedule.rejectReason}
+                  </p>
+                ) : null}
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }

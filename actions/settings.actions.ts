@@ -43,7 +43,6 @@ export async function updateWeeklyLockSettingAction(
   });
 
   revalidatePath("/super-admin/settings");
-  revalidatePath("/employee/weekly");
-  revalidatePath("/employee/dashboard");
+  revalidatePath("/operations/weekly-requests");
   return { success: true };
 }
