@@ -10,10 +10,14 @@ export function ThisWeekScheduleCard({
   status,
   hint,
   className,
+  href = "/employee/weekly",
+  buttonLabel = "View schedule",
 }: {
   status: string | null;
   hint: string;
   className?: string;
+  href?: string;
+  buttonLabel?: string;
 }) {
   const label = toTitleCase(status ?? "not set");
 
@@ -38,7 +42,7 @@ export function ThisWeekScheduleCard({
         asChild
         className="mt-4 w-full rounded-full bg-[#aef2ff] text-[#001014] hover:bg-[#d3f8ff]"
       >
-        <Link href="/employee/weekly">View schedule</Link>
+        <Link href={href}>{buttonLabel}</Link>
       </Button>
     </div>
   );

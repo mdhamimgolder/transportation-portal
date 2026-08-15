@@ -36,7 +36,7 @@ export function AdHocRequestForm() {
     <form action={formAction} className="space-y-4">
       <p className="text-sm text-muted-foreground">
         For urgent, same-day transport needs. This bypasses the normal
-        approval chain and goes straight to Operations and Facilities.
+        approval chain and goes straight to Operation-Admin and Facilities.
       </p>
       <div className="space-y-2">
         <Label htmlFor="arrivalTime">Arrival time (tonight – tomorrow 6 AM)</Label>
@@ -62,7 +62,7 @@ export function AdHocRequestForm() {
       ) : null}
       {state.success ? (
         <p className="text-sm text-green-foreground">
-          Ad-hoc request submitted to Operations and Facilities.
+          Ad-hoc request submitted to Operation-Admin and Facilities.
         </p>
       ) : null}
       <SubmitButton />

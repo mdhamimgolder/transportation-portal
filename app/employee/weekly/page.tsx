@@ -24,7 +24,7 @@ export default async function WeeklySchedulePage() {
       <div>
         <h1 className="text-xl font-semibold">Weekly Transport</h1>
         <p className="text-sm text-muted-foreground">
-          Your weekly transport schedule, set by Operations.
+          Your weekly transport schedule, set by Operation-Admin.
         </p>
       </div>
 

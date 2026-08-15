@@ -23,7 +23,7 @@ export async function updateProfile(
   _prevState: UpdateProfileState,
   formData: FormData
 ): Promise<UpdateProfileState> {
-  const session = await requireRole([Role.EMPLOYEE]);
+  const session = await requireRole([Role.EMPLOYEE, Role.CORPORATE_EMPLOYEE]);
 
   const pickupPointRaw = formData.get("pickupPoint");
   const addressRaw = formData.get("address");
@@ -36,7 +36,7 @@ export async function updateProfile(
   const errors: NonNullable<UpdateProfileState["errors"]> = {};
   const successMessages: string[] = [];
 
-  // Pick-up point: requires Operations approval.
+  // Pick-up point: requires Facilities approval.
   if (typeof pickupPointRaw === "string") {
     const newPickupPoint = pickupPointRaw.trim();
     if (
@@ -63,7 +63,7 @@ export async function updateProfile(
     }
   }
 
-  // Address: requires Operations approval.
+  // Address: requires Operation-Admin approval.
   if (typeof addressRaw === "string") {
     const newAddress = addressRaw.trim();
     if (newAddress !== (user.address ?? "").trim() && newAddress.length > 0) {
@@ -87,7 +87,7 @@ export async function updateProfile(
     }
   }
 
-  // Contact number: requires Operations approval.
+  // Contact number: requires Operation-Admin approval.
   if (typeof contactNumberRaw === "string") {
     const newContactNumber = contactNumberRaw.trim();
     if (
@@ -115,6 +115,7 @@ export async function updateProfile(
   }
 
   revalidatePath("/employee/profile");
+  revalidatePath("/corporate-employee/profile");
 
   return {
     errors: Object.keys(errors).length > 0 ? errors : undefined,

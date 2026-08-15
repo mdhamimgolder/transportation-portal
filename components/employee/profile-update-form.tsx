@@ -78,7 +78,7 @@ export function ProfileUpdateForm({
           </p>
         ) : (
           <p className="text-xs text-muted-foreground">
-            Changing this submits a request for Operations to review.
+            Changing this submits a request for Operation-Admin to review.
           </p>
         )}
         {state.errors?.address ? (
@@ -100,7 +100,7 @@ export function ProfileUpdateForm({
           </p>
         ) : (
           <p className="text-xs text-muted-foreground">
-            Changing this submits a request for Operations to review.
+            Changing this submits a request for Operation-Admin to review.
           </p>
         )}
         {state.errors?.contactNumber ? (

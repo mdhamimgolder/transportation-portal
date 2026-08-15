@@ -21,7 +21,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
-import { ALL_ROLES } from "@/lib/constants/enums";
+import { ALL_ROLES, ROLE_LABELS } from "@/lib/constants/enums";
 
 const initialState: CreateUserState = {};
 
@@ -74,7 +74,7 @@ function AddEmployeeDialogBody({ onDone }: { onDone: () => void }) {
           <SelectContent>
             {ALL_ROLES.map((role) => (
               <SelectItem key={role} value={role}>
-                {role.replace("_", " ")}
+                {ROLE_LABELS[role]}
               </SelectItem>
             ))}
           </SelectContent>

@@ -74,7 +74,7 @@ export default async function RoutePlanningPage({
       <div>
         <h1 className="text-xl font-semibold">Route Planning</h1>
         <p className="text-sm text-muted-foreground">
-          Operations-approved weekly schedules. Assign a vehicle & driver and
+          Operation-Admin-approved weekly schedules. Assign a vehicle & driver and
           pickup time for each day -- the employee is emailed automatically.
         </p>
       </div>

@@ -82,8 +82,9 @@ export default async function ProfilePage() {
         <CardHeader>
           <CardTitle className="text-base">Update Profile</CardTitle>
           <p className="text-xs text-muted-foreground">
-            Address and Contact Number changes are sent to Operations for
-            review. Pick-up Point changes are sent to Facilities for review.
+            Address and Contact Number changes are sent to Operation-Admin
+            for review. Pick-up Point changes are sent to Facilities for
+            review.
           </p>
         </CardHeader>
         <CardContent>

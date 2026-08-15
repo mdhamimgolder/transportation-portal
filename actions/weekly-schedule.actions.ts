@@ -3,7 +3,8 @@
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { requireRole } from "@/lib/rbac/guards";
-import { getWeekDays } from "@/lib/date/week";
+import { getSubmissionWindow, getWeekDays } from "@/lib/date/week";
+import { getTransportSettings } from "@/lib/queries/settings";
 import { NO_TRANSPORT_VALUE, ARRIVAL_TIME_OPTIONS } from "@/lib/constants/arrival-times";
 import { Role, WeeklyScheduleStatus } from "@/lib/constants/enums";
 import { parseCsv } from "@/lib/csv";
@@ -12,6 +13,111 @@ const VALID_DAY_VALUES = new Set([
   NO_TRANSPORT_VALUE,
   ...ARRIVAL_TIME_OPTIONS.map((o) => o.value),
 ]);
+
+export type SubmitCorporateWeeklyScheduleState = {
+  error?: string;
+  success?: boolean;
+};
+
+/** Corporate Employee self-submit -- unlike Operations' own "My Schedule",
+ *  this one goes through the same PENDING -> Operation-Admin review flow and
+ *  weekly submission-window lock that the original Employee self-submit used. */
+export async function submitCorporateWeeklySchedule(
+  _prevState: SubmitCorporateWeeklyScheduleState,
+  formData: FormData
+): Promise<SubmitCorporateWeeklyScheduleState> {
+  const session = await requireRole([Role.CORPORATE_EMPLOYEE]);
+
+  const settings = await getTransportSettings();
+  const window = getSubmissionWindow(
+    new Date(),
+    settings.weeklyLockDayOfWeek,
+    settings.weeklyLockHour,
+    settings.weeklyLockMinute
+  );
+  if (!window.isOpen) {
+    return { error: "The submission window for this week has closed." };
+  }
+
+  const dayValues: string[] = [];
+  for (let i = 0; i < 5; i++) {
+    const value = formData.get(`day-${i}`);
+    if (typeof value !== "string" || !VALID_DAY_VALUES.has(value)) {
+      return { error: "Please select a value for every day." };
+    }
+    dayValues.push(value);
+  }
+
+  const weekDates = getWeekDays(window.weekStartDate);
+
+  const existing = await prisma.weeklySchedule.findUnique({
+    where: {
+      employeeId_weekStartDate: {
+        employeeId: session.id,
+        weekStartDate: window.weekStartDate,
+      },
+    },
+  });
+
+  if (existing && existing.status === WeeklyScheduleStatus.APPROVED) {
+    return {
+      error:
+        "This week's schedule has already been approved and can no longer be changed.",
+    };
+  }
+
+  const scheduleId = existing
+    ? existing.id
+    : (
+        await prisma.weeklySchedule.create({
+          data: {
+            employeeId: session.id,
+            weekStartDate: window.weekStartDate,
+          },
+        })
+      ).id;
+
+  if (existing) {
+    await prisma.weeklySchedule.update({
+      where: { id: existing.id },
+      data: {
+        status: WeeklyScheduleStatus.PENDING,
+        rejectReason: null,
+        submittedAt: new Date(),
+      },
+    });
+  }
+
+  for (let i = 0; i < 5; i++) {
+    const value = dayValues[i];
+    const needsTransport = value !== NO_TRANSPORT_VALUE;
+    await prisma.weeklyScheduleDay.upsert({
+      where: {
+        weeklyScheduleId_dayOfWeek: {
+          weeklyScheduleId: scheduleId,
+          dayOfWeek: i + 1,
+        },
+      },
+      update: {
+        needsTransport,
+        arrivalTime: needsTransport ? value : null,
+        date: weekDates[i],
+      },
+      create: {
+        weeklyScheduleId: scheduleId,
+        dayOfWeek: i + 1,
+        date: weekDates[i],
+        needsTransport,
+        arrivalTime: needsTransport ? value : null,
+      },
+    });
+  }
+
+  revalidatePath("/corporate-employee/my-schedule");
+  revalidatePath("/operations/weekly-requests");
+  revalidatePath("/facilities/weekly-export");
+  return { success: true };
+}
 
 export type SubmitMyScheduleState = {
   error?: string;

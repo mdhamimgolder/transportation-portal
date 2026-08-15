@@ -115,7 +115,7 @@ export default async function FacilitiesAdHocPage() {
                       Declined
                       {request.reviewedById && reviewerNames.get(request.reviewedById)
                         ? ` by ${reviewerNames.get(request.reviewedById)}`
-                        : " by Operations"}
+                        : " by Operation-Admin"}
                       {request.rejectReason ? `: ${request.rejectReason}` : "."}
                     </p>
                   ) : null}

@@ -146,7 +146,7 @@ export default async function WeeklyRequestsPage({
     <div className="space-y-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h1 className="text-xl font-semibold">Weekly Requests</h1>
+          <h1 className="text-xl font-semibold">MDS Weekly Schedule</h1>
           <p className="text-sm text-muted-foreground">
             Review, edit, and approve employee weekly transport schedules.
             Approved schedules become available to Facilities for route

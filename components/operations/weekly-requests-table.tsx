@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState } from "react";
+import { useActionState, useEffect, useState } from "react";
 import { useFormStatus } from "react-dom";
 import { Mail, Phone, MapPin } from "lucide-react";
 import {
@@ -67,7 +67,21 @@ export function WeeklyRequestsTable({
   onBehalfDays: { label: string; dateLabel: string }[];
 }) {
   const [state, formAction] = useActionState(approveSchedules, initialState);
-  const pendingCount = rows.filter((r) => r.status === "PENDING").length;
+  const pendingIds = rows.filter((r) => r.status === "PENDING").map((r) => r.id);
+  const pendingCount = pendingIds.length;
+  const [selected, setSelected] = useState<string[]>([]);
+
+  useEffect(() => {
+    setSelected([]);
+  }, [rows]);
+
+  function toggleAll(checked: boolean) {
+    setSelected(checked ? pendingIds : []);
+  }
+
+  function toggleOne(id: string, checked: boolean) {
+    setSelected((prev) => (checked ? [...prev, id] : prev.filter((v) => v !== id)));
+  }
 
   return (
     <form action={formAction} className="space-y-3">
@@ -107,7 +121,24 @@ export function WeeklyRequestsTable({
                 on mobile). One sticky cell has no such offset to get wrong. */}
             <TableRow className="hover:bg-transparent">
               <TableHead className="sticky left-0 z-20 bg-muted/40">
-                Employee
+                <div className="flex items-center gap-2">
+                  {pendingIds.length > 0 ? (
+                    <Checkbox
+                      checked={
+                        selected.length === pendingIds.length
+                          ? true
+                          : selected.length > 0
+                            ? "indeterminate"
+                            : false
+                      }
+                      onCheckedChange={(checked) => toggleAll(checked === true)}
+                      aria-label="Select all pending submissions"
+                    />
+                  ) : (
+                    <span className="inline-block size-4" />
+                  )}
+                  <span>Employee</span>
+                </div>
               </TableHead>
               <TableHead className="min-w-56">Contact Info</TableHead>
               <TableHead>Week</TableHead>
@@ -145,7 +176,12 @@ export function WeeklyRequestsTable({
                   <TableCell className="sticky left-0 z-10 bg-card">
                     <div className="flex items-center gap-2">
                       {row.status === "PENDING" ? (
-                        <Checkbox name="scheduleId" value={row.id} />
+                        <Checkbox
+                          name="scheduleId"
+                          value={row.id}
+                          checked={selected.includes(row.id)}
+                          onCheckedChange={(checked) => toggleOne(row.id, checked === true)}
+                        />
                       ) : (
                         <span className="inline-block size-4" />
                       )}

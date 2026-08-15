@@ -1,5 +1,5 @@
 import { requireRole } from "@/lib/rbac/guards";
-import { Role, PickupPointChangeStatus } from "@/lib/constants/enums";
+import { Role, ROLE_LABELS, PickupPointChangeStatus } from "@/lib/constants/enums";
 import { prisma } from "@/lib/prisma";
 import { NavSidebar } from "@/components/shared/nav-sidebar";
 import type { NavLink } from "@/components/shared/nav-sidebar";
@@ -36,7 +36,7 @@ export default async function FacilitiesLayout({
 
   return (
     <div className="flex min-h-screen flex-col lg:flex-row">
-      <NavSidebar user={user} title="Facilities" links={links} />
+      <NavSidebar user={user} title={ROLE_LABELS[Role.FACILITIES]} links={links} />
       <main className="min-w-0 flex-1 px-4 py-6 lg:px-10 lg:py-8">
         <div className="mx-auto w-full max-w-7xl space-y-6">{children}</div>
       </main>

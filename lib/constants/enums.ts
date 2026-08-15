@@ -3,6 +3,7 @@ export const Role = {
   EMPLOYEE: "EMPLOYEE",
   OPERATIONS: "OPERATIONS",
   FACILITIES: "FACILITIES",
+  CORPORATE_EMPLOYEE: "CORPORATE_EMPLOYEE",
 } as const;
 export type Role = (typeof Role)[keyof typeof Role];
 
@@ -11,7 +12,19 @@ export const ALL_ROLES: Role[] = [
   Role.EMPLOYEE,
   Role.OPERATIONS,
   Role.FACILITIES,
+  Role.CORPORATE_EMPLOYEE,
 ];
+
+// Human-readable labels shown in the UI (role dropdowns, sidebar titles).
+// Internal role codes and route prefixes stay unchanged for backward
+// compatibility with existing accounts/URLs -- only the display text differs.
+export const ROLE_LABELS: Record<Role, string> = {
+  SUPER_ADMIN: "Super Admin",
+  EMPLOYEE: "Employee-MDS",
+  OPERATIONS: "Operation-Admin",
+  FACILITIES: "Facilities",
+  CORPORATE_EMPLOYEE: "Operation-Corporate Employee",
+};
 
 export const WeeklyScheduleStatus = {
   PENDING: "PENDING",
@@ -60,6 +73,7 @@ export const ROLE_HOME: Record<Role, string> = {
   EMPLOYEE: "/employee/dashboard",
   OPERATIONS: "/operations/dashboard",
   FACILITIES: "/facilities/dashboard",
+  CORPORATE_EMPLOYEE: "/corporate-employee/dashboard",
 };
 
 export const ROLE_PATH_PREFIX: Record<Role, string> = {
@@ -67,4 +81,5 @@ export const ROLE_PATH_PREFIX: Record<Role, string> = {
   EMPLOYEE: "/employee",
   OPERATIONS: "/operations",
   FACILITIES: "/facilities",
+  CORPORATE_EMPLOYEE: "/corporate-employee",
 };

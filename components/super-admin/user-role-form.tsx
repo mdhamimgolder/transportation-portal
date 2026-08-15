@@ -12,7 +12,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { ALL_ROLES, type Role } from "@/lib/constants/enums";
+import { ALL_ROLES, ROLE_LABELS, type Role } from "@/lib/constants/enums";
 
 const initialState: UpdateUserRoleState = {};
 
@@ -45,7 +45,7 @@ export function UserRoleForm({
         <SelectContent>
           {ALL_ROLES.map((role) => (
             <SelectItem key={role} value={role}>
-              {role.replace("_", " ")}
+              {ROLE_LABELS[role]}
             </SelectItem>
           ))}
         </SelectContent>

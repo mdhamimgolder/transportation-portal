@@ -19,7 +19,7 @@ model User {
   id           String @id @default(cuid())
   email        String @unique
   passwordHash String
-  role         String // SUPER_ADMIN | EMPLOYEE | OPERATIONS | FACILITIES
+  role         String // SUPER_ADMIN | EMPLOYEE | OPERATIONS | FACILITIES | CORPORATE_EMPLOYEE
 
   fullName      String
   employeeCode  String? @unique // human-readable employee ID, e.g. "EMP0001"

@@ -108,8 +108,8 @@ export default async function WeeklyExportPage({
             Weekly Export
           </h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Operations-approved weekly schedules, ready to export for vendors
-            or record-keeping.
+            Operation-Admin-approved weekly schedules, ready to export for
+            vendors or record-keeping.
           </p>
         </div>
         <div className="flex items-center gap-2">

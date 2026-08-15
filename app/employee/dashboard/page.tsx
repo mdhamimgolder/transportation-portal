@@ -96,7 +96,7 @@ export default async function EmployeeDashboardPage() {
       >
         <ThisWeekScheduleCard
           status={currentSchedule?.status ?? null}
-          hint="Set by Operations for the current week"
+          hint="Set by Operation-Admin for the current week"
         />
         {isDoubleAssigned ? (
           <>

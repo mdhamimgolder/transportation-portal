@@ -20,7 +20,7 @@ export async function submitAdHocRequest(
   _prevState: SubmitAdHocRequestState,
   formData: FormData
 ): Promise<SubmitAdHocRequestState> {
-  const session = await requireRole([Role.EMPLOYEE]);
+  const session = await requireRole([Role.EMPLOYEE, Role.CORPORATE_EMPLOYEE]);
 
   const arrivalTime = formData.get("arrivalTime");
   const reason = formData.get("reason");
@@ -56,6 +56,7 @@ export async function submitAdHocRequest(
   });
 
   revalidatePath("/employee/adhoc");
+  revalidatePath("/corporate-employee/adhoc");
   revalidatePath("/operations/adhoc");
   revalidatePath("/facilities/adhoc");
   return { success: true };
@@ -96,6 +97,7 @@ export async function approveAdHocRequest(
   revalidatePath("/operations/adhoc");
   revalidatePath("/facilities/adhoc");
   revalidatePath("/employee/adhoc");
+  revalidatePath("/corporate-employee/adhoc");
   return {};
 }
 
@@ -132,6 +134,7 @@ export async function approveAdHocRequests(
   revalidatePath("/operations/adhoc");
   revalidatePath("/facilities/adhoc");
   revalidatePath("/employee/adhoc");
+  revalidatePath("/corporate-employee/adhoc");
   return {};
 }
 
@@ -177,5 +180,6 @@ export async function rejectAdHocRequest(
   revalidatePath("/operations/adhoc");
   revalidatePath("/facilities/adhoc");
   revalidatePath("/employee/adhoc");
+  revalidatePath("/corporate-employee/adhoc");
   return { success: true };
 }

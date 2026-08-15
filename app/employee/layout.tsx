@@ -1,5 +1,5 @@
 import { requireRole } from "@/lib/rbac/guards";
-import { Role } from "@/lib/constants/enums";
+import { Role, ROLE_LABELS } from "@/lib/constants/enums";
 import { NavSidebar } from "@/components/shared/nav-sidebar";
 import type { NavLink } from "@/components/shared/nav-sidebar";
 
@@ -18,7 +18,7 @@ export default async function EmployeeLayout({
     <div className="flex min-h-screen flex-col lg:flex-row">
       <NavSidebar
         user={user}
-        title="Employee"
+        title={ROLE_LABELS[Role.EMPLOYEE]}
         links={links}
         forceExpanded
         hideMenuLabel
