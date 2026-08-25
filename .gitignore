@@ -1,45 +1,78 @@
-# dependencies
-/node_modules
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+.pytest_cache/
+.coverage
 
-# next.js
-/.next/
-/out/
+# Virtual environments
+.venv
+venv/
+ENV/
+env/
 
-# production
-/build
-
-# misc
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
 .DS_Store
-*.pem
 
-# debug
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Node (Frontend)
+node_modules/
+dist/
+build/
+.next/
+out/
+
+# Logs
+logs/
+*.log
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
-# local env files
-.env
-.env*.local
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
 
-# typescript
-*.tsbuildinfo
-next-env.d.ts
+# Alembic
+alembic/versions/__pycache__/
 
-# prisma / sqlite
-/prisma/dev.db
-/prisma/dev.db-journal
-
-/lib/generated/prisma
-
-.vercel
-.env*
-
-# design-sync
-.ds-sync/
-ds-bundle/
-.design-sync/.cache/
-.design-sync/learnings/
-.design-sync/node_modules
-
-# archived pre-crash fastapi scaffold (not part of this project)
-/_archived-fastapi-scaffold-2026-07-27/
+# Misc
+.vscode-server/
+*.tmp
+temp/

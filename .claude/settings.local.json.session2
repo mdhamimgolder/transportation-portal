@@ -1,0 +1,25 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(winget install --id OpenJS.NodeJS.LTS -e --source winget --scope user --accept-package-agreements --accept-source-agreements --silent)",
+      "PowerShell($env:Path = [System.Environment]::GetEnvironmentVariable\\(\"Path\",\"Machine\"\\) + \";\" + [System.Environment]::GetEnvironmentVariable\\(\"Path\",\"User\"\\); Set-Location \"D:\\\\Devolopment\\\\Transportation System\\\\backend\"; py -3.12 -m venv .venv; .\\\\.venv\\\\Scripts\\\\python.exe -m pip install --upgrade pip --quiet; Write-Output \"venv created, pip upgraded\"; .\\\\.venv\\\\Scripts\\\\python.exe --version)",
+      "PowerShell(Set-Location \"D:\\\\Devolopment\\\\Transportation System\\\\backend\"; Start-Process -FilePath \".\\\\.venv\\\\Scripts\\\\python.exe\" -ArgumentList \"-m\",\"uvicorn\",\"app.main:app\",\"--port\",\"8000\" -WindowStyle Hidden; Start-Sleep -Seconds 6; try { $h = Invoke-RestMethod http://localhost:8000/api/v1/health; Write-Output \"HEALTH: $\\($h | ConvertTo-Json -Compress\\)\" } catch { Write-Output \"health failed: $_\" })",
+      "PowerShell($env:Path = [System.Environment]::GetEnvironmentVariable\\(\"Path\",\"Machine\"\\) + \";\" + [System.Environment]::GetEnvironmentVariable\\(\"Path\",\"User\"\\); Set-Location \"D:\\\\Devolopment\\\\Transportation System\\\\frontend\"; npm install 2>&1 | Select-Object -Last 8)",
+      "Bash(npm --version)",
+      "Bash(git --version)",
+      "Bash(git init *)",
+      "Bash(git add *)",
+      "Bash(git rm *)",
+      "Bash(git config *)",
+      "Bash(git reset *)",
+      "Bash(git ls-remote *)",
+      "Bash(git remote *)",
+      "Bash(git fetch *)",
+      "Bash(git ls-tree *)",
+      "Bash(cd \"D:/Devolopment/Transportation System\" && mkdir \"_archived-fastapi-scaffold-2026-07-27\" && mv .claude .gitignore backend BUILD-GUIDE.md CLAUDE.md frontend \"_archived-fastapi-scaffold-2026-07-27/\" && git reset -q && ls -la)",
+      "Bash(git checkout *)",
+      "Bash(mv .claude/settings.local.json \"_archived-fastapi-scaffold-2026-07-27/.claude/settings.local.json.session2\")",
+      "Bash(rmdir .claude)"
+    ]
+  }
+}
