@@ -1,0 +1,16 @@
+{
+  "projectId": "ab2fff81-18c3-4316-b4c5-5a6ecd3393f8",
+  "shape": "package",
+  "pkg": "transportation-system",
+  "globalName": "TransportationUI",
+  "tsconfig": "tsconfig.json",
+  "cssEntry": ".design-sync/.cache/compiled-globals.css",
+  "srcDir": "components/ui",
+  "readmeHeader": ".design-sync/conventions.md",
+  "overrides": {
+    "Dialog": { "cardMode": "single", "primaryStory": "Default" },
+    "DropdownMenu": { "cardMode": "single", "primaryStory": "Default" },
+    "Select": { "cardMode": "single", "primaryStory": "Default" },
+    "Sheet": { "cardMode": "single", "primaryStory": "Default" }
+  }
+}
