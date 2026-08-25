@@ -24,54 +24,58 @@ export default async function CorporateEmployeeAdHocPage() {
     <div className="space-y-4">
       <h1 className="text-xl font-semibold">Ad-hoc Transport</h1>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Submit a Request</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <AdHocRequestForm />
-        </CardContent>
-      </Card>
-
-      {requests.length > 0 ? (
+      <div className="grid gap-6 lg:grid-cols-[1fr_0.67fr]">
+        {/* Submit Request - 60% width */}
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Your Requests</CardTitle>
+            <CardTitle className="text-base">Submit a Request</CardTitle>
           </CardHeader>
-          <CardContent className="space-y-3">
-            {requests.map((request) => (
-              <div
-                key={request.id}
-                className="flex items-center justify-between border-b pb-3 last:border-0 last:pb-0"
-              >
-                <div>
-                  <p className="text-sm font-medium">
-                    {formatShortDate(request.date)} —{" "}
-                    {ARRIVAL_TIME_LABELS[request.arrivalTime] ??
-                      request.arrivalTime}
-                  </p>
-                  {request.reason ? (
-                    <p className="text-xs text-muted-foreground">
-                      {request.reason}
-                    </p>
-                  ) : null}
-                  {request.facilitiesComment ? (
-                    <p className="mt-1 rounded-md bg-muted/50 px-2 py-1 text-xs text-muted-foreground">
-                      Note from Facilities: {request.facilitiesComment}
-                    </p>
-                  ) : null}
-                  {request.status === AdHocStatus.REJECTED && request.rejectReason ? (
-                    <p className="mt-1 text-xs text-destructive">
-                      Declined: {request.rejectReason}
-                    </p>
-                  ) : null}
-                </div>
-                <StatusBadge status={request.status} />
-              </div>
-            ))}
+          <CardContent>
+            <AdHocRequestForm />
           </CardContent>
         </Card>
-      ) : null}
+
+        {/* Request History - 40% width */}
+        {requests.length > 0 ? (
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Your Requests</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {requests.map((request) => (
+                <div
+                  key={request.id}
+                  className="flex items-center justify-between border-b pb-3 last:border-0 last:pb-0"
+                >
+                  <div>
+                    <p className="text-sm font-medium">
+                      {formatShortDate(request.date)} —{" "}
+                      {ARRIVAL_TIME_LABELS[request.arrivalTime] ??
+                        request.arrivalTime}
+                    </p>
+                    {request.reason ? (
+                      <p className="text-xs text-muted-foreground">
+                        {request.reason}
+                      </p>
+                    ) : null}
+                    {request.facilitiesComment ? (
+                      <p className="mt-1 rounded-md bg-muted/50 px-2 py-1 text-xs text-muted-foreground">
+                        Note from Facilities: {request.facilitiesComment}
+                      </p>
+                    ) : null}
+                    {request.status === AdHocStatus.REJECTED && request.rejectReason ? (
+                      <p className="mt-1 text-xs text-destructive">
+                        Declined: {request.rejectReason}
+                      </p>
+                    ) : null}
+                  </div>
+                  <StatusBadge status={request.status} />
+                </div>
+              ))}
+            </CardContent>
+          </Card>
+        ) : null}
+      </div>
     </div>
   );
 }
