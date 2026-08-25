@@ -1,0 +1,70 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+  body {
+    @apply bg-page text-ink font-sans antialiased;
+  }
+  * {
+    @apply border-border;
+  }
+  /* Dark scrollbars */
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: #26262c;
+    border-radius: 9999px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+}
+
+@layer components {
+  .card {
+    @apply rounded-2xl border border-border bg-surface p-5;
+  }
+  .input {
+    @apply w-full rounded-xl border border-border bg-elevated px-3.5 py-2.5 text-sm text-ink
+      placeholder:text-muted outline-none transition-all duration-150
+      focus:border-lime focus:ring-2 focus:ring-lime/30;
+  }
+  .label {
+    @apply mb-1.5 block text-sm font-medium text-muted;
+  }
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold
+      transition-all duration-150 disabled:cursor-not-allowed disabled:opacity-50;
+  }
+  .btn-primary {
+    @apply btn bg-lime text-page hover:brightness-110 focus:ring-2 focus:ring-lime/40;
+  }
+  .btn-secondary {
+    @apply btn border border-border bg-elevated text-ink hover:border-cyan hover:text-cyan;
+  }
+  .btn-ghost {
+    @apply btn text-muted hover:bg-elevated hover:text-ink;
+  }
+  .btn-danger {
+    @apply btn bg-danger/15 text-danger hover:bg-danger/25;
+  }
+  .link {
+    @apply text-cyan hover:underline;
+  }
+}
+
+/* Login page lime radial glow */
+.login-glow {
+  background:
+    radial-gradient(60% 55% at 50% 0%, rgba(198, 244, 50, 0.14) 0%, transparent 60%),
+    radial-gradient(40% 40% at 80% 90%, rgba(34, 211, 238, 0.08) 0%, transparent 60%),
+    #0a0a0b;
+}
