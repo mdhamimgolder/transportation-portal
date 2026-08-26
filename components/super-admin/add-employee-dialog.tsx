@@ -21,7 +21,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
-import { ALL_ROLES, ROLE_LABELS } from "@/lib/constants/enums";
+import { ALL_ROLES, OFFICE_LOCATIONS, ROLE_LABELS } from "@/lib/constants/enums";
 
 const initialState: CreateUserState = {};
 
@@ -101,6 +101,21 @@ function AddEmployeeDialogBody({ onDone }: { onDone: () => void }) {
       <div className="space-y-2">
         <Label htmlFor="pickupPoint">Pick-up point</Label>
         <Input id="pickupPoint" name="pickupPoint" required disabled={pending} />
+      </div>
+      <div className="space-y-2">
+        <Label htmlFor="officeLocation">Office location</Label>
+        <Select name="officeLocation" required disabled={pending}>
+          <SelectTrigger id="officeLocation" className="w-full">
+            <SelectValue placeholder="Select office location" />
+          </SelectTrigger>
+          <SelectContent>
+            {OFFICE_LOCATIONS.map((location) => (
+              <SelectItem key={location} value={location}>
+                {location}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </div>
       <div className="space-y-2">
         <Label htmlFor="password">Password</Label>

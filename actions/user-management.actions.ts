@@ -6,7 +6,7 @@ import { prisma } from "@/lib/prisma";
 import { requireRole } from "@/lib/rbac/guards";
 import { hashPassword } from "@/lib/auth/password";
 import { parseCsv } from "@/lib/csv";
-import { Role, ALL_ROLES } from "@/lib/constants/enums";
+import { Role, ALL_ROLES, OFFICE_LOCATIONS } from "@/lib/constants/enums";
 
 function isValidRole(value: string): value is Role {
   return (ALL_ROLES as string[]).includes(value);
@@ -36,6 +36,7 @@ export async function createUserAction(
   const contactNumber = requiredField(formData, "contactNumber");
   const address = requiredField(formData, "address");
   const pickupPoint = requiredField(formData, "pickupPoint");
+  const officeLocation = requiredField(formData, "officeLocation");
   const password = requiredField(formData, "password");
 
   if (!fullName) return { error: "Full name is required." };
@@ -48,6 +49,9 @@ export async function createUserAction(
   if (!contactNumber) return { error: "Contact number is required." };
   if (!address) return { error: "Address is required." };
   if (!pickupPoint) return { error: "Pick-up point is required." };
+  if (!officeLocation || !OFFICE_LOCATIONS.includes(officeLocation as (typeof OFFICE_LOCATIONS)[number])) {
+    return { error: "Please select a valid office location." };
+  }
   if (!password || password.length < 8) {
     return { error: "Password is required and must be at least 8 characters." };
   }
@@ -70,6 +74,7 @@ export async function createUserAction(
       contactNumber,
       address,
       pickupPoint,
+      officeLocation,
       passwordHash,
       mustChangePassword: false,
       isBulkCreated: false,

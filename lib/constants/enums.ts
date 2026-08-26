@@ -15,6 +15,16 @@ export const ALL_ROLES: Role[] = [
   Role.CORPORATE_EMPLOYEE,
 ];
 
+export const OfficeLocation = {
+  REGNUM: "Regnum",
+  SPECTRA: "Spectra",
+} as const;
+export type OfficeLocation = (typeof OfficeLocation)[keyof typeof OfficeLocation];
+export const OFFICE_LOCATIONS: OfficeLocation[] = [
+  OfficeLocation.REGNUM,
+  OfficeLocation.SPECTRA,
+];
+
 // Human-readable labels shown in the UI (role dropdowns, sidebar titles).
 // Internal role codes and route prefixes stay unchanged for backward
 // compatibility with existing accounts/URLs -- only the display text differs.
