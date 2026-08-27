@@ -52,8 +52,8 @@ export function ProfileHeroCard({
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 pt-4 border-t border-slate-700">
           <ProfileFact label="Address" value={user.address} />
           <ProfileFact label="Contact Number" value={user.contactNumber} />
-          {showPickupPoint && <ProfileFact label="Pick-up Point" value={user.pickupPoint} accent />}
-          <ProfileFact label="Employee ID" value={user.employeeCode} accent />
+          {showPickupPoint && <ProfileFact label="Pick-up Point" value={user.pickupPoint} />}
+          <ProfileFact label="Employee ID" value={user.employeeCode} />
           <ProfileFact label="Department" value={user.department} />
           <ProfileFact label="Office Location" value={user.officeLocation} />
         </div>
@@ -65,16 +65,14 @@ export function ProfileHeroCard({
 function ProfileFact({
   label,
   value,
-  accent = false,
 }: {
   label: string;
   value?: string | null;
-  accent?: boolean;
 }) {
   return (
     <div className="min-w-0">
       <p className="text-xs text-slate-400">{label}</p>
-      <p className={`text-sm font-medium break-words ${accent ? "text-cyan-400" : ""}`}>
+      <p className="text-sm font-medium break-words text-white">
         {value || "Not set"}
       </p>
     </div>

@@ -10,7 +10,6 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { StatusBadge } from "@/components/shared/status-badge";
 import { ProfileHeroCard } from "@/components/shared/profile-hero-card";
 import { ProfileUpdateForm } from "@/components/employee/profile-update-form";
-import { RefreshButton } from "@/components/shared/refresh-button";
 import { ChangePasswordForm } from "@/components/employee/change-password-form";
 import { formatDistanceToNow } from "date-fns";
 
@@ -88,10 +87,6 @@ export default async function ProfilePage() {
         user={user}
         showPickupPoint
       />
-      {/* Refresh button */}
-      <div className="flex justify-end mt-2">
-        <RefreshButton />
-      </div>
 
       {/* Two Column Layout */}
       <div className="grid gap-6 lg:grid-cols-[1fr_0.5fr]">
