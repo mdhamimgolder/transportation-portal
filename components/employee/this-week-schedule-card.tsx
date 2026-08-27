@@ -24,7 +24,7 @@ export function ThisWeekScheduleCard({
   return (
     <div
       className={cn(
-        "flex h-full flex-col rounded-xl border border-transparent bg-black p-5",
+        "flex h-full flex-col rounded-2xl border border-slate-800 bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 p-5 text-white shadow-lg",
         className
       )}
     >
