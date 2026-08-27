@@ -21,7 +21,7 @@ interface ProfileHeroCardProps {
 
 export function ProfileHeroCard({
   user,
-  showPickupPoint = false,
+  showPickupPoint = true,
 }: ProfileHeroCardProps) {
   return (
     <Card className="border-slate-800 rounded-2xl bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 text-white shadow-lg p-4 sm:p-6">

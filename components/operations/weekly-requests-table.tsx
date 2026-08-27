@@ -85,7 +85,7 @@ export function WeeklyRequestsTable({
 
   return (
     <form action={formAction} className="space-y-3">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <p className="text-sm text-muted-foreground">
           <span className="font-medium text-foreground">{rows.length}</span>{" "}
           submission{rows.length === 1 ? "" : "s"}
@@ -96,7 +96,23 @@ export function WeeklyRequestsTable({
             </span>
           ) : null}
         </p>
-        <div className="flex flex-col items-end gap-2">
+        <div className="flex flex-wrap items-center gap-2 sm:justify-end">
+          {pendingIds.length > 0 ? (
+            <label className="flex min-h-9 items-center gap-2 text-sm text-muted-foreground">
+              <Checkbox
+                checked={
+                  selected.length === pendingIds.length
+                    ? true
+                    : selected.length > 0
+                      ? "indeterminate"
+                      : false
+                }
+                onCheckedChange={(checked) => toggleAll(checked === true)}
+                aria-label="Select all pending submissions"
+              />
+              Select all
+            </label>
+          ) : null}
           <ApproveSelectedButton />
           <CreateWeeklyOnBehalfDialog
             employees={employees}
@@ -122,21 +138,7 @@ export function WeeklyRequestsTable({
             <TableRow className="hover:bg-transparent">
               <TableHead className="sticky left-0 z-20 bg-muted/40">
                 <div className="flex items-center gap-2">
-                  {pendingIds.length > 0 ? (
-                    <Checkbox
-                      checked={
-                        selected.length === pendingIds.length
-                          ? true
-                          : selected.length > 0
-                            ? "indeterminate"
-                            : false
-                      }
-                      onCheckedChange={(checked) => toggleAll(checked === true)}
-                      aria-label="Select all pending submissions"
-                    />
-                  ) : (
-                    <span className="inline-block size-4" />
-                  )}
+                  <span className="inline-block size-4" />
                   <span>Employee</span>
                 </div>
               </TableHead>

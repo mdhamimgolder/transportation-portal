@@ -48,17 +48,11 @@ export function ProfileUpdateForm({
           name="pickupPoint"
           defaultValue={pickupPoint ?? ""}
           placeholder="e.g. Gulshan 1 Circle"
-          disabled={pickupPointDisabled}
+          disabled
         />
-        {pickupPointDisabled ? (
-          <p className="text-xs text-muted-foreground">
-            You have a pending pick-up point change request awaiting review.
-          </p>
-        ) : (
-          <p className="text-xs text-muted-foreground">
-            Changing this submits a request for Facilities to review.
-          </p>
-        )}
+        <p className="text-xs text-muted-foreground">
+          Your pick-up point is managed by Facilities.
+        </p>
         {state.errors?.pickupPoint ? (
           <p className="text-sm text-destructive">{state.errors.pickupPoint}</p>
         ) : null}

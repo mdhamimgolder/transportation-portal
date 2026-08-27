@@ -22,7 +22,7 @@ export default async function FacilitiesProfilePage() {
       </div>
 
       {/* Hero Card */}
-      <ProfileHeroCard user={user} />
+      <ProfileHeroCard user={user} showPickupPoint />
 
       {/* Two Column Layout */}
       <div className="grid gap-6 lg:grid-cols-[1fr_0.67fr]">
