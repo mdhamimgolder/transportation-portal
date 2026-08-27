@@ -27,6 +27,7 @@ model User {
   contactNumber String?
   address       String? // free-text "live" value; changes flow through AddressChangeRequest
   pickupPoint   String? // designated pickup location for transport, editable directly by the employee
+  officeLocation String? // Office location: "Regnum" or "Spectra" - set by Facilities when creating employee
 
   mustChangePassword   Boolean   @default(false)
   isBulkCreated        Boolean   @default(false)

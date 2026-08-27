@@ -2,7 +2,7 @@ import { requireRole } from "@/lib/rbac/guards";
 import { Role } from "@/lib/constants/enums";
 import { prisma } from "@/lib/prisma";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { ProfileDetailsCard } from "@/components/shared/profile-details-card";
+import { ProfileHeroCard } from "@/components/shared/profile-hero-card";
 import { ChangePasswordForm } from "@/components/employee/change-password-form";
 
 export default async function FacilitiesProfilePage() {
@@ -13,19 +13,43 @@ export default async function FacilitiesProfilePage() {
   });
 
   return (
-    <div className="space-y-4">
-      <h1 className="text-xl font-semibold">My Profile</h1>
+    <div className="space-y-6">
+      <div>
+        <h1 className="text-2xl font-bold">Profile Settings</h1>
+        <p className="text-sm text-muted-foreground mt-1">
+          Manage your account information and security preferences
+        </p>
+      </div>
 
-      <ProfileDetailsCard user={user} />
+      {/* Hero Card */}
+      <ProfileHeroCard user={user} />
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Change Password</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <ChangePasswordForm />
-        </CardContent>
-      </Card>
+      {/* Two Column Layout */}
+      <div className="grid gap-6 lg:grid-cols-[1fr_0.67fr]">
+        {/* Left Column - Empty for balance (60%) */}
+        <div className="space-y-6">
+          <Card className="p-4 border-slate-700">
+            <CardContent className="py-8 flex flex-col items-center justify-center text-center">
+              <p className="text-sm text-muted-foreground">
+                Profile management is handled by Super Admin
+              </p>
+            </CardContent>
+          </Card>
+        </div>
+
+        {/* Right Column - Password (40%) */}
+        <Card>
+          <CardHeader>
+            <CardTitle>Security</CardTitle>
+            <p className="text-xs text-muted-foreground mt-2">
+              Update your password to keep your account secure
+            </p>
+          </CardHeader>
+          <CardContent>
+            <ChangePasswordForm />
+          </CardContent>
+        </Card>
+      </div>
     </div>
   );
 }
