@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState } from "react";
+import { useActionState, useState } from "react";
 import { useFormStatus } from "react-dom";
 import {
   approveAdHocRequests,
@@ -66,18 +66,56 @@ export function AdHocTable({
   employees: OnBehalfEmployeeOption[];
 }) {
   const [state, formAction] = useActionState(approveAdHocRequests, initialState);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const pendingCount = requests.filter((r) => r.status === AdHocStatus.PENDING).length;
+
+  const pendingIds = requests
+    .filter((r) => r.status === AdHocStatus.PENDING)
+    .map((r) => r.id);
+  const selectedPendingCount = pendingIds.filter((id) => selectedIds.has(id)).length;
+  const allPendingSelected =
+    pendingIds.length > 0 && selectedPendingCount === pendingIds.length;
+
+  function toggleId(id: string) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function toggleAllPending() {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (allPendingSelected) {
+        pendingIds.forEach((id) => next.delete(id));
+      } else {
+        pendingIds.forEach((id) => next.add(id));
+      }
+      return next;
+    });
+  }
 
   return (
     <div className="space-y-3">
       {/*
-        This form has no DOM children -- checkboxes and the submit button
-        live elsewhere in the tree and associate via the `form` attribute.
-        That avoids nesting a <form> inside each row's individual
-        approve/decline forms (AdHocApprovalActions), which real per-row
-        forms in the table body would otherwise require.
+        This form carries the bulk-approve payload as hidden inputs driven by
+        the table's selection state -- checkboxes and the submit button live
+        elsewhere in the tree and associate via the `form` attribute. That
+        avoids nesting a <form> inside each row's individual approve/decline
+        forms (AdHocApprovalActions), which real per-row forms in the table
+        body would otherwise require.
       */}
-      <form id={BULK_FORM_ID} action={formAction} />
+      <form
+        id={BULK_FORM_ID}
+        action={formAction}
+        onSubmit={() => setSelectedIds(new Set())}
+      >
+        {Array.from(selectedIds).map((id) => (
+          <input key={id} type="hidden" name="requestId" value={id} />
+        ))}
+      </form>
       <div className="flex items-center justify-between">
         <p className="text-sm text-muted-foreground">
           <span className="font-medium text-foreground">{requests.length}</span>{" "}
@@ -100,21 +138,28 @@ export function AdHocTable({
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead className="sticky left-0 z-20 bg-background">Employee</TableHead>
-              <TableHead>Employee ID</TableHead>
-              <TableHead>Email</TableHead>
-              <TableHead>Contact Number</TableHead>
+              <TableHead className="sticky left-0 z-20 bg-background">
+                <div className="flex items-center gap-2">
+                  <Checkbox
+                    checked={allPendingSelected}
+                    onCheckedChange={toggleAllPending}
+                    disabled={pendingIds.length === 0}
+                    aria-label="Select all pending requests"
+                  />
+                  <span>Employee</span>
+                </div>
+              </TableHead>
               <TableHead>Date</TableHead>
-              <TableHead>Arrival Time</TableHead>
+              <TableHead>Arrival</TableHead>
               <TableHead>Reason</TableHead>
-              <TableHead className="w-44">Status</TableHead>
-              <TableHead className="w-48">Actions</TableHead>
+              <TableHead className="w-40">Status</TableHead>
+              <TableHead className="w-48">Action</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {requests.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={9} className="text-center text-muted-foreground">
+                <TableCell colSpan={6} className="text-center text-muted-foreground">
                   No ad-hoc requests yet.
                 </TableCell>
               </TableRow>
@@ -122,30 +167,42 @@ export function AdHocTable({
               requests.map((request) => (
                 <TableRow
                   key={request.id}
-                  className="relative transition-transform duration-150 hover:z-10 hover:scale-[1.012] hover:bg-muted/70 hover:shadow-md"
+                  className="transition-colors hover:bg-muted/50"
                 >
-                  <TableCell className="sticky left-0 z-10 bg-card font-medium">
+                  <TableCell className="sticky left-0 z-10 min-w-40 max-w-52 bg-card">
                     <div className="flex items-center gap-2">
-                      {request.status === AdHocStatus.PENDING ? (
-                        <Checkbox
-                          name="requestId"
-                          value={request.id}
-                          form={BULK_FORM_ID}
-                        />
-                      ) : (
-                        <span className="inline-block size-4" />
-                      )}
-                      {request.employee.fullName}
+                      <Checkbox
+                        checked={selectedIds.has(request.id)}
+                        onCheckedChange={() => toggleId(request.id)}
+                        disabled={request.status !== AdHocStatus.PENDING}
+                        aria-label={`Select ${request.employee.fullName}`}
+                      />
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-medium">
+                          {request.employee.fullName}
+                        </p>
+                        <p
+                          className="truncate text-xs text-muted-foreground"
+                          title={`${request.employee.email} · ${
+                            request.employee.contactNumber ?? "no contact number"
+                          }`}
+                        >
+                          {request.employee.employeeCode
+                            ? `${request.employee.employeeCode} · `
+                            : ""}
+                          {request.employee.email}
+                        </p>
+                      </div>
                     </div>
                   </TableCell>
-                  <TableCell>{request.employee.employeeCode ?? "—"}</TableCell>
-                  <TableCell>{request.employee.email}</TableCell>
-                  <TableCell>{request.employee.contactNumber ?? "—"}</TableCell>
-                  <TableCell className="whitespace-nowrap">
+                  <TableCell className="whitespace-nowrap tabular-nums">
                     {formatShortDate(request.date)}
                   </TableCell>
                   <TableCell className="whitespace-nowrap">
-                    {ARRIVAL_TIME_LABELS[request.arrivalTime] ?? request.arrivalTime}
+                    <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-xs tabular-nums">
+                      {ARRIVAL_TIME_LABELS[request.arrivalTime] ??
+                        request.arrivalTime}
+                    </span>
                   </TableCell>
                   <TableCell className="max-w-48 truncate">
                     {request.reason ?? "—"}

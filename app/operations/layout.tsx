@@ -42,8 +42,16 @@ export default async function OperationsLayout({
   ];
 
   return (
-    <div className="flex min-h-screen flex-col lg:flex-row">
-      <NavSidebar user={user} title={ROLE_LABELS[Role.OPERATIONS]} links={links} />
+    <div data-role={Role.OPERATIONS} className="flex min-h-screen flex-col lg:flex-row">
+      <NavSidebar
+        user={user}
+        title={ROLE_LABELS[Role.OPERATIONS]}
+        links={links}
+        activeAccentClassName="bg-[rgba(112,188,204,0.15)] text-[#70bccc]"
+        activeDotClassName="bg-[#70bccc]"
+        avatarClassName="bg-[#0f3038]"
+        avatarTextClassName="text-[#70bccc]"
+      />
       <main className="min-w-0 flex-1 px-4 py-6 lg:px-10 lg:py-8">
         <div className="mx-auto w-full max-w-7xl space-y-6">{children}</div>
       </main>

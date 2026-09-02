@@ -83,9 +83,14 @@ export function getWeekDays(weekStartDate: Date): Date[] {
 
 export const DAY_LABELS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"];
 
+const SHORT_MONTHS = [
+  "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+];
+
+// Deterministic formatting (no locale/timezone) so server and client output
+// identical strings and React hydration never mismatches.
 export function formatShortDate(date: Date): string {
-  return date.toLocaleDateString(undefined, {
-    month: "short",
-    day: "numeric",
-  });
+  const month = SHORT_MONTHS[date.getMonth()];
+  return `${date.getDate()} ${month}`;
 }

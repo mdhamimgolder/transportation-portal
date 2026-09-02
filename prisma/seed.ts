@@ -54,6 +54,25 @@ const VEHICLE_DRIVERS = [
 async function main() {
   const passwordHash = await hashPassword(TEST_PASSWORD);
 
+  const testHomeAddress = await prisma.address.upsert({
+    where: { addressText: "123 Test Street, Dhaka" },
+    update: { latitude: 23.7806, longitude: 90.407 },
+    create: {
+      addressText: "123 Test Street, Dhaka",
+      latitude: 23.7806,
+      longitude: 90.407,
+    },
+  });
+  const testPickupAddress = await prisma.address.upsert({
+    where: { addressText: "Mail Road, Dhaka" },
+    update: { latitude: 23.7123, longitude: 90.3456 },
+    create: {
+      addressText: "Mail Road, Dhaka",
+      latitude: 23.7123,
+      longitude: 90.3456,
+    },
+  });
+
   for (const testUser of TEST_USERS) {
     const employeeCode = "employeeCode" in testUser ? testUser.employeeCode : null;
     const department = "department" in testUser ? testUser.department : null;
@@ -76,8 +95,25 @@ async function main() {
         isBulkCreated: false,
         contactNumber: "01700000000",
         address: "123 Test Street, Dhaka",
+        ...(testUser.email === "employee@example.com"
+          ? {
+              homeAddressId: testHomeAddress.id,
+              pickupAddressId: testPickupAddress.id,
+              pickupPoint: "Mail Road, Dhaka",
+            }
+          : {}),
       },
     });
+    if (testUser.email === "employee@example.com") {
+      await prisma.user.update({
+        where: { email: testUser.email },
+        data: {
+          homeAddressId: testHomeAddress.id,
+          pickupAddressId: testPickupAddress.id,
+          pickupPoint: "Mail Road, Dhaka",
+        },
+      });
+    }
     console.log(`Seeded ${testUser.role} -> ${testUser.email}`);
   }
 

@@ -34,17 +34,37 @@ export function TodaysScheduleCard({
 }) {
   return (
     <div className={cn("rounded-xl border bg-card p-5", className)}>
-      <p className="mb-3 font-mono text-xs font-medium tracking-[0.12em] text-muted-foreground uppercase">
-        {title}
-      </p>
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <p className="flex items-center gap-2 font-mono text-xs font-medium uppercase tracking-[0.12em] text-muted-foreground">
+          <span
+            aria-hidden
+            className="h-1.5 w-1.5 rounded-full"
+            style={{ background: "var(--role-accent)" }}
+          />
+          {title}
+        </p>
+        {entries.length > 0 ? (
+          <span className="font-mono text-[11px] text-muted-foreground">
+            {entries.length} ride{entries.length > 1 ? "s" : ""}
+          </span>
+        ) : null}
+      </div>
+
       {entries.length === 0 ? (
-        <p className="text-sm text-muted-foreground">No pick-up scheduled today.</p>
+        <div className="flex min-h-[9rem] flex-col items-start justify-center gap-2 rounded-lg border border-dashed p-4">
+          <p className="font-display text-base font-semibold text-foreground">
+            No rides scheduled today
+          </p>
+          <p className="text-sm text-muted-foreground">
+            Request ad-hoc transport if you need a last-minute pickup.
+          </p>
+        </div>
       ) : (
-        <div className="divide-y">
+        <div className="divide-y divide-border">
           {entries.map((entry) => (
             <div key={entry.id} className="space-y-2 py-3 first:pt-0 last:pb-0">
               <div className="flex items-center justify-between gap-2">
-                <p className="font-mono text-base font-semibold tabular-nums text-black">
+                <p className="font-mono text-lg font-semibold tabular-nums text-foreground">
                   {formatTime12h(entry.pickupTime)}
                 </p>
                 <Badge variant="outline" className="font-normal">
@@ -53,11 +73,17 @@ export function TodaysScheduleCard({
               </div>
               <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-sm">
                 <span className="text-muted-foreground">Driver</span>
-                <span className="font-semibold text-black">{entry.driverName}</span>
+                <span className="font-semibold text-foreground">
+                  {entry.driverName}
+                </span>
                 <span className="text-muted-foreground">Contact</span>
-                <span className="font-mono font-semibold text-black">{entry.contactNumber}</span>
+                <span className="font-mono font-semibold text-foreground">
+                  {entry.contactNumber}
+                </span>
                 <span className="text-muted-foreground">Vehicle</span>
-                <span className="font-mono font-semibold text-black">{entry.vehicleNumber}</span>
+                <span className="font-mono font-semibold text-foreground">
+                  {entry.vehicleNumber}
+                </span>
               </div>
             </div>
           ))}

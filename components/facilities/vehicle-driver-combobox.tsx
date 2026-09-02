@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { Search } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 
@@ -15,11 +16,13 @@ function labelFor(option: VehicleDriverOption): string {
   return `${option.driverName} · ${option.vehicleNumber} (${option.vendor})`;
 }
 
+const ROWS_VISIBLE = 3;
+
 export function VehicleDriverCombobox({
   name,
   options,
   defaultValue,
-  placeholder = "Vehicle & driver",
+  placeholder = "Search vehicle or driver",
   className,
 }: {
   name: string;
@@ -55,12 +58,25 @@ export function VehicleDriverCombobox({
     );
   }, [options, query]);
 
+  // Keep three driver rows visible even while searching: top matches first,
+  // padded with the next available drivers so the list never collapses.
+  const rows = useMemo(() => {
+    if (filtered.length >= ROWS_VISIBLE) return filtered.slice(0, ROWS_VISIBLE);
+    const shown = new Set(filtered.map((o) => o.id));
+    const extras = options.filter((o) => !shown.has(o.id));
+    return [...filtered, ...extras].slice(0, ROWS_VISIBLE);
+  }, [filtered, options]);
+
   return (
     <div ref={containerRef} className={cn("relative", className)}>
       <input type="hidden" name={name} value={selectedId} />
+      <div className="pointer-events-none absolute top-1/2 left-2.5 z-10 -translate-y-1/2 text-muted-foreground">
+        <Search className="size-4" />
+      </div>
       <Input
         value={query}
         placeholder={placeholder}
+        className="pl-8"
         onFocus={() => setOpen(true)}
         onChange={(e) => {
           setQuery(e.target.value);
@@ -69,11 +85,11 @@ export function VehicleDriverCombobox({
         }}
       />
       {open ? (
-        <div className="absolute z-20 mt-1 max-h-56 w-full min-w-64 overflow-y-auto rounded-md border bg-popover p-1 shadow-md">
-          {filtered.length === 0 ? (
+        <div className="absolute z-20 mt-1 max-h-[7.5rem] w-full min-w-64 overflow-y-auto rounded-md border bg-popover p-1 shadow-md">
+          {rows.length === 0 ? (
             <p className="px-2 py-1.5 text-sm text-muted-foreground">No matches.</p>
           ) : (
-            filtered.map((option) => (
+            rows.map((option) => (
               <button
                 key={option.id}
                 type="button"
@@ -87,7 +103,7 @@ export function VehicleDriverCombobox({
                   setOpen(false);
                 }}
               >
-                {labelFor(option)}
+                <span className="truncate">{labelFor(option)}</span>
               </button>
             ))
           )}

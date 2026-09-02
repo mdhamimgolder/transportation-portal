@@ -12,8 +12,63 @@ function to12Hour(hour: number): string {
 // Whole hours only, in overnight order: 10 PM, 11 PM, then 12 AM..6 AM
 const OVERNIGHT_HOURS = [22, 23, 0, 1, 2, 3, 4, 5, 6];
 
-export const ADHOC_ARRIVAL_TIME_OPTIONS: { value: string; label: string }[] =
+export type AdhocArrivalOption = { value: string; label: string };
+
+export const ADHOC_ARRIVAL_TIME_OPTIONS: AdhocArrivalOption[] =
   OVERNIGHT_HOURS.map((hour) => ({
     value: `${hour.toString().padStart(2, "0")}:00`,
     label: to12Hour(hour),
   }));
+
+// Ad-hoc requests need at least 3 hours' notice: a submission at 8:00 PM can
+// only ask for an arrival of 11:00 PM or later. Enforced server-side and in
+// the request forms (the select options are filtered to what's still eligible).
+export const ADHOC_MIN_ADVANCE_HOURS = 3;
+
+// For the 10:00 PM arrival the pick-up point is essential (employees board
+// from a specific spot at night); for other overnight arrivals it is optional.
+export const ADHOC_PICKUP_REQUIRED_TIME = "22:00";
+
+const HOURS_PER_DAY = 24;
+const MS_PER_HOUR = 60 * 60 * 1000;
+
+/**
+ * Resolve an arrival-time string against a base date (a day's midnight).
+ * Hours in the overnight window come "tonight" for 22:00/23:00 and "tomorrow
+ * morning" for 00:00..06:00, matching the ad-hoc window's semantics. Returns
+ * a local-time Date representing the actual arrival moment.
+ */
+export function resolveAdhocArrival(baseDate: Date, arrivalTime: string): Date {
+  const hour = Number.parseInt(arrivalTime.split(":")[0], 10);
+  const d = new Date(baseDate);
+  if (Number.isNaN(hour)) return d;
+  d.setHours(hour >= 22 ? hour : hour + HOURS_PER_DAY, 0, 0, 0);
+  return d;
+}
+
+/** The earliest arrival moment allowed by the 3-hour advance rule. */
+export function earliestAdhocArrival(now: Date = new Date()): Date {
+  return new Date(now.getTime() + ADHOC_MIN_ADVANCE_HOURS * MS_PER_HOUR);
+}
+
+/** Whether an arrival (resolved against `baseDate`) still satisfies the rule. */
+export function isAdhocArrivalEligible(
+  baseDate: Date,
+  arrivalTime: string,
+  now: Date = new Date()
+): boolean {
+  return (
+    resolveAdhocArrival(baseDate, arrivalTime).getTime() >=
+    earliestAdhocArrival(now).getTime()
+  );
+}
+
+/** The arrival options that are still selectable under the rule. */
+export function eligibleAdhocArrivalOptions(
+  baseDate: Date,
+  now: Date = new Date()
+): AdhocArrivalOption[] {
+  return ADHOC_ARRIVAL_TIME_OPTIONS.filter((option) =>
+    isAdhocArrivalEligible(baseDate, option.value, now)
+  );
+}

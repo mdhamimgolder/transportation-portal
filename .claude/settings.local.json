@@ -86,7 +86,27 @@
       "Bash(npx tsx *)",
       "Bash(rm -f cleanup-test-today.ts seed-test-today.ts)",
       "Bash(git -C \"D:/Devolopment/Transportation System\" remote -v)",
-      "Bash(git -C \"D:/Devolopment/Transportation System\" branch --show-current)"
+      "Bash(git -C \"D:/Devolopment/Transportation System\" branch --show-current)",
+      "Bash(netstat -ano)",
+      "Bash(npx vite *)",
+      "Bash(find D:/Devolopment/Transportation System/frontend -type f -name \"MyTransport.tsx\")",
+      "mcp__node_repl__js",
+      "Bash(nohup npm run dev > /tmp/dev.log 2>&1 & sleep 2 && echo \"Server started\")",
+      "Bash(taskkill /PID 2136 /F)",
+      "Bash(nohup npm run dev)",
+      "Bash(findstr :3000)",
+      "Bash(findstr LISTENING)",
+      "Bash(powershell -Command \"Stop-Process -Id 14132 -Force\")",
+      "Bash(cd \"D:/Devolopment/Transportation System\" && echo \"--- opencode configs in project ---\" && ls -la opencode.json opencode.jsonc .opencode 2>/dev/null; echo \"--- global opencode ---\" && ls -la ~/.config/opencode 2>/dev/null; echo \"--- opencode binary ---\" && which opencode 2>/dev/null || echo \"opencode NOT on PATH\"; echo \"--- .agents dir ---\" && ls -la .agents 2>/dev/null; echo \"--- claude skills ---\" && ls .claude 2>/dev/null)",
+      "Bash(opencode --version)",
+      "WebFetch(domain:opencode.ai)",
+      "Bash(awk '/@theme/,/^}/' app/globals.css)",
+      "Bash(node -e \"console.log\\(require\\('./node_modules/tailwindcss/package.json'\\).version\\)\")",
+      "Bash(sort -t: -k2 -rn)",
+      "WebSearch",
+      "WebFetch(domain:vercel.com)",
+      "WebFetch(domain:v10.carbondesignsystem.com)",
+      "WebFetch(domain:www.ibm.com)"
     ]
   }
 }

@@ -29,8 +29,8 @@ export function ProfileHeroCard({
         {/* User Header */}
         <div className="space-y-2">
           <div className="flex items-center gap-4">
-            <div className="w-14 h-14 sm:w-16 sm:h-16 shrink-0 rounded-full bg-cyan-500/20 flex items-center justify-center border-2 border-cyan-500">
-              <span className="text-2xl font-bold text-cyan-400">
+            <div className="w-14 h-14 sm:w-16 sm:h-16 shrink-0 rounded-full bg-[#70bccc]/20 flex items-center justify-center border-2 border-[#70bccc]">
+              <span className="text-2xl font-bold text-[#70bccc]">
                 {user.fullName
                   .split(" ")
                   .map((n) => n[0])
@@ -42,7 +42,7 @@ export function ProfileHeroCard({
               <h2 className="text-xl sm:text-2xl font-semibold break-words">{user.fullName}</h2>
               <p className="text-slate-300 break-all">{user.email}</p>
               {user.department && (
-                <p className="text-sm text-cyan-400 mt-1">{user.department}</p>
+                <p className="text-sm text-[#70bccc] mt-1">{user.department}</p>
               )}
             </div>
           </div>

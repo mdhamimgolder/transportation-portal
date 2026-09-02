@@ -1,14 +1,47 @@
 import Link from "next/link";
+import { CalendarRange } from "lucide-react";
 import { requireRole } from "@/lib/rbac/guards";
-import { Role } from "@/lib/constants/enums";
+import { Role, ROLE_LABELS } from "@/lib/constants/enums";
 import { prisma } from "@/lib/prisma";
-import { getMondayOfWeek, startOfToday } from "@/lib/date/week";
+import {
+  getMondayOfWeek,
+  startOfToday,
+  getWeekDays,
+  DAY_LABELS,
+  formatShortDate,
+} from "@/lib/date/week";
 import {
   TodaysScheduleCard,
   type TodaysScheduleEntry,
 } from "@/components/employee/todays-schedule-card";
 import { ThisWeekScheduleCard } from "@/components/employee/this-week-schedule-card";
+import { DashboardHero } from "@/components/shared/dashboard-hero";
 import { Button } from "@/components/ui/button";
+import {
+  WeeklyScheduleTable,
+  type ScheduleDay,
+} from "@/components/employee/weekly-schedule-table";
+
+function toWeekDays(schedule: {
+  weekStartDate: Date;
+  days: Array<{
+    dayOfWeek: number;
+    needsTransport: boolean;
+    arrivalTime: string | null;
+  }>;
+}): ScheduleDay[] {
+  const weekDates = getWeekDays(schedule.weekStartDate);
+  return weekDates.map((date, i) => {
+    const day = schedule.days.find((d) => d.dayOfWeek === i + 1);
+    return {
+      dayOfWeek: i + 1,
+      label: DAY_LABELS[i],
+      dateLabel: formatShortDate(date),
+      needsTransport: day?.needsTransport ?? false,
+      arrivalTime: day?.arrivalTime ?? null,
+    };
+  });
+}
 
 export default async function CorporateEmployeeDashboardPage() {
   const user = await requireRole([Role.CORPORATE_EMPLOYEE]);
@@ -16,7 +49,7 @@ export default async function CorporateEmployeeDashboardPage() {
   const today = startOfToday();
   const thisWeekStartDate = getMondayOfWeek(today);
 
-  const [currentSchedule, todaysAssignments] = await Promise.all([
+  const [currentSchedule, todaysAssignments, weekSchedule] = await Promise.all([
     prisma.weeklySchedule.findUnique({
       where: {
         employeeId_weekStartDate: {
@@ -41,6 +74,15 @@ export default async function CorporateEmployeeDashboardPage() {
       include: { vehicleDriver: true },
       orderBy: { pickupTime: "asc" },
     }),
+    prisma.weeklySchedule.findUnique({
+      where: {
+        employeeId_weekStartDate: {
+          employeeId: user.id,
+          weekStartDate: thisWeekStartDate,
+        },
+      },
+      include: { days: true },
+    }),
   ]);
 
   const todaysScheduleEntries: TodaysScheduleEntry[] = todaysAssignments.map((a) => ({
@@ -52,10 +94,6 @@ export default async function CorporateEmployeeDashboardPage() {
     requestType: a.weeklyScheduleDayId ? "Weekly schedule" : "Ad-hoc request",
   }));
 
-  const weeklyEntries = todaysScheduleEntries.filter((e) => e.requestType === "Weekly schedule");
-  const adhocEntries = todaysScheduleEntries.filter((e) => e.requestType === "Ad-hoc request");
-  const isDoubleAssigned = weeklyEntries.length > 0 && adhocEntries.length > 0;
-
   const firstName = user.fullName.split(" ")[0];
   const todayLabel = new Date().toLocaleDateString(undefined, {
     weekday: "long",
@@ -63,49 +101,55 @@ export default async function CorporateEmployeeDashboardPage() {
     day: "numeric",
   });
 
+  const weekDays = weekSchedule ? toWeekDays(weekSchedule) : [];
+
   return (
     <div className="space-y-7">
-      <div className="flex flex-wrap items-end justify-between gap-4">
-        <div>
-          <p className="font-mono text-xs font-medium tracking-[0.14em] text-muted-foreground uppercase">
-            {todayLabel}
-          </p>
-          <h1 className="mt-2 font-display text-4xl font-bold leading-[1.05] tracking-tight">
-            Welcome back,
-            <br />
-            {firstName}.
-          </h1>
-        </div>
-        <div className="flex flex-wrap gap-2.5">
+      <DashboardHero
+        eyebrow={`${ROLE_LABELS[Role.CORPORATE_EMPLOYEE]} · ${todayLabel}`}
+        title={
+          <>
+            Welcome back, {firstName}.
+          </>
+        }
+        subline="Your submitted schedule and today's rides, in one place."
+        actions={
           <Button
             asChild
             size="lg"
-            className="rounded-full bg-[#aef2ff] text-[#001014] hover:bg-[#d3f8ff]"
+            className="rounded-full text-ink"
+            style={{ background: "var(--role-accent)" }}
           >
             <Link href="/corporate-employee/adhoc">Request ad-hoc transport</Link>
           </Button>
-        </div>
-      </div>
+        }
+      />
 
-      <div
-        className={`mx-auto grid max-w-3xl grid-cols-1 gap-4 ${
-          isDoubleAssigned ? "sm:grid-cols-3" : "sm:grid-cols-2"
-        }`}
-      >
+      <TodaysScheduleCard entries={todaysScheduleEntries} title="Today's rides" />
+
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
         <ThisWeekScheduleCard
           status={currentSchedule?.status ?? null}
           hint="Submit your schedule for the current week"
           href="/corporate-employee/my-schedule"
           buttonLabel="Manage schedule"
         />
-        {isDoubleAssigned ? (
-          <>
-            <TodaysScheduleCard entries={weeklyEntries} title="Today's schedule" />
-            <TodaysScheduleCard entries={adhocEntries} title="Today's ad-hoc" />
-          </>
-        ) : (
-          <TodaysScheduleCard entries={todaysScheduleEntries} />
-        )}
+
+        <div className="rounded-xl border bg-card p-5 lg:col-span-2">
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <p className="flex items-center gap-2 font-mono text-xs font-medium uppercase tracking-[0.12em] text-muted-foreground">
+              <CalendarRange className="size-3.5" style={{ color: "var(--role-accent)" }} />
+              This week · arrival times
+            </p>
+          </div>
+          {weekDays.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              No schedule submitted for this week yet.
+            </p>
+          ) : (
+            <WeeklyScheduleTable days={weekDays} compact />
+          )}
+        </div>
       </div>
     </div>
   );

@@ -2,6 +2,8 @@
 
 This file is the single source of truth for this project. Read it before every task. Follow the spec, conventions, and design system exactly.
 
+> **⚠️ Stack drift note (read this first):** the sections below describe the ORIGINAL FastAPI/Python scaffold. The portal is now built on the **Next.js 16 (App Router) + TypeScript + Prisma 7 + Postgres/Neon** implementation in the repo root — see `README_COMPLETE.md`, `AGENTS.md`, and **`SESSION_MEMORY.md`** (session continuity: what we built, current state, conventions, recipes, open threads — update it before every session end). `_archived-fastapi-scaffold-2026-07-27/` and `frontend/` are stale; ignore them.
+
 ## 1. Project Overview
 
 An internal, role-based web portal replacing Smartsheet for employee office-transport management. Flow: **Employee submits schedule → Operations approves → Facilities plans routes & assigns drivers → Automated email to employee.** Ad-hoc (emergency) requests bypass Operations approval and alert Operations + Facilities simultaneously.

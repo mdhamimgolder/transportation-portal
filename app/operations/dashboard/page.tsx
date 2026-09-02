@@ -7,10 +7,17 @@ import {
   AddressChangeStatus,
   ContactChangeStatus,
   PickupPointChangeStatus,
+  ROLE_LABELS,
 } from "@/lib/constants/enums";
 import { prisma } from "@/lib/prisma";
-import { PageHeader } from "@/components/shared/page-header";
-import { StatCard } from "@/components/shared/stat-card";
+import {
+  getSubmissionWindow,
+  formatShortDate,
+  getWeekDays,
+} from "@/lib/date/week";
+import { getTransportSettings } from "@/lib/queries/settings";
+import { DashboardHero } from "@/components/shared/dashboard-hero";
+import { AttentionBoard } from "@/components/shared/attention-board";
 
 export default async function OperationsDashboardPage() {
   const user = await requireRole([Role.OPERATIONS]);
@@ -33,37 +40,65 @@ export default async function OperationsDashboardPage() {
     ]);
 
   const firstName = user.fullName.split(" ")[0];
+  const profilePending = pendingAddress + pendingContact + pendingPickup;
+
+  const settings = await getTransportSettings();
+  const window = getSubmissionWindow(
+    new Date(),
+    settings.weeklyLockDayOfWeek,
+    settings.weeklyLockHour,
+    settings.weeklyLockMinute
+  );
+  const windowDays = getWeekDays(window.weekStartDate);
 
   return (
-    <div className="space-y-6">
-      <PageHeader
-        title={`Welcome back, ${firstName}`}
-        description="Here's what needs your attention today."
+    <div className="space-y-7">
+      <DashboardHero
+        eyebrow={`${ROLE_LABELS[Role.OPERATIONS]} · ${new Date().toLocaleDateString(undefined, {
+          weekday: "long",
+          month: "long",
+          day: "numeric",
+        })}`}
+        title={
+          <>
+            Welcome back, {firstName}.
+          </>
+        }
+        subline="Submissions and profile changes land here for your review."
       />
 
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-        <StatCard
-          label="Weekly requests to review"
-          value={pendingWeekly}
-          hint="Pending approval"
-          icon={<ClipboardCheck className="size-5" />}
-          href="/operations/weekly-requests"
-        />
-        <StatCard
-          label="Profile approvals"
-          value={pendingAddress + pendingContact + pendingPickup}
-          hint="Address, contact & pick-up point"
-          icon={<UserCheck className="size-5" />}
-          href="/operations/profile-approvals"
-        />
-        <StatCard
-          label="Ad-hoc requests to review"
-          value={activeAdhoc}
-          hint="Pending approval"
-          icon={<Zap className="size-5" />}
-          href="/operations/adhoc"
-        />
-      </div>
+      <AttentionBoard
+        subline={`Open submission window: week of ${formatShortDate(windowDays[0])} – ${formatShortDate(windowDays[4])}. ${
+          window.isOpen ? "Locking Saturday 12:00 PM." : "Window closed."
+        }`}
+        accent="text-[#70bccc]"
+        items={[
+          {
+            value: pendingWeekly,
+            label: "Weekly schedules to review",
+            action: "Review",
+            href: "/operations/weekly-requests",
+            icon: ClipboardCheck,
+            urgent: pendingWeekly > 0,
+          },
+          {
+            value: profilePending,
+            label: "Profile changes to approve",
+            action: "Approve",
+            href: "/operations/profile-approvals",
+            icon: UserCheck,
+            urgent: profilePending > 0,
+          },
+          {
+            value: activeAdhoc,
+            label: "Ad-hoc transport requests",
+            action: "Review",
+            href: "/operations/adhoc",
+            icon: Zap,
+            urgent: activeAdhoc > 0,
+          },
+        ]}
+      />
     </div>
   );
 }

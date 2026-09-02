@@ -6,7 +6,7 @@ import { requireRole } from "@/lib/rbac/guards";
 import { getSubmissionWindow, getWeekDays } from "@/lib/date/week";
 import { getTransportSettings } from "@/lib/queries/settings";
 import { NO_TRANSPORT_VALUE, ARRIVAL_TIME_OPTIONS } from "@/lib/constants/arrival-times";
-import { ADHOC_ARRIVAL_TIME_OPTIONS } from "@/lib/constants/adhoc-arrival-times";
+import { ADHOC_ARRIVAL_TIME_OPTIONS, isAdhocArrivalEligible } from "@/lib/constants/adhoc-arrival-times";
 import { Role, WeeklyScheduleStatus, AdHocStatus } from "@/lib/constants/enums";
 
 const VALID_DAY_VALUES = new Set([
@@ -145,6 +145,13 @@ export async function createAdHocRequestOnBehalf(
   const date = new Date(`${dateValue}T00:00:00`);
   if (Number.isNaN(date.getTime())) {
     return { error: "Invalid date." };
+  }
+
+  if (!isAdhocArrivalEligible(date, arrivalTime)) {
+    return {
+      error:
+        "Ad-hoc requests need at least 3 hours' notice. Please choose a later arrival time.",
+    };
   }
 
   await prisma.adHocRequest.create({

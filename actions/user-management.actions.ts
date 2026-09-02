@@ -120,6 +120,8 @@ export async function bulkCreateUsersAction(
     department: colIndex("department"),
     contactNumber: colIndex("contactnumber"),
     address: colIndex("address"),
+    homeLatitude: colIndex("homelatitude"),
+    homeLongitude: colIndex("homelongitude"),
     pickupPoint: colIndex("pickuppoint"),
     password: colIndex("password"),
   };
@@ -131,17 +133,21 @@ export async function bulkCreateUsersAction(
     idx.department === -1 ||
     idx.contactNumber === -1 ||
     idx.address === -1 ||
+    idx.homeLatitude === -1 ||
+    idx.homeLongitude === -1 ||
     idx.pickupPoint === -1 ||
     idx.password === -1
   ) {
     return {
       error:
-        "CSV must include fullName, email, role, employeeCode, department, contactNumber, address, pickupPoint, and password columns.",
+        "CSV must include fullName, email, role, employeeCode, department, contactNumber, address, homeLatitude, homeLongitude, pickupPoint, and password columns.",
     };
   }
 
   const created: BulkCreateResultRow[] = [];
   const skipped: BulkCreateSkipRow[] = [];
+  const employeeCodesInFile = new Set<string>();
+  const emailsInFile = new Set<string>();
 
   for (let i = 1; i < rows.length; i++) {
     const line = i + 1;
@@ -153,6 +159,8 @@ export async function bulkCreateUsersAction(
     const department = cols[idx.department]?.trim();
     const contactNumber = cols[idx.contactNumber]?.trim();
     const address = cols[idx.address]?.trim();
+    const homeLatitude = Number(cols[idx.homeLatitude]?.trim());
+    const homeLongitude = Number(cols[idx.homeLongitude]?.trim());
     const pickupPoint = cols[idx.pickupPoint]?.trim();
     const password = cols[idx.password]?.trim();
 
@@ -164,13 +172,15 @@ export async function bulkCreateUsersAction(
       !department ||
       !contactNumber ||
       !address ||
+      !Number.isFinite(homeLatitude) ||
+      !Number.isFinite(homeLongitude) ||
       !pickupPoint ||
       !password
     ) {
       skipped.push({
         line,
         reason:
-          "Missing one or more required fields (fullName, email, role, employeeCode, department, contactNumber, address, pickupPoint, password).",
+          "Missing or invalid required fields, including homeLatitude and homeLongitude.",
       });
       continue;
     }
@@ -182,32 +192,70 @@ export async function bulkCreateUsersAction(
       skipped.push({ line, reason: "Password must be at least 8 characters." });
       continue;
     }
+    if (Math.abs(homeLatitude) > 90 || Math.abs(homeLongitude) > 180) {
+      skipped.push({ line, reason: "Home latitude must be -90 to 90 and longitude -180 to 180." });
+      continue;
+    }
+
+    if (emailsInFile.has(email)) {
+      skipped.push({ line, reason: `Email ${email} is duplicated in this CSV file.` });
+      continue;
+    }
+    if (employeeCodesInFile.has(employeeCode)) {
+      skipped.push({ line, reason: `Employee ID ${employeeCode} is duplicated in this CSV file.` });
+      continue;
+    }
 
     const existing = await prisma.user.findUnique({ where: { email } });
     if (existing) {
       skipped.push({ line, reason: `Email ${email} already exists.` });
       continue;
     }
+    const existingEmployeeCode = await prisma.user.findUnique({
+      where: { employeeCode },
+      select: { id: true },
+    });
+    if (existingEmployeeCode) {
+      skipped.push({ line, reason: `Employee ID ${employeeCode} already exists.` });
+      continue;
+    }
 
     const passwordHash = await hashPassword(password);
-
-    const user = await prisma.user.create({
-      data: {
-        email,
-        fullName,
-        role,
-        employeeCode,
-        department,
-        contactNumber,
-        address,
-        pickupPoint,
-        passwordHash,
-        mustChangePassword: false,
-        isBulkCreated: true,
-      },
+    const homeAddress = await prisma.address.upsert({
+      where: { addressText: address },
+      update: { latitude: homeLatitude, longitude: homeLongitude },
+      create: { addressText: address, latitude: homeLatitude, longitude: homeLongitude },
     });
 
+    let user;
+    try {
+      user = await prisma.user.create({
+        data: {
+          email,
+          fullName,
+          role,
+          employeeCode,
+          department,
+          contactNumber,
+          address,
+          homeAddressId: homeAddress.id,
+          pickupPoint,
+          passwordHash,
+          mustChangePassword: false,
+          isBulkCreated: true,
+        },
+      });
+    } catch (error) {
+      if (error && typeof error === "object" && "code" in error && error.code === "P2002") {
+        skipped.push({ line, reason: `Email or employee ID already exists (${email}, ${employeeCode}).` });
+        continue;
+      }
+      throw error;
+    }
+
     created.push({ email: user.email, fullName: user.fullName });
+    emailsInFile.add(email);
+    employeeCodesInFile.add(employeeCode);
   }
 
   revalidatePath("/super-admin/users");

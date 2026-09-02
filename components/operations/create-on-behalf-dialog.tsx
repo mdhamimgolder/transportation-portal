@@ -9,7 +9,9 @@ import {
   type CreateAdHocRequestOnBehalfState,
 } from "@/actions/on-behalf.actions";
 import { NO_TRANSPORT_VALUE, ARRIVAL_TIME_OPTIONS } from "@/lib/constants/arrival-times";
-import { ADHOC_ARRIVAL_TIME_OPTIONS } from "@/lib/constants/adhoc-arrival-times";
+import {
+  eligibleAdhocArrivalOptions,
+} from "@/lib/constants/adhoc-arrival-times";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -59,10 +61,6 @@ function EmployeePicker({
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    setQuery(selected ? employeeLabel(selected) : "");
-  }, [selected]);
-
-  useEffect(() => {
     function handleClickOutside(e: MouseEvent) {
       if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
         setOpen(false);
@@ -110,6 +108,7 @@ function EmployeePicker({
                 )}
                 onClick={() => {
                   onSelect(e);
+                  setQuery(employeeLabel(e));
                   setOpen(false);
                 }}
               >
@@ -268,6 +267,14 @@ export function CreateAdHocOnBehalfDialog({
   const [adhocTime, setAdhocTime] = useState("");
   const [adhocReason, setAdhocReason] = useState("");
 
+  const adhocArrivalOptions = useMemo(
+    () =>
+      adhocDate
+        ? eligibleAdhocArrivalOptions(new Date(`${adhocDate}T00:00:00`))
+        : [],
+    [adhocDate]
+  );
+
   const [adhocState, adhocAction] = useActionState(
     createAdHocRequestOnBehalf,
     adhocInitialState
@@ -316,24 +323,50 @@ export function CreateAdHocOnBehalfDialog({
               type="date"
               name="date"
               value={adhocDate}
-              onChange={(e) => setAdhocDate(e.target.value)}
+              onChange={(e) => {
+                const next = e.target.value;
+                setAdhocDate(next);
+                if (adhocTime && next) {
+                  const nextOptions = eligibleAdhocArrivalOptions(
+                    new Date(`${next}T00:00:00`)
+                  );
+                  if (
+                    nextOptions.length === 0 ||
+                    !nextOptions.some((option) => option.value === adhocTime)
+                  ) {
+                    setAdhocTime("");
+                  }
+                }
+              }}
               required
             />
           </div>
           <div className="space-y-2">
             <Label htmlFor="onbehalf-arrival">Arrival time</Label>
-            <Select name="arrivalTime" value={adhocTime} onValueChange={setAdhocTime} required>
-              <SelectTrigger className="w-full" id="onbehalf-arrival">
-                <SelectValue placeholder="Select a time" />
-              </SelectTrigger>
-              <SelectContent>
-                {ADHOC_ARRIVAL_TIME_OPTIONS.map((o) => (
-                  <SelectItem key={o.value} value={o.value}>
-                    {o.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            {adhocArrivalOptions.length > 0 ? (
+              <Select
+                name="arrivalTime"
+                value={adhocTime}
+                onValueChange={setAdhocTime}
+                required
+              >
+                <SelectTrigger className="w-full" id="onbehalf-arrival">
+                  <SelectValue placeholder="Select a time" />
+                </SelectTrigger>
+                <SelectContent>
+                  {adhocArrivalOptions.map((o) => (
+                    <SelectItem key={o.value} value={o.value}>
+                      {o.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            ) : (
+              <p className="rounded-md border border-dashed px-3 py-2 text-sm text-muted-foreground">
+                Select a date first -- then only arrival times at least 3
+                hours away are shown.
+              </p>
+            )}
           </div>
           <div className="space-y-2">
             <Label htmlFor="onbehalf-reason">Reason (optional)</Label>

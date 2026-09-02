@@ -50,6 +50,7 @@ const ICONS: Record<string, LucideIcon> = {
   profile: UserRound,
   "weekly-requests": ClipboardCheck,
   approvals: UserCheck,
+  automation: Zap,
   history: History,
   route: Map,
   export: FileDown,

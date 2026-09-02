@@ -154,7 +154,7 @@ function BulkUploadDialogBody({
       </div>
       <div className="space-y-2">
         <Label htmlFor="file">CSV file</Label>
-        <Input id="file" name="file" type="file" accept=".csv,text/csv" required />
+        <Input id="file" name="file" type="file" accept=".csv,text/csv" className="surface-accent" required />
       </div>
       {state.error ? <p className="text-sm text-destructive">{state.error}</p> : null}
       <DialogFooter>
@@ -181,7 +181,7 @@ export function WeeklyScheduleBulkUploadDialog({
       }}
     >
       <DialogTrigger asChild>
-        <Button type="button" variant="outline">
+        <Button type="button" variant="outline" className="surface-accent">
           Upload CSV
         </Button>
       </DialogTrigger>

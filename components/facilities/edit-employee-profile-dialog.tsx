@@ -35,12 +35,20 @@ export function EditEmployeeProfileDialog({
   contactNumber,
   address,
   pickupPoint,
+  homeLatitude,
+  homeLongitude,
+  pickupLatitude,
+  pickupLongitude,
 }: {
   userId: string;
   fullName: string;
   contactNumber: string | null;
   address: string | null;
   pickupPoint: string | null;
+  homeLatitude: number | null;
+  homeLongitude: number | null;
+  pickupLatitude: number | null;
+  pickupLongitude: number | null;
 }) {
   const [open, setOpen] = useState(false);
   const [state, formAction] = useActionState(
@@ -91,6 +99,24 @@ export function EditEmployeeProfileDialog({
               defaultValue={pickupPoint ?? ""}
               required
             />
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="space-y-2">
+              <Label htmlFor={`homeLatitude-${userId}`}>Home latitude</Label>
+              <Input id={`homeLatitude-${userId}`} name="homeLatitude" type="number" step="any" defaultValue={homeLatitude ?? ""} required />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor={`homeLongitude-${userId}`}>Home longitude</Label>
+              <Input id={`homeLongitude-${userId}`} name="homeLongitude" type="number" step="any" defaultValue={homeLongitude ?? ""} required />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor={`pickupLatitude-${userId}`}>Pick-up latitude</Label>
+              <Input id={`pickupLatitude-${userId}`} name="pickupLatitude" type="number" step="any" defaultValue={pickupLatitude ?? ""} required />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor={`pickupLongitude-${userId}`}>Pick-up longitude</Label>
+              <Input id={`pickupLongitude-${userId}`} name="pickupLongitude" type="number" step="any" defaultValue={pickupLongitude ?? ""} required />
+            </div>
           </div>
           {state.error ? <p className="text-sm text-destructive">{state.error}</p> : null}
           <DialogFooter>

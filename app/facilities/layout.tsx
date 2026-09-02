@@ -16,7 +16,8 @@ export default async function FacilitiesLayout({
   const links: NavLink[] = [
     { href: "/facilities/dashboard", label: "Dashboard", icon: "dashboard" },
     { href: "/facilities/route-planning", label: "Route Planning", icon: "route" },
-    { href: "/facilities/weekly-export", label: "Weekly Export", icon: "export" },
+    { href: "/facilities/automated-route-planner", label: "Auto Route Planner", icon: "zap" },
+    { href: "/facilities/route-setting", label: "Route Setting", icon: "settings" },
     { href: "/facilities/adhoc", label: "Ad-hoc Transport", icon: "adhoc" },
     { href: "/facilities/vehicles", label: "Vehicles & Drivers", icon: "vehicles" },
     { href: "/facilities/user-info", label: "User Info", icon: "users" },
@@ -35,8 +36,16 @@ export default async function FacilitiesLayout({
   ];
 
   return (
-    <div className="flex min-h-screen flex-col lg:flex-row">
-      <NavSidebar user={user} title={ROLE_LABELS[Role.FACILITIES]} links={links} />
+    <div data-role={Role.FACILITIES} className="flex min-h-screen flex-col lg:flex-row">
+      <NavSidebar
+        user={user}
+        title={ROLE_LABELS[Role.FACILITIES]}
+        links={links}
+        activeAccentClassName="bg-[rgba(112,188,204,0.15)] text-[#70bccc]"
+        activeDotClassName="bg-[#70bccc]"
+        avatarClassName="bg-[#0f3038]"
+        avatarTextClassName="text-[#70bccc]"
+      />
       <main className="min-w-0 flex-1 px-4 py-6 lg:px-10 lg:py-8">
         <div className="mx-auto w-full max-w-7xl space-y-6">{children}</div>
       </main>

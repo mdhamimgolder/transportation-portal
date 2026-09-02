@@ -24,7 +24,7 @@ export default function AuthLayout({
         </div>
 
         <div className="max-w-sm">
-          <p className="font-display text-2xl leading-snug text-[#aef2ff]">
+          <p className="font-display text-2xl leading-snug text-[#70bccc]">
             Every route, one schedule.
           </p>
           <p className="mt-2 text-sm text-ink-foreground/60">
@@ -36,7 +36,7 @@ export default function AuthLayout({
 
       <div className="flex w-full flex-1 items-center justify-center bg-paper px-6 py-12 lg:w-1/2">
         <div className="w-full max-w-sm overflow-hidden rounded-2xl border bg-card shadow-sm">
-          <div className="h-1 bg-[#aef2ff]" />
+          <div className="h-1 bg-[#70bccc]" />
           <div className="px-8 pt-7 pb-8">{children}</div>
           <div className="flex items-center justify-center border-t px-8 py-3 font-mono text-[11px] tracking-wide text-muted-foreground uppercase">
             <span>Internal transport management</span>
@@ -44,5 +44,5 @@ export default function AuthLayout({
         </div>
       </div>
     </div>
-  );
+);
 }

@@ -54,6 +54,10 @@ export type EmployeeDirectoryRow = {
   contactNumber: string | null;
   address: string | null;
   pickupPoint: string | null;
+  homeLatitude: number | null;
+  homeLongitude: number | null;
+  pickupLatitude: number | null;
+  pickupLongitude: number | null;
   isActive: boolean;
 };
 
@@ -62,6 +66,7 @@ export async function getEmployeeDirectory(q?: string): Promise<EmployeeDirector
   const users = await prisma.user.findMany({
     where: { role: "EMPLOYEE" },
     orderBy: { fullName: "asc" },
+    include: { homeAddress: true, pickupAddress: true },
   });
 
   const rows: EmployeeDirectoryRow[] = users.map((u) => ({
@@ -73,6 +78,10 @@ export async function getEmployeeDirectory(q?: string): Promise<EmployeeDirector
     contactNumber: u.contactNumber,
     address: u.address,
     pickupPoint: u.pickupPoint,
+    homeLatitude: u.homeAddress?.latitude ?? null,
+    homeLongitude: u.homeAddress?.longitude ?? null,
+    pickupLatitude: u.pickupAddress?.latitude ?? null,
+    pickupLongitude: u.pickupAddress?.longitude ?? null,
     isActive: u.isActive,
   }));
 

@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { requireRole } from "@/lib/rbac/guards";
 import { sendMail } from "@/lib/mailer";
-import { Role, AdHocStatus } from "@/lib/constants/enums";
+import { Role, AdHocStatus, WeeklyScheduleStatus } from "@/lib/constants/enums";
 import type { SessionUser } from "@/lib/auth/session";
 
 export type AssignRouteState = {
@@ -179,6 +179,8 @@ export type SaveDaySheetState = {
   savedCount?: number;
   skipped?: { employeeName: string; reason: string }[];
 };
+
+
 
 /**
  * Bulk-saves the day-first planning sheet: Facilities fills in Pick-up Time

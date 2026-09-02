@@ -29,6 +29,8 @@ const SAMPLE_HEADERS = [
   "department",
   "contactNumber",
   "address",
+  "homeLatitude",
+  "homeLongitude",
   "pickupPoint",
   "password",
 ];
@@ -40,6 +42,8 @@ const SAMPLE_ROW = [
   "Logistics",
   "01700000000",
   "12 Example Street, Dhaka",
+  "23.7806",
+  "90.4070",
   "Gulshan Circle 2",
   "Passw0rd!23",
 ];
@@ -113,7 +117,7 @@ function BulkUploadDialogBody({ onDone }: { onDone: () => void }) {
           Required CSV columns:{" "}
           <code className="font-mono">
             fullName, email, role, employeeCode, department, contactNumber,
-            address, pickupPoint, password
+            address, homeLatitude, homeLongitude, pickupPoint, password
           </code>
           . Role must be one of EMPLOYEE, OPERATIONS, FACILITIES, SUPER_ADMIN.
           Password must be at least 8 characters.
@@ -127,7 +131,7 @@ function BulkUploadDialogBody({ onDone }: { onDone: () => void }) {
       </div>
       <div className="space-y-2">
         <Label htmlFor="file">CSV file</Label>
-        <Input id="file" name="file" type="file" accept=".csv,text/csv" required />
+        <Input id="file" name="file" type="file" accept=".csv,text/csv" className="surface-accent" required />
       </div>
       {state.error ? <p className="text-sm text-destructive">{state.error}</p> : null}
       <DialogFooter>
@@ -150,7 +154,7 @@ export function BulkUploadDialog() {
       }}
     >
       <DialogTrigger asChild>
-        <Button type="button" variant="outline">
+        <Button type="button" variant="outline" className="surface-accent">
           Bulk upload
         </Button>
       </DialogTrigger>

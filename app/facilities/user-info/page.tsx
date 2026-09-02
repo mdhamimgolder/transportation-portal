@@ -55,7 +55,9 @@ export default async function FacilitiesUserInfoPage({
               <TableHead>Email</TableHead>
               <TableHead>Contact</TableHead>
               <TableHead>Address</TableHead>
+              <TableHead>Home latitude/longitude</TableHead>
               <TableHead>Pick-up point</TableHead>
+              <TableHead>Pick-up latitude/longitude</TableHead>
               <TableHead>Status</TableHead>
               <TableHead className="w-40">Actions</TableHead>
             </TableRow>
@@ -63,7 +65,7 @@ export default async function FacilitiesUserInfoPage({
           <TableBody>
             {employees.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={9} className="text-center text-muted-foreground">
+                <TableCell colSpan={11} className="text-center text-muted-foreground">
                   No employees found.
                 </TableCell>
               </TableRow>
@@ -82,7 +84,17 @@ export default async function FacilitiesUserInfoPage({
                   <TableCell className="max-w-56 truncate">
                     {employee.address ?? "—"}
                   </TableCell>
+                  <TableCell className="whitespace-nowrap font-mono text-xs">
+                    {employee.homeLatitude !== null && employee.homeLongitude !== null
+                      ? `${employee.homeLatitude}, ${employee.homeLongitude}`
+                      : "Not set"}
+                  </TableCell>
                   <TableCell>{employee.pickupPoint ?? "—"}</TableCell>
+                  <TableCell className="whitespace-nowrap font-mono text-xs">
+                    {employee.pickupLatitude !== null && employee.pickupLongitude !== null
+                      ? `${employee.pickupLatitude}, ${employee.pickupLongitude}`
+                      : "Not set"}
+                  </TableCell>
                   <TableCell>
                     <Badge variant={employee.isActive ? "secondary" : "outline"}>
                       {employee.isActive ? "Active" : "Deactivated"}
@@ -96,6 +108,10 @@ export default async function FacilitiesUserInfoPage({
                         contactNumber={employee.contactNumber}
                         address={employee.address}
                         pickupPoint={employee.pickupPoint}
+                        homeLatitude={employee.homeLatitude}
+                        homeLongitude={employee.homeLongitude}
+                        pickupLatitude={employee.pickupLatitude}
+                        pickupLongitude={employee.pickupLongitude}
                       />
                       <SetPasswordDialog userId={employee.id} fullName={employee.fullName} />
                     </div>

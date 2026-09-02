@@ -32,7 +32,10 @@ export function ThisWeekScheduleCard({
         <p className="font-mono text-xs font-medium tracking-[0.12em] text-white/70 uppercase">
           This week&apos;s schedule
         </p>
-        <span className="shrink-0 rounded-full bg-[#aef2ff] px-2.5 py-0.5 text-[11px] font-semibold text-[#001014]">
+        <span
+          className="shrink-0 rounded-full px-2.5 py-0.5 text-[11px] font-semibold"
+          style={{ background: "var(--role-accent)", color: "var(--ink)" }}
+        >
           {label}
         </span>
       </div>
@@ -40,7 +43,8 @@ export function ThisWeekScheduleCard({
       <p className="text-xs text-white/50">{hint}</p>
       <Button
         asChild
-        className="mt-4 w-full rounded-full bg-[#aef2ff] text-[#001014] hover:bg-[#d3f8ff]"
+        className="mt-4 w-full rounded-full"
+        style={{ background: "var(--role-accent)", color: "var(--ink)" }}
       >
         <Link href={href}>{buttonLabel}</Link>
       </Button>

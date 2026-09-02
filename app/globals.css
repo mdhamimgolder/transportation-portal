@@ -1,7 +1,58 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 
+/* Tailwind content detection is automatic; exclude the stale legacy copies so
+   their class strings (old role colors, retired tokens) don't generate dead
+   utilities in the shipped CSS. */
+@source not "../_archived-fastapi-scaffold-2026-07-27/**";
+@source not "../frontend/**";
+@source not "../.claude/worktrees/**";
+
 @custom-variant dark (&:is(.dark *));
+
+/* Typography -- "Refined Inter". Inter Variable (`--font-sans`, set by next/font
+   on <html>) drives both body and headings; the "Inter Display" cut is achieved
+   with optical sizing + Inter's stylistic alternates (cv11/ss03/ss07) and tight
+   tracking at display sizes. JetBrains Mono (`--font-mono`) is the data voice
+   for times, plate/route codes, and countdowns. Bengali fallback in the stack. */
+:root {
+  --font-sans-bn: "Hind Siliguri", "Noto Sans Bengali";
+  --font-sans-stack: var(--font-sans), var(--font-sans-bn),
+                      ui-sans-serif, system-ui, sans-serif;
+  --font-mono-stack: var(--font-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+html {
+  font-family: var(--font-sans-stack);
+  font-feature-settings: "cv11", "ss03", "ss07", "tnum", "zero";
+  font-optical-sizing: auto;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Utility for numeric-heavy contexts where tnum must be explicit. */
+.tabular {
+  font-variant-numeric: tabular-nums slashed-zero;
+}
+
+/* Accent surfaces -- Search / Upload / Export (and the like): the shared
+   #70BCCC "attention" cyan carried only as a thin rim on a near-white fill
+   (not fully white), so the controls that move a request along stand out
+   from plain inputs while staying clean. Un-layered rules, so they win over
+   Tailwind's layered bg-/border- utilities. */
+.surface-accent {
+  background-color: var(--surface);
+  border-color: rgb(112 188 204 / 0.55);
+}
+.surface-accent:hover:not(:disabled) {
+  background-color: rgb(112 188 204 / 0.08);
+  border-color: rgb(112 188 204 / 0.75);
+}
+.surface-accent:focus-visible {
+  background-color: rgb(112 188 204 / 0.08);
+  border-color: rgb(112 188 204 / 0.9);
+}
 
 /* Design tokens -- "manifest" system: an ink-dark brand spine (sidebar, auth)
    against a warm paper content canvas (dense schedules/tables), with a single
@@ -34,9 +85,13 @@
   --destructive: #b8412c;
   --border: #ddd7c8;
   --input: #d6d0bf;
-  --ring: #3fa79a;
+  --ring: #70bccc;
 
-  --teal: #3fa79a;
+  /* Input field surface -- near-white (not fully white) so fields read as
+     "typing surfaces" against the warm paper canvas. */
+  --surface: #faf9f4;
+
+  --teal: #70bccc;
   --teal-foreground: #ffffff;
 
   --amber: #e2932f;
@@ -45,10 +100,6 @@
   --green-foreground: #f5f3ec;
   --red: #b8412c;
   --red-foreground: #f5f3ec;
-
-  --font-display: var(--font-space-grotesk), ui-sans-serif, system-ui, sans-serif;
-  --font-sans: var(--font-plex-sans), ui-sans-serif, system-ui, sans-serif;
-  --font-mono: var(--font-plex-mono), ui-monospace, "SFMono-Regular", monospace;
 }
 
 .dark {
@@ -58,23 +109,38 @@
   --card-foreground: #f2f6f7;
   --popover: #0d1214;
   --popover-foreground: #f2f6f7;
-  --primary: #aef2ff;
+  --primary: #70bccc;
   --primary-foreground: #001014;
   --secondary: #131a1c;
   --secondary-foreground: #f2f6f7;
   --muted: #131a1c;
   --muted-foreground: #8fa3a8;
   --accent: #12262c;
-  --accent-foreground: #aef2ff;
+  --accent-foreground: #70bccc;
   --destructive: #e2684f;
   --border: #1c2427;
   --input: #1c2427;
-  --ring: #aef2ff;
-  --teal: #aef2ff;
+  --ring: #70bccc;
+  --surface: #131a1f;
+  --teal: #70bccc;
   --teal-foreground: #001014;
 }
 
+/* Accent tokens -- one system-wide highlight hue for every role: `--role-accent`
+   is the primary accent (text/active/highlights), `--role-accent-soft` is a
+   translucent fill for chips/hover states, `--role-accent-deep` is a darker
+   backdrop for the ink hero. `--color-role-*` maps them into Tailwind. */
+:root {
+  --role-accent: #70bccc;
+  --role-accent-soft: rgba(112, 188, 204, 0.15);
+  --role-accent-deep: #0f3038;
+}
+
 @theme inline {
+  --color-role-accent: var(--role-accent);
+  --color-role-accent-soft: var(--role-accent-soft);
+  --color-role-accent-deep: var(--role-accent-deep);
+
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
@@ -93,6 +159,7 @@
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
+  --color-surface: var(--surface);
   --color-teal: var(--teal);
   --color-teal-foreground: var(--teal-foreground);
   --color-amber: var(--amber);
@@ -112,12 +179,19 @@
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) + 4px);
+
+  /* Refined Inter: all three Tailwind utilities resolve to the stacks above
+     (Inter Variable + Bengali fallback for sans/display; JetBrains Mono for
+     mono). Registered in @theme so font-display / font-sans / font-mono emit. */
+  --font-display: var(--font-sans-stack);
+  --font-sans: var(--font-sans-stack);
+  --font-mono: var(--font-mono-stack);
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: var(--font-sans);
+  font-family: var(--font-sans-stack);
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
 }
@@ -126,6 +200,48 @@ body {
 .font-mono,
 .tabular-nums {
   font-variant-numeric: tabular-nums;
+}
+
+/* Fixed type scale -- "Refined Inter". Utilities: text-display-xl, text-display-l,
+   text-h1, text-h2, text-body, text-body-strong, text-small, text-micro, text-mono-s.
+   Display sizes tighten tracking and use the bold cut for the "Inter Display" feel. */
+@theme {
+  --text-display-xl: 2rem;
+  --text-display-xl--line-height: 2.5rem;
+  --text-display-xl--letter-spacing: -0.02em;
+  --text-display-xl--font-weight: 700;
+  --text-display-l: 1.5rem;
+  --text-display-l--line-height: 2rem;
+  --text-display-l--letter-spacing: -0.015em;
+  --text-display-l--font-weight: 700;
+  --text-h1: 1.25rem;
+  --text-h1--line-height: 1.75rem;
+  --text-h1--letter-spacing: -0.01em;
+  --text-h1--font-weight: 600;
+  --text-h2: 1rem;
+  --text-h2--line-height: 1.5rem;
+  --text-h2--letter-spacing: 0;
+  --text-h2--font-weight: 600;
+  --text-body: 0.875rem;
+  --text-body--line-height: 1.25rem;
+  --text-body--letter-spacing: 0;
+  --text-body--font-weight: 400;
+  --text-body-strong: 0.875rem;
+  --text-body-strong--line-height: 1.25rem;
+  --text-body-strong--letter-spacing: 0;
+  --text-body-strong--font-weight: 500;
+  --text-small: 0.8125rem;
+  --text-small--line-height: 1.125rem;
+  --text-small--letter-spacing: 0;
+  --text-small--font-weight: 400;
+  --text-micro: 0.6875rem;
+  --text-micro--line-height: 1rem;
+  --text-micro--letter-spacing: 0.04em;
+  --text-micro--font-weight: 500;
+  --text-mono-s: 0.75rem;
+  --text-mono-s--line-height: 1.125rem;
+  --text-mono-s--letter-spacing: 0;
+  --text-mono-s--font-weight: 400;
 }
 
 @keyframes route-loop-spin {

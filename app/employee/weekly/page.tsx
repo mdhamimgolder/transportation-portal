@@ -1,30 +1,65 @@
 import { requireRole } from "@/lib/rbac/guards";
 import { Role } from "@/lib/constants/enums";
 import { prisma } from "@/lib/prisma";
-import { getWeekDays, DAY_LABELS, formatShortDate } from "@/lib/date/week";
-import { ARRIVAL_TIME_OPTIONS } from "@/lib/constants/arrival-times";
+import {
+  getWeekDays,
+  getSubmissionWindow,
+  DAY_LABELS,
+  formatShortDate,
+} from "@/lib/date/week";
+import { getTransportSettings } from "@/lib/queries/settings";
 import { StatusBadge } from "@/components/shared/status-badge";
+import { WeeklyScheduleTable } from "@/components/employee/weekly-schedule-table";
+
+function toWeekDays(schedule: { weekStartDate: Date; days: Array<{ dayOfWeek: number; needsTransport: boolean; arrivalTime: string | null }> }) {
+  const weekDates = getWeekDays(schedule.weekStartDate);
+  return weekDates.map((date, i) => {
+    const day = schedule.days.find((d) => d.dayOfWeek === i + 1);
+    return {
+      dayOfWeek: i + 1,
+      label: DAY_LABELS[i],
+      dateLabel: formatShortDate(date),
+      needsTransport: day?.needsTransport ?? false,
+      arrivalTime: day?.arrivalTime ?? null,
+    };
+  });
+}
 
 export default async function WeeklySchedulePage() {
   const session = await requireRole([Role.EMPLOYEE]);
 
-  const schedules = await prisma.weeklySchedule.findMany({
-    where: { employeeId: session.id },
-    include: { days: true },
-    orderBy: { weekStartDate: "desc" },
-    take: 8,
-  });
-
-  const ARRIVAL_TIME_LABELS = Object.fromEntries(
-    ARRIVAL_TIME_OPTIONS.map((o) => [o.value, o.label])
+  const settings = await getTransportSettings();
+  const window = getSubmissionWindow(
+    new Date(),
+    settings.weeklyLockDayOfWeek,
+    settings.weeklyLockHour,
+    settings.weeklyLockMinute
   );
 
+  // Employees see the currently-open submission week plus the one before it.
+  const thisMonday = window.weekStartDate;
+  const prevMonday = new Date(thisMonday.getTime() - 7 * 24 * 60 * 60 * 1000);
+
+  const schedules = await prisma.weeklySchedule.findMany({
+    where: {
+      employeeId: session.id,
+      weekStartDate: { in: [thisMonday, prevMonday] },
+    },
+    include: { days: true },
+    orderBy: { weekStartDate: "desc" },
+  });
+
+  const [latest, ...history] = schedules;
+
   return (
-    <div className="space-y-4">
+    <div className="space-y-6">
       <div>
-        <h1 className="text-xl font-semibold">Weekly Transport</h1>
-        <p className="text-sm text-muted-foreground">
-          Your weekly transport schedule, set by Operation-Admin.
+        <h1 className="font-display text-2xl font-semibold text-foreground">
+          Your weekly transport
+        </h1>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Your office-transport schedule, set by Operation-Admin. One row per
+          day — select a day to see the full 24-hour arrival time.
         </p>
       </div>
 
@@ -33,45 +68,44 @@ export default async function WeeklySchedulePage() {
           No weekly schedule has been set yet.
         </p>
       ) : (
-        <div className="space-y-3">
-          {schedules.map((schedule) => {
-            const weekDates = getWeekDays(schedule.weekStartDate);
-            return (
-              <div key={schedule.id} className="rounded-lg border p-3">
-                <div className="mb-2 flex items-center justify-between gap-3">
-                  <p className="text-sm font-medium">
-                    Week of {formatShortDate(weekDates[0])} –{" "}
-                    {formatShortDate(weekDates[4])}
-                  </p>
-                  <StatusBadge status={schedule.status} />
+        <>
+          <section>
+            {latest ? (
+              <WeeklyScheduleTable
+                key={latest.id}
+                days={toWeekDays(latest)}
+                title="This week's schedule"
+                subtitle={`Week of ${formatShortDate(getWeekDays(latest.weekStartDate)[0])} – ${formatShortDate(getWeekDays(latest.weekStartDate)[4])}`}
+                statusNode={<StatusBadge status={latest.status} />}
+              />
+            ) : null}
+          </section>
+
+          {history.length > 0 ? (
+            <section id="history" className="scroll-mt-6 space-y-3">
+              <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                Previous week
+              </h2>
+              {history.map((schedule) => (
+                <div key={schedule.id} className="space-y-2">
+                  <div className="flex items-center justify-between gap-3 px-1">
+                    <p className="text-sm font-medium">
+                      Week of {formatShortDate(getWeekDays(schedule.weekStartDate)[0])} –{" "}
+                      {formatShortDate(getWeekDays(schedule.weekStartDate)[4])}
+                    </p>
+                    <StatusBadge status={schedule.status} />
+                  </div>
+                  <WeeklyScheduleTable days={toWeekDays(schedule)} compact />
+                  {schedule.status === "REJECTED" && schedule.rejectReason ? (
+                    <p className="px-1 text-xs text-muted-foreground">
+                      Reason: {schedule.rejectReason}
+                    </p>
+                  ) : null}
                 </div>
-                <div className="grid grid-cols-[repeat(auto-fit,minmax(7rem,1fr))] gap-2">
-                  {weekDates.map((date, i) => {
-                    const day = schedule.days.find((d) => d.dayOfWeek === i + 1);
-                    const arrivalLabel =
-                      day && day.needsTransport && day.arrivalTime
-                        ? ARRIVAL_TIME_LABELS[day.arrivalTime] ?? day.arrivalTime
-                        : "Not Required";
-                    return (
-                      <div key={i} className="rounded-md bg-muted/40 px-2.5 py-1.5">
-                        <p className="text-xs font-medium text-muted-foreground">
-                          {DAY_LABELS[i]}
-                        </p>
-                        <p className="text-xs">{formatShortDate(date)}</p>
-                        <p className="text-sm font-medium">{arrivalLabel}</p>
-                      </div>
-                    );
-                  })}
-                </div>
-                {schedule.status === "REJECTED" && schedule.rejectReason ? (
-                  <p className="mt-2 text-xs text-muted-foreground">
-                    Reason: {schedule.rejectReason}
-                  </p>
-                ) : null}
-              </div>
-            );
-          })}
-        </div>
+              ))}
+            </section>
+          ) : null}
+        </>
       )}
     </div>
   );

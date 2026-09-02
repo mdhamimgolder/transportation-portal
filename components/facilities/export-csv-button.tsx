@@ -37,7 +37,7 @@ export function ExportCsvButton({
   }
 
   return (
-    <Button type="button" variant="outline" onClick={handleExport}>
+    <Button type="button" variant="outline" className="surface-accent" onClick={handleExport}>
       {label}
     </Button>
   );

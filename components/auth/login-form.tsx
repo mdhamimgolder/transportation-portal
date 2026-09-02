@@ -16,7 +16,7 @@ function SubmitButton() {
   return (
     <Button
       type="submit"
-      className="mx-auto block w-auto min-w-32 bg-[#aef2ff] px-8 text-[#001014] hover:bg-[#d3f8ff]"
+      className="mx-auto block w-auto min-w-32 bg-[#70bccc] px-8 text-[#001014] hover:bg-[#8fd0dd]"
       disabled={pending}
     >
       {pending ? "Signing in…" : "Sign in"}

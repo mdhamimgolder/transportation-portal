@@ -41,7 +41,7 @@ export function SearchBox({
       value={q}
       onChange={(e) => handleChange(e.target.value)}
       placeholder={placeholder}
-      className="w-72"
+      className="surface-accent w-72"
     />
   );
 }

@@ -4,7 +4,11 @@ import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { requireRole } from "@/lib/rbac/guards";
 import { startOfToday } from "@/lib/date/week";
-import { ADHOC_ARRIVAL_TIME_OPTIONS } from "@/lib/constants/adhoc-arrival-times";
+import {
+  ADHOC_ARRIVAL_TIME_OPTIONS,
+  ADHOC_PICKUP_REQUIRED_TIME,
+  isAdhocArrivalEligible,
+} from "@/lib/constants/adhoc-arrival-times";
 import { Role, AdHocStatus } from "@/lib/constants/enums";
 
 export type SubmitAdHocRequestState = {
@@ -30,6 +34,26 @@ export async function submitAdHocRequest(
   }
 
   const today = startOfToday();
+
+  if (!isAdhocArrivalEligible(today, arrivalTime)) {
+    return {
+      error:
+        "Ad-hoc requests need at least 3 hours' notice. Please choose a later arrival time.",
+    };
+  }
+
+  if (arrivalTime === ADHOC_PICKUP_REQUIRED_TIME) {
+    const user = await prisma.user.findUnique({
+      where: { id: session.id },
+      select: { pickupPoint: true },
+    });
+    if (!user?.pickupPoint) {
+      return {
+        error:
+          "Pick-up Point is required for a 10:00 PM arrival. Update your pick-up point in your profile first.",
+      };
+    }
+  }
 
   const existingWeeklyDay = await prisma.weeklyScheduleDay.findFirst({
     where: {
