@@ -128,7 +128,7 @@ export function AssignmentForm({
                 name="pickupTime"
                 defaultValue={existing?.pickupTime}
                 placeholder="10:30 PM"
-                className="h-8 min-w-0 flex-1"
+                className="h-8 w-24 min-w-0 shrink-0"
               />
             ) : (
               <Select name="pickupTime" defaultValue={existing?.pickupTime}>

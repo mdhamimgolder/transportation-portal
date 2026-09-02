@@ -16,8 +16,6 @@ function labelFor(option: VehicleDriverOption): string {
   return `${option.driverName} · ${option.vehicleNumber} (${option.vendor})`;
 }
 
-const ROWS_VISIBLE = 3;
-
 export function VehicleDriverCombobox({
   name,
   options,
@@ -58,14 +56,9 @@ export function VehicleDriverCombobox({
     );
   }, [options, query]);
 
-  // Keep three driver rows visible even while searching: top matches first,
-  // padded with the next available drivers so the list never collapses.
-  const rows = useMemo(() => {
-    if (filtered.length >= ROWS_VISIBLE) return filtered.slice(0, ROWS_VISIBLE);
-    const shown = new Set(filtered.map((o) => o.id));
-    const extras = options.filter((o) => !shown.has(o.id));
-    return [...filtered, ...extras].slice(0, ROWS_VISIBLE);
-  }, [filtered, options]);
+  // Every matching driver is listed; the box shows a window of rows
+  // and scrolls when there are more.
+  const rows = useMemo(() => filtered, [filtered]);
 
   return (
     <div ref={containerRef} className={cn("relative", className)}>
@@ -85,7 +78,7 @@ export function VehicleDriverCombobox({
         }}
       />
       {open ? (
-        <div className="absolute z-20 mt-1 max-h-[7.5rem] w-full min-w-64 overflow-y-auto rounded-md border bg-popover p-1 shadow-md">
+        <div className="absolute z-20 mt-1 max-h-[10rem] w-full min-w-64 overflow-y-auto rounded-md border bg-popover p-1 shadow-md">
           {rows.length === 0 ? (
             <p className="px-2 py-1.5 text-sm text-muted-foreground">No matches.</p>
           ) : (
