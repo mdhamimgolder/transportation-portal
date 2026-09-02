@@ -11,13 +11,7 @@ const DAYS = [
   { value: "5", label: "Friday" },
 ];
 
-export function RoutePlanningControls({
-  view,
-  day,
-}: {
-  view: "employee" | "day";
-  day: string;
-}) {
+export function RoutePlanningControls({ day }: { day: string }) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -29,41 +23,18 @@ export function RoutePlanningControls({
   }
 
   return (
-    <div className="flex flex-wrap items-center gap-3">
-      <div className="inline-flex rounded-lg border p-1">
+    <div className="inline-flex flex-wrap rounded-lg border p-1">
+      {DAYS.map((d) => (
         <Button
+          key={d.value}
           type="button"
           size="sm"
-          variant={view === "employee" ? "default" : "ghost"}
-          onClick={() => setParams({ view: "employee" })}
+          variant={day === d.value ? "default" : "ghost"}
+          onClick={() => setParams({ day: d.value })}
         >
-          By employee
+          {d.label}
         </Button>
-        <Button
-          type="button"
-          size="sm"
-          variant={view === "day" ? "default" : "ghost"}
-          onClick={() => setParams({ view: "day", day })}
-        >
-          By day (sheet)
-        </Button>
-      </div>
-
-      {view === "day" ? (
-        <div className="inline-flex flex-wrap rounded-lg border p-1">
-          {DAYS.map((d) => (
-            <Button
-              key={d.value}
-              type="button"
-              size="sm"
-              variant={day === d.value ? "default" : "ghost"}
-              onClick={() => setParams({ view: "day", day: d.value })}
-            >
-              {d.label}
-            </Button>
-          ))}
-        </div>
-      ) : null}
+      ))}
     </div>
   );
 }
