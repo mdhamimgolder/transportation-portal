@@ -13,7 +13,6 @@ import {
 } from "@/components/ui/table";
 import { VehicleDriverFormDialog } from "@/components/facilities/vehicle-driver-form-dialog";
 import { VehicleDriverBulkUploadDialog } from "@/components/facilities/vehicle-driver-bulk-upload-dialog";
-import { VehiclePickupPointsManager } from "@/components/facilities/vehicle-pickup-points-manager";
 
 export default async function VehiclesAndDriversPage() {
   await requireRole([Role.FACILITIES]);
@@ -21,18 +20,6 @@ export default async function VehiclesAndDriversPage() {
   const records = await prisma.vehicleDriver.findMany({
     where: { isActive: true },
     orderBy: { driverName: "asc" },
-  });
-
-  // Fetch advanced route planning vehicles with pickup points
-  const advancedVehicles = await prisma.vehicle.findMany({
-    where: { isActive: true },
-    include: {
-      pickupSequence: {
-        where: { isActive: true },
-        include: { address: true },
-      },
-    },
-    orderBy: { vehicleNumber: "asc" },
   });
 
   return (
@@ -94,19 +81,6 @@ export default async function VehiclesAndDriversPage() {
           </TableBody>
         </Table>
       </div>
-
-      {/* Advanced Route Planning - Vehicles with Pickup Points */}
-      {advancedVehicles.length > 0 && (
-        <div className="mt-8 pt-8 border-t">
-          <div className="mb-6">
-            <h2 className="text-xl font-semibold">Route Planner - Vehicles & Pickup Points</h2>
-            <p className="text-sm text-muted-foreground mt-1">
-              Manage preset pickup locations for the 10 PM shift. Points are used in order for optimized routes.
-            </p>
-          </div>
-          <VehiclePickupPointsManager vehicles={advancedVehicles} />
-        </div>
-      )}
     </div>
   );
 }
