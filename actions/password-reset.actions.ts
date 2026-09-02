@@ -1,11 +1,12 @@
 "use server";
 
+import { after } from "next/server";
 import { randomBytes } from "node:crypto";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { hashPassword } from "@/lib/auth/password";
-import { sendMail } from "@/lib/mailer";
+import { sendMailBackground } from "@/lib/mailer";
 import {
   forgotPasswordSchema,
   resetPasswordSchema,
@@ -47,10 +48,12 @@ export async function requestPasswordResetAction(
     const protocol = host.startsWith("localhost") ? "http" : "https";
     const resetUrl = `${protocol}://${host}/reset-password/${token}`;
 
-    await sendMail({
-      to: user.email,
-      subject: "Reset your Transportation Portal password",
-      body: `Hi ${user.fullName},\n\nUse the link below to reset your password. This link expires in 1 hour.\n\n${resetUrl}\n\nIf you didn't request this, you can ignore this email.`,
+    after(async () => {
+      await sendMailBackground({
+        to: user.email,
+        subject: "Reset your Transportation Portal password",
+        body: `Hi ${user.fullName},\n\nUse the link below to reset your password. This link expires in 1 hour.\n\n${resetUrl}\n\nIf you didn't request this, you can ignore this email.`,
+      });
     });
   }
 

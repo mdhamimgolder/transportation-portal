@@ -1,10 +1,11 @@
 "use server";
 
+import { after } from "next/server";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { requireRole } from "@/lib/rbac/guards";
-import { sendMail } from "@/lib/mailer";
-import { Role, AdHocStatus, WeeklyScheduleStatus } from "@/lib/constants/enums";
+import { sendMailBackground } from "@/lib/mailer";
+import { Role, AdHocStatus } from "@/lib/constants/enums";
 import type { SessionUser } from "@/lib/auth/session";
 
 export type AssignRouteState = {
@@ -38,22 +39,53 @@ async function upsertAssignmentForWeeklyDay(params: {
       pickupTime,
       assignedById: actor.id,
       assignedAt: new Date(),
-      emailSentAt: new Date(),
     },
     create: {
       weeklyScheduleDayId,
       vehicleDriverId,
       pickupTime,
       assignedById: actor.id,
-      emailSentAt: new Date(),
     },
   });
 
   const employee = day.weeklySchedule.employee;
-  await sendMail({
-    to: employee.email,
-    subject: "Your transport has been arranged",
-    body: `Hi ${employee.fullName},\n\nYour transport for ${day.date.toDateString()} has been arranged:\nDriver: ${vehicleDriver.driverName} (${vehicleDriver.contactNumber})\nVehicle: ${vehicleDriver.vehicleNumber}\nPickup time: ${pickupTime}\n\n- Facilities Team`,
+  after(async () => {
+    await sendMailBackground({
+      to: employee.email,
+      subject: "Your transport has been arranged",
+      body: `Hi ${employee.fullName},\n\nYour transport for ${day.date.toDateString()} has been arranged:\nDriver: ${vehicleDriver.driverName} (${vehicleDriver.contactNumber})\nVehicle: ${vehicleDriver.vehicleNumber}\nPickup time: ${pickupTime}\n\n- Facilities Team`,
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+          <h2 style="color: #1a1a2e;">Your Transport Has Been Arranged</h2>
+          <p>Hi <strong>${employee.fullName}</strong>,</p>
+          <p>Your transport for <strong>${day.date.toDateString()}</strong> has been arranged with the following details:</p>
+          <table style="width: 100%; border-collapse: collapse; margin: 16px 0;">
+            <tr style="background: #f8f9fa;">
+              <td style="padding: 10px; border: 1px solid #dee2e6; font-weight: bold;">Driver</td>
+              <td style="padding: 10px; border: 1px solid #dee2e6;">${vehicleDriver.driverName}</td>
+            </tr>
+            <tr>
+              <td style="padding: 10px; border: 1px solid #dee2e6; font-weight: bold;">Contact</td>
+              <td style="padding: 10px; border: 1px solid #dee2e6;">${vehicleDriver.contactNumber}</td>
+            </tr>
+            <tr style="background: #f8f9fa;">
+              <td style="padding: 10px; border: 1px solid #dee2e6; font-weight: bold;">Vehicle</td>
+              <td style="padding: 10px; border: 1px solid #dee2e6;">${vehicleDriver.vehicleNumber}</td>
+            </tr>
+            <tr>
+              <td style="padding: 10px; border: 1px solid #dee2e6; font-weight: bold;">Pickup Time</td>
+              <td style="padding: 10px; border: 1px solid #dee2e6;">${pickupTime}</td>
+            </tr>
+          </table>
+          <p>Please be ready at the pickup location at the scheduled time.</p>
+          <p style="color: #6c757d; margin-top: 24px;">Best regards,<br><strong>Facilities Team</strong></p>
+        </div>
+      `,
+    });
+    await prisma.routeAssignment.update({
+      where: { id: assignment.id },
+      data: { emailSentAt: new Date() },
+    });
   });
 
   return assignment;
@@ -85,14 +117,12 @@ async function upsertAssignmentForAdHoc(params: {
       pickupTime,
       assignedById: actor.id,
       assignedAt: new Date(),
-      emailSentAt: new Date(),
     },
     create: {
       adHocRequestId,
       vehicleDriverId,
       pickupTime,
       assignedById: actor.id,
-      emailSentAt: new Date(),
     },
   });
 
@@ -101,10 +131,43 @@ async function upsertAssignmentForAdHoc(params: {
     data: { status: AdHocStatus.ASSIGNED },
   });
 
-  await sendMail({
-    to: request.employee.email,
-    subject: "Your ad-hoc transport has been arranged",
-    body: `Hi ${request.employee.fullName},\n\nYour ad-hoc transport for ${request.date.toDateString()} has been arranged:\nDriver: ${vehicleDriver.driverName} (${vehicleDriver.contactNumber})\nVehicle: ${vehicleDriver.vehicleNumber}\nPickup time: ${pickupTime}\n\n- Facilities Team`,
+  after(async () => {
+    await sendMailBackground({
+      to: request.employee.email,
+      subject: "Your ad-hoc transport has been arranged",
+      body: `Hi ${request.employee.fullName},\n\nYour ad-hoc transport for ${request.date.toDateString()} has been arranged:\nDriver: ${vehicleDriver.driverName} (${vehicleDriver.contactNumber})\nVehicle: ${vehicleDriver.vehicleNumber}\nPickup time: ${pickupTime}\n\n- Facilities Team`,
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+          <h2 style="color: #1a1a2e;">Your Ad-Hoc Transport Has Been Arranged</h2>
+          <p>Hi <strong>${request.employee.fullName}</strong>,</p>
+          <p>Your ad-hoc transport for <strong>${request.date.toDateString()}</strong> has been arranged with the following details:</p>
+          <table style="width: 100%; border-collapse: collapse; margin: 16px 0;">
+            <tr style="background: #f8f9fa;">
+              <td style="padding: 10px; border: 1px solid #dee2e6; font-weight: bold;">Driver</td>
+              <td style="padding: 10px; border: 1px solid #dee2e6;">${vehicleDriver.driverName}</td>
+            </tr>
+            <tr>
+              <td style="padding: 10px; border: 1px solid #dee2e6; font-weight: bold;">Contact</td>
+              <td style="padding: 10px; border: 1px solid #dee2e6;">${vehicleDriver.contactNumber}</td>
+            </tr>
+            <tr style="background: #f8f9fa;">
+              <td style="padding: 10px; border: 1px solid #dee2e6; font-weight: bold;">Vehicle</td>
+              <td style="padding: 10px; border: 1px solid #dee2e6;">${vehicleDriver.vehicleNumber}</td>
+            </tr>
+            <tr>
+              <td style="padding: 10px; border: 1px solid #dee2e6; font-weight: bold;">Pickup Time</td>
+              <td style="padding: 10px; border: 1px solid #dee2e6;">${pickupTime}</td>
+            </tr>
+          </table>
+          <p>Please be ready at the pickup location at the scheduled time.</p>
+          <p style="color: #6c757d; margin-top: 24px;">Best regards,<br><strong>Facilities Team</strong></p>
+        </div>
+      `,
+    });
+    await prisma.routeAssignment.update({
+      where: { id: assignment.id },
+      data: { emailSentAt: new Date() },
+    });
   });
 
   return assignment;

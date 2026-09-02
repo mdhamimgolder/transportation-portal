@@ -1,13 +1,67 @@
 "use server";
 
+import { after } from "next/server";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { requireRole } from "@/lib/rbac/guards";
-import { getSubmissionWindow, getWeekDays } from "@/lib/date/week";
+import { getSubmissionWindow, getWeekDays, DAY_LABELS, formatShortDate } from "@/lib/date/week";
 import { getTransportSettings } from "@/lib/queries/settings";
 import { NO_TRANSPORT_VALUE, ARRIVAL_TIME_OPTIONS } from "@/lib/constants/arrival-times";
+import { sendMailBackground } from "@/lib/mailer";
 import { Role, WeeklyScheduleStatus } from "@/lib/constants/enums";
 import { parseCsv } from "@/lib/csv";
+
+const ARRIVAL_VALUE_TO_LABEL = Object.fromEntries(
+  ARRIVAL_TIME_OPTIONS.map((o) => [o.value, o.label])
+);
+
+type SubmitNoticeArgs = {
+  to: string;
+  fullName: string;
+  weekStartDate: Date;
+  days: { dayOfWeek: number; date: Date; needsTransport: boolean; arrivalTime: string | null }[];
+};
+
+function sendScheduleSubmittedNotice({ to, fullName, weekStartDate, days }: SubmitNoticeArgs) {
+  const subject = "Your schedule has been submitted";
+  const bodyRows = days
+    .map((d) => {
+      const label = d.needsTransport ? ARRIVAL_VALUE_TO_LABEL[d.arrivalTime ?? ""] ?? d.arrivalTime : "Not required";
+      return `${DAY_LABELS[d.dayOfWeek - 1]} (${formatShortDate(d.date)}): ${d.needsTransport ? `Arrival ${label}` : "No transport"}`;
+    })
+    .join("\n");
+
+  const htmlRows = days
+    .map((d) => {
+      const label = d.needsTransport ? ARRIVAL_VALUE_TO_LABEL[d.arrivalTime ?? ""] ?? d.arrivalTime : "Not required";
+      return `
+        <tr style="background: #f8f9fa;">
+          <td style="padding: 10px; border: 1px solid #dee2e6; font-weight: bold;">${DAY_LABELS[d.dayOfWeek - 1]} — ${formatShortDate(d.date)}</td>
+          <td style="padding: 10px; border: 1px solid #dee2e6;">${d.needsTransport ? label : "No transport"}</td>
+        </tr>`;
+    })
+    .join("");
+
+  return after(async () => {
+    await sendMailBackground({
+      to,
+      subject,
+      body: `Hi ${fullName},\n\nYour weekly schedule for the week of ${weekStartDate.toDateString()} has been submitted successfully.\n\nDay-wise schedule:\n${bodyRows}\n\nTo view your current week schedule and find your day-wise assignment, please log in to the system and open the "My Schedule" page.\n\nThank you.`,
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+          <h2 style="color: #1a1a2e;">Your Schedule Has Been Submitted</h2>
+          <p>Hi <strong>${fullName}</strong>,</p>
+          <p>Your weekly schedule for the week of <strong>${weekStartDate.toDateString()}</strong> has been submitted successfully.</p>
+          <table style="width: 100%; border-collapse: collapse; margin: 16px 0;">
+            ${htmlRows}
+          </table>
+          <p>To view your current week schedule and find your day-wise assignment, please <strong>log in to the system</strong> and open the <strong>My Schedule</strong> page.</p>
+          <p style="color: #6c757d; margin-top: 24px;">Best regards,<br><strong>Transportation Team</strong></p>
+        </div>
+      `,
+    });
+  });
+}
 
 const VALID_DAY_VALUES = new Set([
   NO_TRANSPORT_VALUE,
@@ -181,9 +235,16 @@ export async function submitMySchedule(
     },
   });
 
+  const submittedDays: SubmitNoticeArgs["days"] = [];
   for (let i = 0; i < 5; i++) {
     const value = dayValues[i];
     const needsTransport = value !== NO_TRANSPORT_VALUE;
+    submittedDays.push({
+      dayOfWeek: i + 1,
+      date: weekDates[i],
+      needsTransport,
+      arrivalTime: needsTransport ? value : null,
+    });
     await prisma.weeklyScheduleDay.upsert({
       where: {
         weeklyScheduleId_dayOfWeek: {
@@ -205,6 +266,13 @@ export async function submitMySchedule(
       },
     });
   }
+
+  sendScheduleSubmittedNotice({
+    to: session.email,
+    fullName: session.fullName,
+    weekStartDate,
+    days: submittedDays,
+  });
 
   revalidatePath("/operations/my-schedule");
   revalidatePath("/operations/weekly-requests");
@@ -476,9 +544,16 @@ export async function bulkUploadWeeklySchedules(
       },
     });
 
+    const uploadedDays: SubmitNoticeArgs["days"] = [];
     for (let d = 0; d < 5; d++) {
       const value = dayValues[d];
       const needsTransport = value !== NO_TRANSPORT_VALUE;
+      uploadedDays.push({
+        dayOfWeek: d + 1,
+        date: weekDates[d],
+        needsTransport,
+        arrivalTime: needsTransport ? value : null,
+      });
       await prisma.weeklyScheduleDay.upsert({
         where: {
           weeklyScheduleId_dayOfWeek: { weeklyScheduleId: scheduleId, dayOfWeek: d + 1 },
@@ -497,6 +572,13 @@ export async function bulkUploadWeeklySchedules(
         },
       });
     }
+
+    sendScheduleSubmittedNotice({
+      to: employee.email,
+      fullName: employee.fullName,
+      weekStartDate,
+      days: uploadedDays,
+    });
 
     created.push({ employeeName: employee.fullName, email: employee.email });
   }
