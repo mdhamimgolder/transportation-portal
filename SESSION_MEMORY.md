@@ -57,6 +57,31 @@ work fast without interruption.
 - **tsx scripts** need `import "dotenv/config"` at top; no top-level await (use `async main()`);
   temp scripts live in repo root (`_name.ts`) and are deleted after verifying.
 
+## Latest Session (2026-09-03h) — Background email dispatch for Vercel (`after()`); dev-server cache corruption fix
+**Built; tsc + eslint clean; dev server restarted (clean Turbopack cache); /facilities/dashboard /login 200; log clean. NOT committed.**
+1. **Motivation:** Vercel checklist — allocation emails were all `await sendMail()` BLOCKING the server action
+   (sequential in loops) → would timeout (10s hobby/60s pro) on Vercel for bulk day-sheet saves; `emailSentAt`
+   was stamped BEFORE send (DB lies on failure). Moved ALL email dispatch to Next.js `after()` so the response
+   returns instantly and emails fire after the response.
+2. **`lib/mailer.ts`** — added `sendMailBackground(params)` (non-throwing wrapper: catches, logs, never rejects).
+   `sendMail` unchanged for any caller needing errors.
+3. **`actions/route-assignment.actions.ts`** — `upsertAssignmentForWeeklyDay` + `upsertAssignmentForAdHoc`:
+   removed premature `emailSentAt: new Date()` from create/update; replaced `await sendMail(...)` with
+   `after(async () => { await sendMailBackground(...); await prisma.routeAssignment.update({ emailSentAt }) })`.
+   `saveDaySheetAssignments`/`replicateAcrossWeek`/`copyLastWeekRoutes` need NO further change (they delegate to
+   the upsert, which now self-handles `after()`). Also dropped the pre-existing unused `WeeklyScheduleStatus` import.
+4. **`actions/route-override.actions.ts`** — `finalizeRoute`: route marked `FINALIZED` immediately; emails moved
+   into ONE `after()` callback using `Promise.allSettled(sendMailBackground)` (one failure doesn't block others),
+   then `tripAssignment.updateMany({ emailSentAt })` only if ≥1 fulfilled. Message text: "Emails sending…".
+5. **`actions/password-reset.actions.ts`** — reset email moved into `after()` (edge already returns "if the email
+   exists, a link was sent" instantly).
+6. **Dev-server cache corruption gotcha:** after killing port-3000, `.next` had a corrupted Turbopack SST cache
+   (navbar of `Unable to open static sorted file … .sst` + `Compaction failed`) that persisted recompile errors.
+   Fix: stop process → `Remove-Item .next -Recurse -Force` (parent dir must be fully unlocked — kill the actual
+   OwningProcess PID, not just the port listener) → delete the log file → relaunch. Clean Ready in 665ms.
+7. **Vercel note:** SMTP env vars (`SMTP_HOST/PORT/USER/PASS/FROM`) must be set in Vercel dashboard. With
+   `after()`, allocations return instantly and emails run in background (Vercel keeps the fn alive for them).
+
 ## Latest Session (2026-09-02g) — Schedule-submission email notice to employees (auto-approve flows)
 **Built; tsc + eslint clean (only pre-existing `editWeeklySchedule` unused-`session` warning). NOT committed.**
 1. **New requirement:** when a schedule is submitted (and auto-approved), the employee whose schedule was
