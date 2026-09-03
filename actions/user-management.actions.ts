@@ -26,64 +26,73 @@ export async function createUserAction(
   _prevState: CreateUserState,
   formData: FormData
 ): Promise<CreateUserState> {
-  await requireRole([Role.SUPER_ADMIN, Role.FACILITIES]);
+  try {
+    await requireRole([Role.SUPER_ADMIN, Role.FACILITIES]);
 
-  const fullName = requiredField(formData, "fullName");
-  const email = requiredField(formData, "email");
-  const role = formData.get("role");
-  const employeeCode = requiredField(formData, "employeeCode");
-  const department = requiredField(formData, "department");
-  const contactNumber = requiredField(formData, "contactNumber");
-  const address = requiredField(formData, "address");
-  const pickupPoint = requiredField(formData, "pickupPoint");
-  const officeLocation = requiredField(formData, "officeLocation");
-  const password = requiredField(formData, "password");
+    const fullName = requiredField(formData, "fullName");
+    const email = requiredField(formData, "email");
+    const role = formData.get("role");
+    const employeeCode = requiredField(formData, "employeeCode");
+    const department = requiredField(formData, "department");
+    const contactNumber = requiredField(formData, "contactNumber");
+    const address = requiredField(formData, "address");
+    const pickupPoint = requiredField(formData, "pickupPoint");
+    const officeLocation = requiredField(formData, "officeLocation");
+    const password = requiredField(formData, "password");
 
-  if (!fullName) return { error: "Full name is required." };
-  if (!email) return { error: "Email is required." };
-  if (typeof role !== "string" || !isValidRole(role)) {
-    return { error: "Please select a valid role." };
+    if (!fullName) return { error: "Full name is required." };
+    if (!email) return { error: "Email is required." };
+    if (typeof role !== "string" || !isValidRole(role)) {
+      return { error: "Please select a valid role." };
+    }
+    if (!employeeCode) return { error: "Employee ID is required." };
+    if (!department) return { error: "Department is required." };
+    if (!contactNumber) return { error: "Contact number is required." };
+    if (!address) return { error: "Address is required." };
+    if (!pickupPoint) return { error: "Pick-up point is required." };
+    if (!officeLocation || !OFFICE_LOCATIONS.includes(officeLocation as (typeof OFFICE_LOCATIONS)[number])) {
+      return { error: "Please select a valid office location." };
+    }
+    if (!password || password.length < 8) {
+      return { error: "Password is required and must be at least 8 characters." };
+    }
+
+    const normalizedEmail = email.toLowerCase();
+    const existing = await prisma.user.findUnique({ where: { email: normalizedEmail } });
+    if (existing) {
+      return { error: "A user with this email already exists." };
+    }
+
+    const passwordHash = await hashPassword(password);
+
+    const user = await prisma.user.create({
+      data: {
+        email: normalizedEmail,
+        fullName,
+        role,
+        employeeCode,
+        department,
+        contactNumber,
+        address,
+        pickupPoint,
+        officeLocation,
+        passwordHash,
+        mustChangePassword: false,
+        isBulkCreated: false,
+      },
+    });
+
+    revalidatePath("/super-admin/users");
+    revalidatePath("/facilities/user-info");
+    return { created: { email: user.email, fullName: user.fullName } };
+  } catch (err) {
+    console.error("[createUserAction]", err);
+    const message =
+      err && typeof err === "object" && "message" in err
+        ? String(err.message)
+        : "An unexpected error occurred. Please try again.";
+    return { error: message };
   }
-  if (!employeeCode) return { error: "Employee ID is required." };
-  if (!department) return { error: "Department is required." };
-  if (!contactNumber) return { error: "Contact number is required." };
-  if (!address) return { error: "Address is required." };
-  if (!pickupPoint) return { error: "Pick-up point is required." };
-  if (!officeLocation || !OFFICE_LOCATIONS.includes(officeLocation as (typeof OFFICE_LOCATIONS)[number])) {
-    return { error: "Please select a valid office location." };
-  }
-  if (!password || password.length < 8) {
-    return { error: "Password is required and must be at least 8 characters." };
-  }
-
-  const normalizedEmail = email.toLowerCase();
-  const existing = await prisma.user.findUnique({ where: { email: normalizedEmail } });
-  if (existing) {
-    return { error: "A user with this email already exists." };
-  }
-
-  const passwordHash = await hashPassword(password);
-
-  const user = await prisma.user.create({
-    data: {
-      email: normalizedEmail,
-      fullName,
-      role,
-      employeeCode,
-      department,
-      contactNumber,
-      address,
-      pickupPoint,
-      officeLocation,
-      passwordHash,
-      mustChangePassword: false,
-      isBulkCreated: false,
-    },
-  });
-
-  revalidatePath("/super-admin/users");
-  revalidatePath("/facilities/user-info");
-  return { created: { email: user.email, fullName: user.fullName } };
 }
 
 export type BulkCreateResultRow = { email: string; fullName: string };
@@ -97,6 +106,7 @@ export async function bulkCreateUsersAction(
   _prevState: BulkCreateUsersState,
   formData: FormData
 ): Promise<BulkCreateUsersState> {
+  try {
   await requireRole([Role.SUPER_ADMIN, Role.FACILITIES]);
 
   const file = formData.get("file");
@@ -261,6 +271,14 @@ export async function bulkCreateUsersAction(
   revalidatePath("/super-admin/users");
   revalidatePath("/facilities/user-info");
   return { results: { created, skipped } };
+  } catch (err) {
+    console.error("[bulkCreateUsersAction]", err);
+    const message =
+      err && typeof err === "object" && "message" in err
+        ? String(err.message)
+        : "An unexpected error occurred during bulk upload.";
+    return { error: message };
+  }
 }
 
 export type UpdateUserRoleState = { error?: string; success?: boolean };
