@@ -1,10 +1,5 @@
 import { requireRole } from "@/lib/rbac/guards";
-import {
-  Role,
-  AddressChangeStatus,
-  ContactChangeStatus,
-  PickupPointChangeStatus,
-} from "@/lib/constants/enums";
+import { Role } from "@/lib/constants/enums";
 import { prisma } from "@/lib/prisma";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { StatusBadge } from "@/components/shared/status-badge";
@@ -20,49 +15,12 @@ export default async function CorporateEmployeeProfilePage() {
     where: { id: session.id },
   });
 
-  const [addressChangeRequests, contactChangeRequests, pickupPointChangeRequests] =
-    await Promise.all([
-      prisma.addressChangeRequest.findMany({
-        where: { employeeId: session.id },
-        orderBy: { createdAt: "desc" },
-      }),
-      prisma.contactChangeRequest.findMany({
-        where: { employeeId: session.id },
-        orderBy: { createdAt: "desc" },
-      }),
-      prisma.pickupPointChangeRequest.findMany({
-        where: { employeeId: session.id },
-        orderBy: { createdAt: "desc" },
-      }),
-    ]);
-
-  const hasPendingAddressRequest = addressChangeRequests.some(
-    (r) => r.status === AddressChangeStatus.PENDING
-  );
-  const hasPendingContactRequest = contactChangeRequests.some(
-    (r) => r.status === ContactChangeStatus.PENDING
-  );
-  const hasPendingPickupPointRequest = pickupPointChangeRequests.some(
-    (r) => r.status === PickupPointChangeStatus.PENDING
-  );
+  const pickupPointChangeRequests = await prisma.pickupPointChangeRequest.findMany({
+    where: { employeeId: session.id },
+    orderBy: { createdAt: "desc" },
+  });
 
   const combinedHistory = [
-    ...addressChangeRequests.map((r) => ({
-      id: r.id,
-      field: "Address",
-      value: r.newAddress,
-      status: r.status,
-      rejectReason: r.rejectReason,
-      createdAt: r.createdAt,
-    })),
-    ...contactChangeRequests.map((r) => ({
-      id: r.id,
-      field: "Contact Number",
-      value: r.newContactNumber,
-      status: r.status,
-      rejectReason: r.rejectReason,
-      createdAt: r.createdAt,
-    })),
     ...pickupPointChangeRequests.map((r) => ({
       id: r.id,
       field: "Pick-up Point",
@@ -86,9 +44,6 @@ export default async function CorporateEmployeeProfilePage() {
       <ProfileHeroCard
         user={user}
         showPickupPoint
-        pendingAddressRequest={hasPendingAddressRequest}
-        pendingContactRequest={hasPendingContactRequest}
-        pendingPickupPointRequest={hasPendingPickupPointRequest}
       />
 
       {/* Two Column Layout */}
@@ -98,8 +53,7 @@ export default async function CorporateEmployeeProfilePage() {
           <CardHeader>
             <CardTitle>Update Profile</CardTitle>
             <p className="text-xs text-muted-foreground mt-2">
-              Address and Contact Number changes are sent to Operation-Admin for review.
-              Pick-up Point changes are sent to Facilities for review.
+              Address and Contact Number changes apply immediately. Pick-up Point changes are sent to Facilities for review.
             </p>
           </CardHeader>
           <CardContent>
@@ -107,9 +61,6 @@ export default async function CorporateEmployeeProfilePage() {
               pickupPoint={user.pickupPoint}
               address={user.address}
               contactNumber={user.contactNumber}
-              pickupPointDisabled={hasPendingPickupPointRequest}
-              addressDisabled={hasPendingAddressRequest}
-              contactNumberDisabled={hasPendingContactRequest}
             />
           </CardContent>
         </Card>
@@ -132,7 +83,7 @@ export default async function CorporateEmployeeProfilePage() {
               <CardHeader>
                 <CardTitle>Change History</CardTitle>
                 <p className="text-xs text-muted-foreground mt-2">
-                  Recent profile change requests
+                  Recent pick-up point change requests
                 </p>
               </CardHeader>
               <CardContent className="space-y-3 max-h-96 overflow-y-auto">

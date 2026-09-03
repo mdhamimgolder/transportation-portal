@@ -26,16 +26,10 @@ export function ProfileUpdateForm({
   pickupPoint,
   address,
   contactNumber,
-  pickupPointDisabled,
-  addressDisabled,
-  contactNumberDisabled,
 }: {
   pickupPoint: string | null;
   address: string | null;
   contactNumber: string | null;
-  pickupPointDisabled: boolean;
-  addressDisabled: boolean;
-  contactNumberDisabled: boolean;
 }) {
   const [state, formAction] = useActionState(updateProfile, initialState);
 
@@ -64,17 +58,10 @@ export function ProfileUpdateForm({
           id="address"
           name="address"
           defaultValue={address ?? ""}
-          disabled={addressDisabled}
         />
-        {addressDisabled ? (
-          <p className="text-xs text-muted-foreground">
-            You have a pending address change request awaiting review.
-          </p>
-        ) : (
-          <p className="text-xs text-muted-foreground">
-            Changing this submits a request for Operation-Admin to review.
-          </p>
-        )}
+        <p className="text-xs text-muted-foreground">
+          Your address updates immediately. You can change it again after 30 days.
+        </p>
         {state.errors?.address ? (
           <p className="text-sm text-destructive">{state.errors.address}</p>
         ) : null}
@@ -86,17 +73,10 @@ export function ProfileUpdateForm({
           id="contactNumber"
           name="contactNumber"
           defaultValue={contactNumber ?? ""}
-          disabled={contactNumberDisabled}
         />
-        {contactNumberDisabled ? (
-          <p className="text-xs text-muted-foreground">
-            You have a pending contact number change request awaiting review.
-          </p>
-        ) : (
-          <p className="text-xs text-muted-foreground">
-            Changing this submits a request for Operation-Admin to review.
-          </p>
-        )}
+        <p className="text-xs text-muted-foreground">
+          Your contact number updates immediately.
+        </p>
         {state.errors?.contactNumber ? (
           <p className="text-sm text-destructive">{state.errors.contactNumber}</p>
         ) : null}

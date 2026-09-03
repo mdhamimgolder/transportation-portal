@@ -43,6 +43,8 @@ model User {
   deletedAt DateTime?
   deletedBy String?
 
+  addressChangedAt DateTime? // last time the employee's address changed (1-month change lock)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

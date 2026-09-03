@@ -14,9 +14,6 @@ interface ProfileHeroCardProps {
     employeeCode?: string | null;
   };
   showPickupPoint?: boolean;
-  pendingAddressRequest?: boolean;
-  pendingContactRequest?: boolean;
-  pendingPickupPointRequest?: boolean;
 }
 
 export function ProfileHeroCard({

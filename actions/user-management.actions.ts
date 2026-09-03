@@ -7,7 +7,7 @@ import { prisma } from "@/lib/prisma";
 import { requireRole } from "@/lib/rbac/guards";
 import { hashPassword } from "@/lib/auth/password";
 import { parseCsv } from "@/lib/csv";
-import { sendMailBackground } from "@/lib/mailer";
+import { sendCredentialsEmail } from "@/lib/mailer";
 import { Role, ALL_ROLES, OFFICE_LOCATIONS } from "@/lib/constants/enums";
 
 function isValidRole(value: string): value is Role {
@@ -97,32 +97,10 @@ export async function createUserAction(
     });
 
     after(async () => {
-      await sendMailBackground({
+      await sendCredentialsEmail({
         to: normalizedEmail,
-        subject: "Your Transportation Portal Account Has Been Created",
-        body: `Hi ${fullName},\n\nYour account for the Transportation Portal has been created.\n\nLogin credentials:\nEmail: ${normalizedEmail}\nPassword: ${password}\n\nPlease sign in at the portal and change your password if needed.\n\nBest regards,\nTransportation Team`,
-        html: `
-          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
-            <div style="height: 4px; background: #70bccc; border-radius: 4px 4px 0 0;"></div>
-            <div style="border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 4px 4px; padding: 32px;">
-              <h2 style="color: #1a1a2e; margin: 0 0 8px;">Your Account Has Been Created</h2>
-              <p style="color: #6b7280; margin: 0 0 24px;">You can now sign in to the Transportation Portal.</p>
-              <p>Hi <strong>${fullName}</strong>,</p>
-              <p>Your account is ready. Here are your login credentials:</p>
-              <table style="width: 100%; border-collapse: collapse; margin: 16px 0;">
-                <tr style="background: #f8f9fa;">
-                  <td style="padding: 10px; border: 1px solid #dee2e6; font-weight: bold; width: 120px;">Email</td>
-                  <td style="padding: 10px; border: 1px solid #dee2e6; font-family: monospace;">${normalizedEmail}</td>
-                </tr>
-                <tr style="background: #f8f9fa;">
-                  <td style="padding: 10px; border: 1px solid #dee2e6; font-weight: bold;">Password</td>
-                  <td style="padding: 10px; border: 1px solid #dee2e6; font-family: monospace;">${password}</td>
-                </tr>
-              </table>
-              <p style="color: #6c757d; margin-top: 24px;">Best regards,<br><strong>Transportation Team</strong></p>
-            </div>
-          </div>
-        `,
+        fullName,
+        password,
       });
     });
 
@@ -209,10 +187,11 @@ export async function bulkCreateUsersAction(
     };
   }
 
-  const created: BulkCreateResultRow[] = [];
-  const skipped: BulkCreateSkipRow[] = [];
-  const employeeCodesInFile = new Set<string>();
-  const emailsInFile = new Set<string>();
+    const created: BulkCreateResultRow[] = [];
+    const skipped: BulkCreateSkipRow[] = [];
+    const employeeCodesInFile = new Set<string>();
+    const emailsInFile = new Set<string>();
+    const createdCredentials: { email: string; fullName: string; password: string }[] = [];
 
   for (let i = 1; i < rows.length; i++) {
     const line = i + 1;
@@ -323,9 +302,18 @@ export async function bulkCreateUsersAction(
     }
 
     created.push({ email: user.email, fullName: user.fullName });
+    createdCredentials.push({ email: user.email, fullName: user.fullName, password });
     emailsInFile.add(email);
     employeeCodesInFile.add(employeeCode);
   }
+
+  after(async () => {
+    await Promise.allSettled(
+      createdCredentials.map((c) =>
+        sendCredentialsEmail({ to: c.email, fullName: c.fullName, password: c.password })
+      )
+    );
+  });
 
   revalidatePath("/super-admin/users");
   revalidatePath("/facilities/user-info");
