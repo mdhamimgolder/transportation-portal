@@ -87,6 +87,17 @@ export async function createUserAction(
     return { created: { email: user.email, fullName: user.fullName } };
   } catch (err) {
     console.error("[createUserAction]", err);
+    if (err && typeof err === "object" && "code" in err && err.code === "P2002") {
+      const meta = (err as { meta?: { target?: string[] } }).meta;
+      const target = meta?.target ?? [];
+      if (target.includes("employeeCode")) {
+        return { error: "An employee with this Employee ID already exists." };
+      }
+      if (target.includes("email")) {
+        return { error: "A user with this email already exists." };
+      }
+      return { error: "A record with that value already exists." };
+    }
     const message =
       err && typeof err === "object" && "message" in err
         ? String(err.message)
