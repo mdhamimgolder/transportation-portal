@@ -81,9 +81,9 @@ export function AdHocList({
               style={{ background: RAIL_BY_STATUS[request.status] ?? "var(--muted)" }}
             />
 
-            <div className="grid h-20 gap-0 overflow-hidden sm:grid-cols-[minmax(0,1fr)_7rem_20rem]">
+            <div className="grid h-20 gap-0 overflow-hidden sm:grid-cols-[minmax(0,1fr)_5rem_25rem]">
               {/* Left: identity + required data (fills the box) */}
-              <div className="flex min-w-0 flex-col justify-center gap-1 overflow-hidden px-3">
+              <div className="flex min-w-0 flex-col justify-center gap-1 overflow-hidden px-3 py-2">
                 <div className="flex min-w-0 items-center gap-1.5">
                   <h3 className="min-w-0 flex-1 truncate text-sm font-semibold leading-none">
                     {request.employee.fullName}
@@ -92,18 +92,18 @@ export function AdHocList({
                 </div>
 
                 <p
-                  className="min-w-0 truncate text-xs text-foreground"
+                  className="min-w-0 truncate text-[13px] font-medium text-foreground"
                   title={request.employee.address ?? "—"}
                 >
                   {request.employee.address ?? "—"}
                 </p>
 
-                <div className="flex min-w-0 items-center gap-2 text-xs">
+                <div className="flex min-w-0 items-center gap-2 text-[13px]">
                   <span className="shrink-0 text-muted-foreground">
                     {request.employee.contactNumber ?? "—"}
                   </span>
                   <span
-                    className={`min-w-0 truncate rounded px-1 ${pickupCellClass}`}
+                    className={`min-w-0 truncate rounded px-1.5 ${pickupCellClass}`}
                     title={pickupDisplay}
                   >
                     {pickupDisplay}
@@ -123,8 +123,8 @@ export function AdHocList({
                 </div>
               </div>
 
-              {/* Placement tool -- exact 20rem column */}
-              <div className="border-t bg-muted/40 p-1 sm:border-t-0 sm:border-l">
+              {/* Placement tool -- exact 25rem column */}
+              <div className="border-t bg-muted/40 p-1.5 sm:border-t-0 sm:border-l">
                 <AssignmentForm
                   target={{ adHocRequestId: request.id }}
                   options={options}

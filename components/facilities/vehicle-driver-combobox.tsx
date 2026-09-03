@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Search } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
@@ -34,16 +35,40 @@ export function VehicleDriverCombobox({
   const [query, setQuery] = useState(initialOption ? labelFor(initialOption) : "");
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+  const [coords, setCoords] = useState<{ top: number; left: number; width: number } | null>(null);
 
   useEffect(() => {
     function handleClickOutside(e: MouseEvent) {
-      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+      if (
+        containerRef.current &&
+        !containerRef.current.contains(e.target as Node) &&
+        dropdownRef.current &&
+        !dropdownRef.current.contains(e.target as Node)
+      ) {
         setOpen(false);
       }
     }
+    function handleScroll() {
+      if (open) setOpen(false);
+    }
     document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, []);
+    document.addEventListener("scroll", handleScroll, true);
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+      document.removeEventListener("scroll", handleScroll, true);
+    };
+  }, [open]);
+
+  // Position the (portaled) dropdown right below the input so it can escape
+  // any overflow-clipping ancestor (fixed-height band rows).
+  useLayoutEffect(() => {
+    if (!open) return;
+    const el = containerRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    setCoords({ top: rect.bottom + 4, left: rect.left, width: rect.width });
+  }, [open]);
 
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -77,31 +102,38 @@ export function VehicleDriverCombobox({
           setOpen(true);
         }}
       />
-      {open ? (
-        <div className="absolute z-20 mt-1 max-h-[10rem] w-full min-w-64 overflow-y-auto rounded-md border bg-popover p-1 shadow-md">
-          {rows.length === 0 ? (
-            <p className="px-2 py-1.5 text-sm text-muted-foreground">No matches.</p>
-          ) : (
-            rows.map((option) => (
-              <button
-                key={option.id}
-                type="button"
-                className={cn(
-                  "flex w-full items-center rounded-sm px-2 py-1.5 text-left text-sm hover:bg-accent",
-                  option.id === selectedId && "bg-accent"
-                )}
-                onClick={() => {
-                  setSelectedId(option.id);
-                  setQuery(labelFor(option));
-                  setOpen(false);
-                }}
-              >
-                <span className="truncate">{labelFor(option)}</span>
-              </button>
-            ))
-          )}
-        </div>
-      ) : null}
+      {open && coords
+        ? createPortal(
+            <div
+              ref={dropdownRef}
+              style={{ top: coords.top, left: coords.left, width: coords.width }}
+              className="absolute z-50 max-h-[10rem] min-w-64 overflow-y-auto rounded-md border bg-popover p-1 shadow-md"
+            >
+              {rows.length === 0 ? (
+                <p className="px-2 py-1.5 text-sm text-muted-foreground">No matches.</p>
+              ) : (
+                rows.map((option) => (
+                  <button
+                    key={option.id}
+                    type="button"
+                    className={cn(
+                      "flex w-full items-center rounded-sm px-2 py-1.5 text-left text-sm hover:bg-accent",
+                      option.id === selectedId && "bg-accent"
+                    )}
+                    onClick={() => {
+                      setSelectedId(option.id);
+                      setQuery(labelFor(option));
+                      setOpen(false);
+                    }}
+                  >
+                    <span className="truncate">{labelFor(option)}</span>
+                  </button>
+                ))
+              )}
+            </div>,
+            document.body
+          )
+        : null}
     </div>
   );
 }
