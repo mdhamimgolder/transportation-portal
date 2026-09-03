@@ -57,6 +57,36 @@ work fast without interruption.
 - **tsx scripts** need `import "dotenv/config"` at top; no top-level await (use `async main()`);
   temp scripts live in repo root (`_name.ts`) and are deleted after verifying.
 
+## Latest Session (2026-09-03i) — Account creation: credentials email + validation + facilities role lock; immediate address/contact changes; delete profile-approval module
+**Built; tsc + eslint clean; schema migrated + client regen; build OK; dev server restarted (clean). Committed + pushed (b50751b, plus c9f6ae2 for prior task).**
+1. **New-user credentials email** — `lib/mailer.ts` gained `sendCredentialsEmail({to, fullName, password})`
+   (HTML table of email+password, cyan brand). `createUserAction` fires it via `after()` (matches existing pattern).
+2. **Bulk upload individual emails** — `bulkCreateUsersAction` collects `createdCredentials[]` in the loop, then
+   `after(() => Promise.allSettled(createdCredentials.map(sendCredentialsEmail)))` — ONE email per created user.
+   Also: Facilities cannot bulk-create SUPER_ADMIN rows (skipped).
+3. **Field validation (both server + client `pattern`/`type`)** for create-user form: employeeCode = exactly 9 digits
+   (`/^\d{9}$/`), contactNumber = exactly 11 digits (`/^\d{11}$/`), email = basic regex; email placeholder `name@commure.com`.
+4. **Facilities cannot create Super Admin** — `createUserAction` rejects role=SUPER_ADMIN when session.role===FACILITIES;
+   UI `AddEmployeeDialog` takes `allowAllRoles?: boolean`: Facilities page passes nothing (SUPER_ADMIN filtered out of
+   the role dropdown), Super-Admin page passes `allowAllRoles`.
+5. **Rename "Route Planning" → "Pick Schedule"** — `app/facilities/layout.tsx` nav label + `route-planning/page.tsx` h1.
+6. **Address change = immediate + notify + 30-day lock** (per user; keep pickup-point approval):
+   - Prisma `User.addressChangedAt DateTime?` (migration `20260903154601_employee_address_changed_at`).
+   - `actions/profile.actions.ts` `updateProfile`: address writes directly (no AddressChangeRequest), sets
+     `addressChangedAt=now`, blocks if within `ADDRESS_CHANGE_LOCK_DAYS=30`; fires notification email (old→new address)
+     to Facilities + Operations via `after()` + `Promise.allSettled`. Contact number also writes directly now.
+   - Recipient emails in NEW `lib/constants/notification-recipients.ts`: `FACILITIES_NOTIFICATION_EMAIL`
+     (default `ax-facilities-bd@commure.com`, env-overridable) + `OPERATIONS_NOTIFICATION_EMAIL` (env, empty default —
+     **user will share the operations address later; set as `OPERATIONS_NOTIFICATION_EMAIL` env or constant**).
+   - **NOTE: this file is under gitignored `lib/`** — must `git add -f` it (like mailer.ts). Already done & pushed.
+7. **Deleted profile-approval module (address+contact) everywhere**; kept pickup-point approval:
+   - Deleted `app/operations/profile-approvals/`, `components/operations/{address,contact}-approval-card.tsx`,
+     `actions/{address,contact}-change.actions.ts`; removed "Profile Approvals" nav+badge from `app/operations/layout.tsx`.
+   - `app/facilities/profile-approvals` (pickup-point only) + `PickupPointApprovalCard` + `pickup-point-change.actions.ts` KEPT.
+   - Employee/corporate profile pages now only fetch `pickupPointChangeRequest`; address/contact fields no longer
+     pending-disabled; `ProfileUpdateForm` dropped all disabled props; `ProfileHeroCard` dropped pending props.
+   - `AddressChangeRequest`/`ContactChangeRequest` Prisma models left in schema (unused, harmless) — no destructive migration.
+
 ## Latest Session (2026-09-03h) — Background email dispatch for Vercel (`after()`); dev-server cache corruption fix
 **Built; tsc + eslint clean; dev server restarted (clean Turbopack cache); /facilities/dashboard /login 200; log clean. NOT committed.**
 1. **Motivation:** Vercel checklist — allocation emails were all `await sendMail()` BLOCKING the server action
