@@ -21,7 +21,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
-import { ALL_ROLES, OFFICE_LOCATIONS, ROLE_LABELS } from "@/lib/constants/enums";
+import { ALL_ROLES, OFFICE_LOCATIONS, ROLE_LABELS, type Role } from "@/lib/constants/enums";
 
 const initialState: CreateUserState = {};
 
@@ -34,7 +34,7 @@ function SubmitButton() {
   );
 }
 
-function AddEmployeeDialogBody({ onDone }: { onDone: () => void }) {
+function AddEmployeeDialogBody({ onDone, availableRoles }: { onDone: () => void; availableRoles: Role[] }) {
   const [state, formAction, pending] = useActionState(createUserAction, initialState);
 
   if (state.created) {
@@ -63,16 +63,23 @@ function AddEmployeeDialogBody({ onDone }: { onDone: () => void }) {
       </div>
       <div className="space-y-2">
         <Label htmlFor="email">Work email</Label>
-        <Input id="email" name="email" type="email" required disabled={pending} />
+        <Input
+          id="email"
+          name="email"
+          type="email"
+          placeholder="name@commure.com"
+          required
+          disabled={pending}
+        />
       </div>
       <div className="space-y-2">
         <Label htmlFor="role">Role</Label>
-        <Select name="role" defaultValue="EMPLOYEE" disabled={pending}>
+        <Select name="role" defaultValue={availableRoles[0]} disabled={pending}>
           <SelectTrigger id="role" className="w-full">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            {ALL_ROLES.map((role) => (
+            {availableRoles.map((role) => (
               <SelectItem key={role} value={role}>
                 {ROLE_LABELS[role]}
               </SelectItem>
@@ -83,7 +90,15 @@ function AddEmployeeDialogBody({ onDone }: { onDone: () => void }) {
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <div className="space-y-2">
           <Label htmlFor="employeeCode">Employee ID</Label>
-          <Input id="employeeCode" name="employeeCode" required disabled={pending} />
+          <Input
+            id="employeeCode"
+            name="employeeCode"
+            pattern="\d{9}"
+            title="Must be exactly 9 digits"
+            placeholder="e.g. 123456789"
+            required
+            disabled={pending}
+          />
         </div>
         <div className="space-y-2">
           <Label htmlFor="department">Department</Label>
@@ -92,7 +107,15 @@ function AddEmployeeDialogBody({ onDone }: { onDone: () => void }) {
       </div>
       <div className="space-y-2">
         <Label htmlFor="contactNumber">Contact number</Label>
-        <Input id="contactNumber" name="contactNumber" required disabled={pending} />
+        <Input
+          id="contactNumber"
+          name="contactNumber"
+          pattern="\d{11}"
+          title="Must be exactly 11 digits"
+          placeholder="e.g. 01712345678"
+          required
+          disabled={pending}
+        />
       </div>
       <div className="space-y-2">
         <Label htmlFor="address">Address</Label>
@@ -136,9 +159,11 @@ function AddEmployeeDialogBody({ onDone }: { onDone: () => void }) {
   );
 }
 
-export function AddEmployeeDialog() {
+export function AddEmployeeDialog({ allowAllRoles = false }: { allowAllRoles?: boolean }) {
   const [open, setOpen] = useState(false);
   const [resetKey, setResetKey] = useState(0);
+
+  const availableRoles = allowAllRoles ? ALL_ROLES : ALL_ROLES.filter((r) => r !== "SUPER_ADMIN");
 
   return (
     <Dialog
@@ -155,7 +180,7 @@ export function AddEmployeeDialog() {
         <DialogHeader>
           <DialogTitle>Add a user manually</DialogTitle>
         </DialogHeader>
-        <AddEmployeeDialogBody key={resetKey} onDone={() => setOpen(false)} />
+        <AddEmployeeDialogBody key={resetKey} onDone={() => setOpen(false)} availableRoles={availableRoles} />
       </DialogContent>
     </Dialog>
   );

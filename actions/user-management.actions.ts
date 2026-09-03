@@ -1,11 +1,13 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { after } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { requireRole } from "@/lib/rbac/guards";
 import { hashPassword } from "@/lib/auth/password";
 import { parseCsv } from "@/lib/csv";
+import { sendMailBackground } from "@/lib/mailer";
 import { Role, ALL_ROLES, OFFICE_LOCATIONS } from "@/lib/constants/enums";
 
 function isValidRole(value: string): value is Role {
@@ -27,7 +29,7 @@ export async function createUserAction(
   formData: FormData
 ): Promise<CreateUserState> {
   try {
-    await requireRole([Role.SUPER_ADMIN, Role.FACILITIES]);
+    const session = await requireRole([Role.SUPER_ADMIN, Role.FACILITIES]);
 
     const fullName = requiredField(formData, "fullName");
     const email = requiredField(formData, "email");
@@ -42,12 +44,24 @@ export async function createUserAction(
 
     if (!fullName) return { error: "Full name is required." };
     if (!email) return { error: "Email is required." };
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return { error: "Please enter a valid email address." };
+    }
     if (typeof role !== "string" || !isValidRole(role)) {
       return { error: "Please select a valid role." };
     }
+    if (session.role === Role.FACILITIES && role === Role.SUPER_ADMIN) {
+      return { error: "Facilities cannot create Super Admin accounts." };
+    }
     if (!employeeCode) return { error: "Employee ID is required." };
+    if (!/^\d{9}$/.test(employeeCode)) {
+      return { error: "Employee ID must be exactly 9 digits." };
+    }
     if (!department) return { error: "Department is required." };
     if (!contactNumber) return { error: "Contact number is required." };
+    if (!/^\d{11}$/.test(contactNumber)) {
+      return { error: "Contact number must be exactly 11 digits." };
+    }
     if (!address) return { error: "Address is required." };
     if (!pickupPoint) return { error: "Pick-up point is required." };
     if (!officeLocation || !OFFICE_LOCATIONS.includes(officeLocation as (typeof OFFICE_LOCATIONS)[number])) {
@@ -80,6 +94,36 @@ export async function createUserAction(
         mustChangePassword: false,
         isBulkCreated: false,
       },
+    });
+
+    after(async () => {
+      await sendMailBackground({
+        to: normalizedEmail,
+        subject: "Your Transportation Portal Account Has Been Created",
+        body: `Hi ${fullName},\n\nYour account for the Transportation Portal has been created.\n\nLogin credentials:\nEmail: ${normalizedEmail}\nPassword: ${password}\n\nPlease sign in at the portal and change your password if needed.\n\nBest regards,\nTransportation Team`,
+        html: `
+          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+            <div style="height: 4px; background: #70bccc; border-radius: 4px 4px 0 0;"></div>
+            <div style="border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 4px 4px; padding: 32px;">
+              <h2 style="color: #1a1a2e; margin: 0 0 8px;">Your Account Has Been Created</h2>
+              <p style="color: #6b7280; margin: 0 0 24px;">You can now sign in to the Transportation Portal.</p>
+              <p>Hi <strong>${fullName}</strong>,</p>
+              <p>Your account is ready. Here are your login credentials:</p>
+              <table style="width: 100%; border-collapse: collapse; margin: 16px 0;">
+                <tr style="background: #f8f9fa;">
+                  <td style="padding: 10px; border: 1px solid #dee2e6; font-weight: bold; width: 120px;">Email</td>
+                  <td style="padding: 10px; border: 1px solid #dee2e6; font-family: monospace;">${normalizedEmail}</td>
+                </tr>
+                <tr style="background: #f8f9fa;">
+                  <td style="padding: 10px; border: 1px solid #dee2e6; font-weight: bold;">Password</td>
+                  <td style="padding: 10px; border: 1px solid #dee2e6; font-family: monospace;">${password}</td>
+                </tr>
+              </table>
+              <p style="color: #6c757d; margin-top: 24px;">Best regards,<br><strong>Transportation Team</strong></p>
+            </div>
+          </div>
+        `,
+      });
     });
 
     revalidatePath("/super-admin/users");
@@ -118,7 +162,7 @@ export async function bulkCreateUsersAction(
   formData: FormData
 ): Promise<BulkCreateUsersState> {
   try {
-  await requireRole([Role.SUPER_ADMIN, Role.FACILITIES]);
+  const session = await requireRole([Role.SUPER_ADMIN, Role.FACILITIES]);
 
   const file = formData.get("file");
   if (!(file instanceof File) || file.size === 0) {
@@ -207,6 +251,10 @@ export async function bulkCreateUsersAction(
     }
     if (!isValidRole(role)) {
       skipped.push({ line, reason: `Unknown role "${role}".` });
+      continue;
+    }
+    if (session.role === Role.FACILITIES && role === Role.SUPER_ADMIN) {
+      skipped.push({ line, reason: "Facilities cannot create Super Admin accounts." });
       continue;
     }
     if (password.length < 8) {

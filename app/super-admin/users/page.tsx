@@ -42,7 +42,7 @@ export default async function SuperAdminUsersPage({
         </div>
         <div className="flex items-center gap-2">
           <BulkUploadDialog />
-          <AddEmployeeDialog />
+          <AddEmployeeDialog allowAllRoles />
         </div>
       </div>
 

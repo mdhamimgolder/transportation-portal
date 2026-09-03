@@ -15,7 +15,7 @@ export default async function FacilitiesLayout({
 
   const links: NavLink[] = [
     { href: "/facilities/dashboard", label: "Dashboard", icon: "dashboard" },
-    { href: "/facilities/route-planning", label: "Route Planning", icon: "route" },
+    { href: "/facilities/route-planning", label: "Pick Schedule", icon: "route" },
     { href: "/facilities/adhoc", label: "Ad-hoc Transport", icon: "adhoc" },
     { href: "/facilities/vehicles", label: "Vehicles & Drivers", icon: "vehicles" },
     { href: "/facilities/user-info", label: "User Info", icon: "users" },

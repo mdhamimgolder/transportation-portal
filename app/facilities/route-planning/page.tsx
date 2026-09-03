@@ -112,7 +112,7 @@ export default async function RoutePlanningPage({
   return (
     <div className="space-y-4">
       <div>
-        <h1 className="text-xl font-semibold">Route Planning</h1>
+        <h1 className="text-xl font-semibold">Pick Schedule</h1>
         <p className="text-sm text-muted-foreground">
           {sheet.weekLabel ?? "No approved weekly schedules yet."} — fill in
           Pick-up Time and Vehicle No for each employee; driver details fill
