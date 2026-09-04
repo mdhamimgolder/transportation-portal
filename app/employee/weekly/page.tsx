@@ -9,18 +9,36 @@ import {
 } from "@/lib/date/week";
 import { getTransportSettings } from "@/lib/queries/settings";
 import { StatusBadge } from "@/components/shared/status-badge";
-import { WeeklyScheduleTable } from "@/components/employee/weekly-schedule-table";
+import { WeeklyScheduleTable, type ScheduleDay } from "@/components/employee/weekly-schedule-table";
 
-function toWeekDays(schedule: { weekStartDate: Date; days: Array<{ dayOfWeek: number; needsTransport: boolean; arrivalTime: string | null }> }) {
-  const weekDates = getWeekDays(schedule.weekStartDate);
+function toWeekDays({ weekStartDate, days }: {
+  weekStartDate: Date;
+  days: Array<{
+    dayOfWeek: number;
+    needsTransport: boolean;
+    arrivalTime: string | null;
+    routeAssignment: {
+      pickupTime: string;
+      vehicleDriver: { driverName: string; vehicleNumber: string };
+    } | null;
+  }>;
+}): ScheduleDay[] {
+  const weekDates = getWeekDays(weekStartDate);
   return weekDates.map((date, i) => {
-    const day = schedule.days.find((d) => d.dayOfWeek === i + 1);
+    const day = days.find((d) => d.dayOfWeek === i + 1);
     return {
       dayOfWeek: i + 1,
       label: DAY_LABELS[i],
       dateLabel: formatShortDate(date),
       needsTransport: day?.needsTransport ?? false,
       arrivalTime: day?.arrivalTime ?? null,
+      assignment: day?.routeAssignment
+        ? {
+            driverName: day.routeAssignment.vehicleDriver.driverName,
+            vehicleNumber: day.routeAssignment.vehicleDriver.vehicleNumber,
+            pickupTime: day.routeAssignment.pickupTime,
+          }
+        : null,
     };
   });
 }
@@ -45,7 +63,9 @@ export default async function WeeklySchedulePage() {
       employeeId: session.id,
       weekStartDate: { in: [thisMonday, prevMonday] },
     },
-    include: { days: true },
+    include: {
+      days: { include: { routeAssignment: { include: { vehicleDriver: true } } } },
+    },
     orderBy: { weekStartDate: "desc" },
   });
 

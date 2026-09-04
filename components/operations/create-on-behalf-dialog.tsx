@@ -47,7 +47,7 @@ function employeeLabel(e: OnBehalfEmployeeOption): string {
   return `${e.fullName}${e.employeeCode ? ` · ${e.employeeCode}` : ""}`;
 }
 
-function EmployeePicker({
+export function EmployeePicker({
   employees,
   selected,
   onSelect,

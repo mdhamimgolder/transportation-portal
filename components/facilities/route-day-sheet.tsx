@@ -92,7 +92,7 @@ export function RouteDaySheet({
 
   return (
     <form action={formAction} className="space-y-4">
-      <div className="overflow-x-auto rounded-lg border">
+      <div className="table-scrollbar max-h-[70vh] rounded-lg border">
         <Table>
           <TableHeader>
             <TableRow>
@@ -173,7 +173,7 @@ export function RouteDaySheet({
 
       <p className="text-xs text-muted-foreground">
         Tip: copy a column of vehicle numbers (or pick-up times) from your
-        planning sheet and paste into the first row's cell — it fills
+        planning sheet and paste into the first row&apos;s cell — it fills
         downward automatically.
       </p>
 

@@ -171,7 +171,7 @@ export default async function EmployeeDashboardPage() {
               No schedule set for this week yet.
             </p>
           ) : (
-            <WeeklyScheduleTable days={weekDays} compact />
+            <WeeklyScheduleTable days={weekDays} compact summary />
           )}
         </div>
       </div>

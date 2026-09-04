@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useEffect, useState } from "react";
+import { useActionState, useMemo, useState } from "react";
 import { useFormStatus } from "react-dom";
 import { Mail, Phone, MapPin } from "lucide-react";
 import {
@@ -71,9 +71,13 @@ export function WeeklyRequestsTable({
   const pendingCount = pendingIds.length;
   const [selected, setSelected] = useState<string[]>([]);
 
-  useEffect(() => {
-    setSelected([]);
-  }, [rows]);
+  // Filter out any selected IDs that are no longer present in the current rows
+  // (e.g. after a filter/week change) — avoids stale selections without a
+  // setState-in-effect.
+  const visibleSelected = useMemo(
+    () => selected.filter((id) => pendingIds.includes(id)),
+    [selected, pendingIds]
+  );
 
   function toggleAll(checked: boolean) {
     setSelected(checked ? pendingIds : []);
@@ -101,9 +105,9 @@ export function WeeklyRequestsTable({
             <label className="flex min-h-9 items-center gap-2 text-sm text-muted-foreground">
               <Checkbox
                 checked={
-                  selected.length === pendingIds.length
+                  visibleSelected.length === pendingIds.length
                     ? true
-                    : selected.length > 0
+                    : visibleSelected.length > 0
                       ? "indeterminate"
                       : false
                 }
@@ -125,7 +129,7 @@ export function WeeklyRequestsTable({
         <p className="text-sm text-destructive">{state.error}</p>
       ) : null}
 
-      <div className="overflow-x-auto rounded-lg border shadow-sm">
+      <div className="table-scrollbar max-h-[70vh] rounded-lg border shadow-sm">
         <Table>
           <TableHeader className="bg-muted/40">
             {/* A single sticky column (checkbox + Employee combined into one
@@ -181,7 +185,7 @@ export function WeeklyRequestsTable({
                         <Checkbox
                           name="scheduleId"
                           value={row.id}
-                          checked={selected.includes(row.id)}
+                          checked={visibleSelected.includes(row.id)}
                           onCheckedChange={(checked) => toggleOne(row.id, checked === true)}
                         />
                       ) : (

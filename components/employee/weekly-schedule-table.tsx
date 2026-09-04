@@ -9,9 +9,9 @@
  * "ticket" chip, and the status (transport required or not) a small badge.
  *
  * Interaction is light-touch "review": hover highlights a row, and clicking a
- * row expands a single detail line beneath it (24h time + date) for a closer
- * look. No modals, no motion noise — just a table that's pleasant to read and
- * easy to verify the day after.
+ * row expands a single detail line beneath it with the assigned driver name,
+ * vehicle number, and pick-up time. No modals, no motion noise — just a table
+ * that's pleasant to read and easy to verify the day after.
  */
 
 import { useState } from "react";
@@ -25,6 +25,12 @@ export type ScheduleDay = {
   dayOfWeek: number;
   needsTransport: boolean;
   arrivalTime: string | null;
+  /** Route-assignment detail shown when the row is expanded. */
+  assignment?: {
+    driverName: string;
+    vehicleNumber: string;
+    pickupTime: string;
+  } | null;
 };
 
 /** Format "HH:mm" (24h) as a friendly "10:00 PM" label. */
@@ -43,6 +49,8 @@ type TableProps = {
   statusNode?: ReactNode;
   /** Show a compact per-week variant with no expandable detail. */
   compact?: boolean;
+  /** Show only day and arrival time for the dashboard summary. */
+  summary?: boolean;
 };
 
 export function WeeklyScheduleTable({
@@ -51,6 +59,7 @@ export function WeeklyScheduleTable({
   subtitle,
   statusNode,
   compact = false,
+  summary = false,
 }: TableProps) {
   const [open, setOpen] = useState<number | null>(null);
 
@@ -90,12 +99,14 @@ export function WeeklyScheduleTable({
             style={{ color: "var(--muted-foreground)" }}
           >
             <th className="px-4 py-2 font-medium sm:px-5">Day</th>
-            <th className="px-3 py-2 font-medium">Date</th>
-            <th className="hidden px-3 py-2 font-medium sm:table-cell">
-              Status
-            </th>
+            {!summary && <th className="px-3 py-2 font-medium">Date</th>}
+            {!summary && (
+              <th className="hidden px-3 py-2 font-medium sm:table-cell">
+                Status
+              </th>
+            )}
             <th className="px-3 py-2 text-right font-medium">Arrival time</th>
-            <th className="w-8" aria-label="Details" />
+            {!summary && <th className="w-8" aria-label="Details" />}
           </tr>
         </thead>
         <tbody>
@@ -109,6 +120,7 @@ export function WeeklyScheduleTable({
                 active={active}
                 isOpen={isOpen}
                 compact={compact}
+                summary={summary}
                 onToggle={() => setOpen(isOpen ? null : d.dayOfWeek)}
               />
             );
@@ -138,7 +150,7 @@ export function WeeklyScheduleTable({
             </span>
           ) : null}
           <span className="ml-auto hidden sm:inline">
-            Select a row to expand the 24-hour time
+            Select a row to see the driver and pick-up details
           </span>
         </div>
       )}
@@ -151,12 +163,14 @@ function DayRow({
   active,
   isOpen,
   compact,
+  summary,
   onToggle,
 }: {
   day: ScheduleDay;
   active: boolean;
   isOpen: boolean;
   compact: boolean;
+  summary: boolean;
   onToggle: () => void;
 }) {
   const timeChip = active ? (
@@ -198,59 +212,89 @@ function DayRow({
         tabIndex={compact ? undefined : 0}
         role={compact ? undefined : "button"}
         aria-expanded={compact ? undefined : isOpen}
-        aria-label={`${day.label} arrival details`}
+        aria-label={`${day.label} driver and pick-up details`}
       >
         <td className="px-4 py-3 sm:px-5">
           <div className="font-display text-[13px] font-semibold text-foreground">
             {day.label}
           </div>
         </td>
-        <td className="px-3 py-3 font-mono text-[13px]" style={{ color: "var(--muted-foreground)" }}>
-          {day.dateLabel}
-        </td>
-        <td className="hidden px-3 py-3 sm:table-cell">
-          <StatusPill active={active} />
-        </td>
+        {!summary && (
+          <td className="px-3 py-3 font-mono text-[13px]" style={{ color: "var(--muted-foreground)" }}>
+            {day.dateLabel}
+          </td>
+        )}
+        {!summary && (
+          <td className="hidden px-3 py-3 sm:table-cell">
+            <StatusPill active={active} />
+          </td>
+        )}
         <td className="px-3 py-3 text-right">{timeChip}</td>
-        <td className="px-2 py-3 text-right">
-          {!compact && (
-            <ChevronDown
-              className={`size-4 transition-transform ${isOpen ? "rotate-180" : ""}`}
-              style={{ color: "var(--muted-foreground)" }}
-            />
-          )}
-        </td>
+        {!summary && (
+          <td className="px-2 py-3 text-right">
+            {!compact && (
+              <ChevronDown
+                className={`size-4 transition-transform ${isOpen ? "rotate-180" : ""}`}
+                style={{ color: "var(--muted-foreground)" }}
+              />
+            )}
+          </td>
+        )}
       </tr>
 
-      {/* Expandable single-line detail (the "review" interaction). */}
+      {/* Expandable detail line — date, driver, vehicle, pick-up time only. */}
       {!compact && isOpen && (
         <tr
           className="border-b border-border/60 last:border-0"
           style={{ background: "var(--muted)" }}
         >
           <td colSpan={5} className="px-4 py-2.5 sm:px-5">
-            <div className="flex flex-wrap items-center gap-x-6 gap-y-1 text-[13px]">
-              <span className="font-medium text-foreground">
-                {day.label}, {day.dateLabel}
-              </span>
-              <span className="flex items-center gap-1.5">
-                <span
-                  className="inline-block size-2 rounded-full"
-                  style={{
-                    background: active ? "var(--green)" : "var(--border)",
-                  }}
-                />
-                {active ? "Transport required" : "No transport scheduled"}
-              </span>
-              {active ? (
-                <span
-                  className="font-mono"
-                  style={{ color: "var(--muted-foreground)" }}
-                >
-                  24h: {day.arrivalTime}
+            {day.assignment ? (
+              <div className="flex flex-wrap items-center gap-x-6 gap-y-1 text-[13px]">
+                <span className="flex items-center gap-1.5">
+                  <span className="text-muted-foreground">Date:</span>
+                  <span className="font-medium text-foreground">
+                    {day.dateLabel}
+                  </span>
                 </span>
-              ) : null}
-            </div>
+                <span className="flex items-center gap-1.5">
+                  <span className="text-muted-foreground">Driver:</span>
+                  <span className="font-medium text-foreground">
+                    {day.assignment.driverName}
+                  </span>
+                </span>
+                <span className="flex items-center gap-1.5">
+                  <span className="text-muted-foreground">Vehicle:</span>
+                  <span className="font-mono font-medium text-foreground">
+                    {day.assignment.vehicleNumber}
+                  </span>
+                </span>
+                <span className="flex items-center gap-1.5">
+                  <span className="text-muted-foreground">Pick-up:</span>
+                  <span className="font-mono font-medium text-foreground">
+                    {day.assignment.pickupTime}
+                  </span>
+                </span>
+              </div>
+            ) : (
+              <div className="flex flex-wrap items-center gap-x-6 gap-y-1 text-[13px]">
+                <span className="flex items-center gap-1.5">
+                  <span className="text-muted-foreground">Date:</span>
+                  <span className="font-medium text-foreground">
+                    {day.dateLabel}
+                  </span>
+                </span>
+                <span className="flex items-center gap-1.5">
+                  <span
+                    className="inline-block size-2 rounded-full"
+                    style={{ background: active ? "var(--amber)" : "var(--border)" }}
+                  />
+                  <span className="text-muted-foreground">
+                    {active ? "Not assigned yet" : "No transport"}
+                  </span>
+                </span>
+              </div>
+            )}
           </td>
         </tr>
       )}

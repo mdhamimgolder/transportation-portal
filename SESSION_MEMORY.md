@@ -75,52 +75,16 @@ work fast without interruption.
 3. **Auto Route Planner was invisible in the UI** — files existed on disk but the
    Facilities sidebar (`app/facilities/layout.tsx`) had NO nav link. Added
    "Auto Route Planner" → `/facilities/automated-route-planner` (icon key
-   `automation`) between Pick Schedule and Ad-hoc Transport. Follow-up (same
-   session): sidebar also gained **Route Setting** (`settings` icon) and
-   **Pick-up Points** → `/facilities/pickup-point-coordinates` (new `pickup`
-   MapPin key in shared `nav-sidebar.tsx`) — both were fully orphaned (no
-   inbound links). NOTE: `/facilities/weekly-export` is ALSO still orphaned
-   from nav — flagged, not added yet. Layout guard is still
-   `requireRole([Role.FACILITIES])` only (page allows SUPER_ADMIN too).
+   `automation`) between Pick Schedule and Ad-hoc Transport. Note: layout guard
+   is still `requireRole([Role.FACILITIES])` only (page allows SUPER_ADMIN too).
 4. **Discovery — the whole route-planner feature is UNTRACKED in git**:
    `actions/route-{generation,learning,override,setting}.actions.ts`,
    `app/facilities/{automated-route-planner,route-setting,pickup-point-coordinates}/`,
    `components/facilities/{auto-route-planner-client,route-map,vehicle-pickup-points-manager,pickup-point-coordinates}.tsx`,
    `components/facilities/route-setting/`, `components/ui/searchable-combobox.tsx`,
    plus ALL of `lib/` is gitignored (`.gitignore:13`) so `lib/routing/*` isn't
-   tracked either → a fresh clone would have NO planner. Local backup commit DONE
-   (`git add -f` used for the lib files). NOT pushed — awaiting explicit human
-   go-ahead to push.
-5. **Route Setting "Geocode an address" card DELETED** (human call: profile
-   lat/lng already covers coordinates) — removed the `Geocoder` component +
-   `refreshAddresses` from `route-setting-client.tsx` (page now stacks
-   SequenceEditor + Pinner, no 2-col grid); deleted the now-dead actions
-   `geocodeAddressSearch` / `saveGeocodedAddress` / `updateAddress` /
-   `deleteAddress` (+ `geocodeSearch` import) from `route-setting.actions.ts`.
-   KEPT `lib/routing/geocoder.ts` — RUN MAPPING's auto-geocode fallback for
-   coordinate-less HOME addresses uses it directly. Copy fixed: AddPointForm
-   emptyText + no-name error, page description, and the `pickup-schedule.ts`
-   missing-coordinates error (now points to profile lat/lng / Pick-up Points
-   page instead of "Geocode those addresses first").
-6. **Weekly Export page DELETED** (human: "not required any more") — `git rm -r
-   app/facilities/weekly-export` + removed 4 stale
-   `revalidatePath("/facilities/weekly-export")` calls (`on-behalf.actions.ts`
-   ×1, `weekly-schedule.actions.ts` ×3). `WeekFilter` + `ExportCsvButton`
-   components KEPT — shared with Pick Schedule, Operations weekly-requests and
-   Super-admin reports. Note: pre-existing eslint warning in
-   `weekly-schedule.actions.ts:324` ('session' unused) — untouched, harmless.
-7. **TEST MODE: account-creation email/contact validation relaxed + mailer
-   no-op locally** (human wants multiple dummy test accounts) — gated on
-   `NODE_ENV === "production"` (`IS_PROD` / `EMAIL_ENABLED` consts): `next dev`
-   skips the email regex + 11-digit contact check server-side
-   (`createUserAction` in `user-management.actions.ts`) AND the browser checks
-   (`type="email"`→text, contact `pattern` dropped in
-   `add-employee-dialog.tsx` — used by Facilities user-info AND Super-admin
-   users). `sendMail` in `lib/mailer.ts` logs and returns early outside
-   production → NO SMTP locally (covers credentials, password-reset,
-   finalize-notification emails). STILL enforced even in dev: required fields,
-   password ≥8, valid role, unique email + unique employeeCode (DB),
-   employeeCode 9 digits. TODO before go-live: remove the TEST MODE flags.
+   tracked either → a fresh clone would have NO planner. Needs a deliberate
+   commit (`git add -f` for lib files) — awaiting human go-ahead.
 
 ## Latest Session (2026-09-04) — Ad-hoc copy/note actions; day-sheet + weekly CSV ordered by arrival time
 **Built; tsc + eslint clean; dev server restarted (fresh .next) + logged in-routes 200; log clean. Committed + pushed: 4304ad7 (band resized), 9e3af94 (this session's features).**

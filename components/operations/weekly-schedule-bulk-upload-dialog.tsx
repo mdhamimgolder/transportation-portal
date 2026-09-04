@@ -28,6 +28,7 @@ import {
 
 const initialState: BulkUploadWeeklyScheduleState = {};
 
+// CSV format: Employee Name, Employee Email, then Monday–Friday arrival times.
 const SAMPLE_HEADERS = [
   "Employee Name",
   "Employee Email",
@@ -38,8 +39,8 @@ const SAMPLE_HEADERS = [
   "Friday",
 ];
 const SAMPLE_ROW = [
-  "Erin Employee",
-  "employee@example.com",
+  "Masnun Rahman Bhuiyan",
+  "example100@commure.com",
   "10:00 PM",
   "Not Required",
   "1:00 AM",
@@ -120,16 +121,17 @@ function BulkUploadDialogBody({
     <form action={formAction} className="space-y-4">
       <div className="space-y-2 text-sm text-muted-foreground">
         <p>
-          Required CSV columns:{" "}
+          The CSV needs <code className="font-mono">Employee Name</code>,{" "}
+          <code className="font-mono">Employee Email</code>, and the day columns{" "}
           <code className="font-mono">
-            Employee Name, Employee Email, Monday, Tuesday, Wednesday, Thursday, Friday
-          </code>
-          . Each day is either a time (e.g. <code className="font-mono">10:00 PM</code>)
-          or <code className="font-mono">Not Required</code>. Employees are matched by
-          their <span className="font-medium text-foreground">unique email</span> — the
-          uploaded name must match the system record, and the rest of each
-          employee&apos;s profile comes from the database. Uploaded schedules are
-          approved immediately.
+            Monday, Tuesday, Wednesday, Thursday, Friday
+          </code>{" "}
+          as headers. Each data row has the employee&apos;s name, unique email,
+          and that day&apos;s arrival time (e.g.{" "}
+          <code className="font-mono">10:00 PM</code>) or{" "}
+          <code className="font-mono">Not Required</code>. The system matches
+          each row by email and pulls the rest of the profile from the database.
+          Uploaded schedules are approved immediately.
         </p>
         <ExportCsvButton
           filename="weekly-schedule-bulk-upload-template.csv"

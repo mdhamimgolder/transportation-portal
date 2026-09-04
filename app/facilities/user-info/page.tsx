@@ -46,7 +46,7 @@ export default async function FacilitiesUserInfoPage({
 
       <SearchBox placeholder="Search by name, email, employee ID, or address" />
 
-      <div className="overflow-x-auto rounded-lg border">
+      <div className="table-scrollbar max-h-[70vh] rounded-lg border">
         <Table>
           <TableHeader>
             <TableRow>

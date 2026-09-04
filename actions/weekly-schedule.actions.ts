@@ -439,6 +439,22 @@ export type BulkUploadWeeklyScheduleState = {
   results?: { created: BulkUploadWeeklyResultRow[]; skipped: BulkUploadWeeklySkipRow[] };
 };
 
+const DAY_HEADER_ALIASES: Record<string, string[]> = {
+  monday: ["monday", "mon"],
+  tuesday: ["tuesday", "tue", "tues"],
+  wednesday: ["wednesday", "wed"],
+  thursday: ["thursday", "thu", "thur", "thurs"],
+  friday: ["friday", "fri"],
+};
+const DAY_ORDER = ["monday", "tuesday", "wednesday", "thursday", "friday"] as const;
+
+const NAME_HEADER_ALIASES = ["employee name", "name", "fullname", "full name"];
+const EMAIL_HEADER_ALIASES = ["employee email", "email", "email address", "emailaddress"];
+
+function findColumn(header: string[], aliases: string[]): number {
+  return header.findIndex((h) => aliases.includes(h.trim().toLowerCase()));
+}
+
 export async function bulkUploadWeeklySchedules(
   _prevState: BulkUploadWeeklyScheduleState,
   formData: FormData
@@ -463,78 +479,85 @@ export async function bulkUploadWeeklySchedules(
   const text = await file.text();
   const rows = parseCsv(text);
   if (rows.length < 2) {
-    return { error: "The CSV file has no data rows." };
+    return { error: "The CSV must have a header row and at least one data row." };
   }
 
+  // Header: Employee Name, Employee Email, Monday, Tuesday, Wednesday, Thursday, Friday
   const header = rows[0].map((h) => h.trim().toLowerCase());
-  const colIndex = (...names: string[]) =>
-    names.map((n) => header.indexOf(n)).find((v) => v !== -1) ?? -1;
-  const idx = {
-    name: colIndex("employee name", "name"),
-    email: colIndex("employee email", "email"),
-    monday: colIndex("monday"),
-    tuesday: colIndex("tuesday"),
-    wednesday: colIndex("wednesday"),
-    thursday: colIndex("thursday"),
-    friday: colIndex("friday"),
-  };
-  if ([idx.name, idx.email, idx.monday, idx.tuesday, idx.wednesday, idx.thursday, idx.friday].includes(-1)) {
-    return {
-      error:
-        "CSV must include Employee Name, Employee Email, Monday, Tuesday, Wednesday, Thursday, and Friday columns.",
-    };
+
+  const nameCol = findColumn(header, NAME_HEADER_ALIASES);
+  if (nameCol === -1) {
+    return { error: 'CSV must have an "Employee Name" column.' };
   }
-  const dayCols = [idx.monday, idx.tuesday, idx.wednesday, idx.thursday, idx.friday];
+  const emailCol = findColumn(header, EMAIL_HEADER_ALIASES);
+  if (emailCol === -1) {
+    return { error: 'CSV must have an "Employee Email" column.' };
+  }
+
+  const dayIndexes: { day: string; col: number }[] = [];
+  for (const day of DAY_ORDER) {
+    const col = header.findIndex((h) => DAY_HEADER_ALIASES[day].includes(h.trim()));
+    if (col === -1) {
+      return {
+        error: `CSV must have a "${day[0].toUpperCase()}${day.slice(1)}" column. Missing "${day}".`,
+      };
+    }
+    dayIndexes.push({ day, col });
+  }
 
   const created: BulkUploadWeeklyResultRow[] = [];
   const skipped: BulkUploadWeeklySkipRow[] = [];
 
-  for (let i = 1; i < rows.length; i++) {
-    const line = i + 1;
-    const cols = rows[i];
-    const name = cols[idx.name]?.trim() ?? "";
-    const email = cols[idx.email]?.trim().toLowerCase();
-    if (!name) {
-      skipped.push({ line, reason: "Missing employee name." });
-      continue;
-    }
-    if (!email) {
+  for (let r = 1; r < rows.length; r++) {
+    const row = rows[r];
+    const line = r + 1;
+    const rawName = (row[nameCol] ?? "").trim();
+    const rawEmail = (row[emailCol] ?? "").trim().toLowerCase();
+
+    if (!rawEmail) {
       skipped.push({ line, reason: "Missing employee email." });
       continue;
     }
-
-    const employee = await prisma.user.findUnique({ where: { email } });
-    if (!employee || employee.role !== Role.EMPLOYEE || !employee.isActive) {
-      skipped.push({ line, reason: `No active employee found with email ${email}.` });
+    if (!rawName) {
+      skipped.push({ line, reason: `Missing employee name for "${rawEmail}".` });
       continue;
     }
 
-    // The email is the unique key into the system DB; the rest of the employee
-    // profile (code, department, contact, address) is taken from that record.
-    // Cross-check the uploaded name so a typo'd email can't quietly schedule
-    // the wrong person.
-    if (employee.fullName.trim().toLowerCase() !== name.toLowerCase()) {
+    // Match by unique email — the rest of the profile comes from the database.
+    const employee = await prisma.user.findUnique({ where: { email: rawEmail } });
+    if (!employee) {
+      skipped.push({ line, reason: `No employee found with email "${rawEmail}".` });
+      continue;
+    }
+    if (employee.role !== Role.EMPLOYEE || !employee.isActive) {
+      skipped.push({ line, reason: `"${rawEmail}" is not an active employee.` });
+      continue;
+    }
+
+    // Safety cross-check: uploaded name should match the system record for that email.
+    if (employee.fullName.trim().toLowerCase() !== rawName.toLowerCase()) {
       skipped.push({
         line,
-        reason:
-          `Name does not match the system record for ${email} ` +
-          `(system: ${employee.fullName}; uploaded: ${name}).`,
+        reason: `Name mismatch for "${rawEmail}": system has "${employee.fullName}", uploaded "${rawName}".`,
       });
       continue;
     }
 
     const dayValues: string[] = [];
-    let invalidCell: string | null = null;
-    for (const colIdx of dayCols) {
-      const parsed = parseDayCell(cols[colIdx] ?? "");
+    let invalidCell: { col: string; value: string } | null = null;
+    for (const { day, col } of dayIndexes) {
+      const parsed = parseDayCell(row[col] ?? "");
       if (parsed === null) {
-        invalidCell = cols[colIdx];
+        invalidCell = { col: day, value: row[col] ?? "" };
         break;
       }
       dayValues.push(parsed);
     }
     if (invalidCell !== null) {
-      skipped.push({ line, reason: `Invalid arrival time value "${invalidCell}".` });
+      skipped.push({
+        line,
+        reason: `Invalid arrival time "${invalidCell.value}" for ${invalidCell.col} (email "${rawEmail}").`,
+      });
       continue;
     }
 
@@ -603,5 +626,6 @@ export async function bulkUploadWeeklySchedules(
   }
 
   revalidatePath("/operations/weekly-requests");
+  revalidatePath("/employee/weekly");
   return { results: { created, skipped } };
 }

@@ -202,6 +202,44 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
+/* Always-visible scrollbars for data tables — the track is shown even when
+   the container is idle, so users can see there is more data without first
+   scrolling to the end. Themed to match the paper/ink design tokens. */
+.table-scrollbar {
+  overflow-y: auto;
+  overflow-x: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+.table-scrollbar::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+.table-scrollbar::-webkit-scrollbar-track {
+  background: var(--muted);
+  border-radius: 9999px;
+}
+.table-scrollbar::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 9999px;
+  border: 2px solid var(--muted);
+}
+.table-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: var(--muted-foreground);
+}
+.table-scrollbar::-webkit-scrollbar-corner {
+  background: var(--muted);
+}
+
+/* Sticky table header inside a .table-scrollbar container. */
+.table-scrollbar thead th {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: var(--background);
+  box-shadow: 0 1px 0 var(--border);
+}
+
 /* Fixed type scale -- "Refined Inter". Utilities: text-display-xl, text-display-l,
    text-h1, text-h2, text-body, text-body-strong, text-small, text-micro, text-mono-s.
    Display sizes tighten tracking and use the bold cut for the "Inter Display" feel. */
