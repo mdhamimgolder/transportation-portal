@@ -8,7 +8,7 @@ import {
 } from "@/lib/constants/arrival-times";
 import { MAX_UNFILTERED_ROWS } from "@/lib/constants/limits";
 import { excelSafeText } from "@/lib/csv";
-import { getDaySheet } from "@/lib/queries/route-planning";
+import { getDaySheet, compareArrivalTimes } from "@/lib/queries/route-planning";
 import { RoutePlanningControls } from "@/components/facilities/route-planning-controls";
 import { RouteDaySheet } from "@/components/facilities/route-day-sheet";
 import { WeekFilter, type WeekOption } from "@/components/facilities/week-filter";
@@ -71,6 +71,14 @@ export default async function RoutePlanningPage({
     include: { employee: true, days: true },
     orderBy: [{ weekStartDate: "desc" }, { employee: { fullName: "asc" } }],
     take: MAX_UNFILTERED_ROWS,
+  });
+
+  // Ordered by arrival time (Monday's requested arrival): 10 PM first,
+  // then 11 PM, ..., 6 AM -- matching the day sheet's presentation order.
+  exportSchedules.sort((a, b) => {
+    const mondayA = a.days.find((d) => d.dayOfWeek === 1)?.arrivalTime;
+    const mondayB = b.days.find((d) => d.dayOfWeek === 1)?.arrivalTime;
+    return compareArrivalTimes(mondayA, mondayB);
   });
 
   const csvRows = exportSchedules.map((schedule) => {

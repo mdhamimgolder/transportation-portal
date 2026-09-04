@@ -3,6 +3,32 @@ import { prisma } from "@/lib/prisma";
 import { formatShortDate } from "@/lib/date/week";
 import { WeeklyScheduleStatus } from "@/lib/constants/enums";
 
+/**
+ * Sort key for arrival times in the canonical plan order (10 PM -> 11 PM ->
+ * midnight -> ... -> 6 AM), mirroring ARRIVAL_TIME_OPTIONS. Rows with no
+ * arrival time sort last (recorded but unscheduled).
+ */
+function arrivalSortIndex(value: string | null): number {
+  if (!value) return Number.MAX_SAFE_INTEGER;
+  const hour = Number(value.slice(0, 2));
+  if (Number.isNaN(hour)) return Number.MAX_SAFE_INTEGER;
+  if (hour >= 22) return hour - 22;
+  return hour + 2;
+}
+
+function sortByArrival(a: string | null, b: string | null): number {
+  return arrivalSortIndex(a) - arrivalSortIndex(b);
+}
+
+/** Public comparator to order records by arrival time (10 PM first, then
+ *  11 PM, ... 6 AM). Returns a value usable by Array.prototype.sort. */
+export function compareArrivalTimes(
+  a: string | null | undefined,
+  b: string | null | undefined
+): number {
+  return arrivalSortIndex(a ?? null) - arrivalSortIndex(b ?? null);
+}
+
 export type DaySheetRow = {
   weeklyScheduleDayId: string;
   employeeName: string;
@@ -54,9 +80,7 @@ export async function getDaySheet(
     },
   });
 
-  days.sort((a, b) =>
-    a.weeklySchedule.employee.fullName.localeCompare(b.weeklySchedule.employee.fullName)
-  );
+  days.sort((a, b) => sortByArrival(a.arrivalTime, b.arrivalTime));
 
   const rows: DaySheetRow[] = days.map((d) => ({
     weeklyScheduleDayId: d.id,

@@ -1,5 +1,6 @@
 "use client";
 
+import * as React from "react";
 import { useActionState, useState } from "react";
 import { useFormStatus } from "react-dom";
 import { X } from "lucide-react";
@@ -41,6 +42,11 @@ function SubmitButton() {
   );
 }
 
+export type LiveSelection = {
+  driverName: string;
+  pickupTime: string;
+};
+
 export function AssignmentForm({
   target,
   options,
@@ -48,6 +54,7 @@ export function AssignmentForm({
   existingComment,
   pickupTimeMode = "select",
   variant = "inline",
+  actions,
 }: {
   target: { weeklyScheduleDayId: string } | { adHocRequestId: string };
   options: VehicleDriverOption[];
@@ -55,16 +62,23 @@ export function AssignmentForm({
   existingComment?: string | null;
   pickupTimeMode?: "select" | "text";
   variant?: "inline" | "panel";
+  actions?: (live: LiveSelection) => React.ReactNode;
 }) {
   const isAdHoc = "adHocRequestId" in target;
   const [editing, setEditing] = useState(!existing && !existingComment);
   const [state, formAction] = useActionState(assignRoute, initialState);
+
+  const [liveDriverName, setLiveDriverName] = useState(existing?.driverName ?? "");
+  const [livePickupTime, setLivePickupTime] = useState(existing?.pickupTime ?? "");
 
   const [prevSuccess, setPrevSuccess] = useState(false);
   if (state.success && !prevSuccess) {
     setPrevSuccess(true);
     setEditing(false);
   }
+
+  const renderActions = () =>
+    actions?.({ driverName: liveDriverName, pickupTime: livePickupTime }) ?? null;
 
   if ((existing || existingComment) && !editing) {
     return (
@@ -82,6 +96,7 @@ export function AssignmentForm({
           <Button type="button" variant="ghost" size="sm" onClick={() => setEditing(true)}>
             Edit
           </Button>
+          {renderActions()}
         </div>
         {existingComment ? (
           <p className="rounded-md bg-muted/50 px-2 py-1.5 text-xs text-muted-foreground">
@@ -120,6 +135,7 @@ export function AssignmentForm({
               name="vehicleDriverId"
               options={options}
               defaultValue={existing?.vehicleDriverId}
+              onSelect={(option) => setLiveDriverName(option.driverName)}
               className="min-w-0 flex-1 [&_input]:h-8"
             />
 
@@ -128,10 +144,15 @@ export function AssignmentForm({
                 name="pickupTime"
                 defaultValue={existing?.pickupTime}
                 placeholder="10:30 PM"
+                onChange={(e) => setLivePickupTime(e.target.value)}
                 className="h-8 w-24 min-w-0 shrink-0"
               />
             ) : (
-              <Select name="pickupTime" defaultValue={existing?.pickupTime}>
+              <Select
+                name="pickupTime"
+                defaultValue={existing?.pickupTime}
+                onValueChange={setLivePickupTime}
+              >
                 <SelectTrigger className="h-8 w-full min-w-0 px-2">
                   <SelectValue placeholder="Time" />
                 </SelectTrigger>
@@ -147,15 +168,12 @@ export function AssignmentForm({
           </div>
 
           <div className="flex items-center gap-1">
-            {isAdHoc ? (
-              <Input
-                name="comment"
-                defaultValue={existingComment ?? ""}
-                placeholder="Note to employee"
-                className="h-8 min-w-0 flex-1"
-              />
-            ) : null}
-
+            {state.error ? (
+              <p className="truncate text-xs text-destructive">{state.error}</p>
+            ) : (
+              <span className="min-w-0 flex-1" />
+            )}
+            {renderActions()}
             <SubmitButton />
             {existing || existingComment ? (
               <Button
@@ -170,10 +188,6 @@ export function AssignmentForm({
               </Button>
             ) : null}
           </div>
-
-          {state.error ? (
-            <p className="truncate text-xs text-destructive">{state.error}</p>
-          ) : null}
         </>
       ) : (
         <>

@@ -23,12 +23,14 @@ export function VehicleDriverCombobox({
   defaultValue,
   placeholder = "Search vehicle or driver",
   className,
+  onSelect,
 }: {
   name: string;
   options: VehicleDriverOption[];
   defaultValue?: string;
   placeholder?: string;
   className?: string;
+  onSelect?: (option: VehicleDriverOption) => void;
 }) {
   const initialOption = options.find((o) => o.id === defaultValue);
   const [selectedId, setSelectedId] = useState(defaultValue ?? "");
@@ -124,6 +126,7 @@ export function VehicleDriverCombobox({
                       setSelectedId(option.id);
                       setQuery(labelFor(option));
                       setOpen(false);
+                      onSelect?.(option);
                     }}
                   >
                     <span className="truncate">{labelFor(option)}</span>

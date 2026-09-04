@@ -1,3 +1,5 @@
+"use client";
+
 import { formatShortDate } from "@/lib/date/week";
 import {
   ADHOC_ARRIVAL_TIME_OPTIONS,
@@ -8,6 +10,10 @@ import {
   AssignmentForm,
   type VehicleDriverOption,
 } from "@/components/facilities/assignment-form";
+import {
+  CopyDetailsButton,
+  NoteComposer,
+} from "@/components/facilities/adhoc-actions";
 
 const ARRIVAL_TIME_LABELS = Object.fromEntries(
   ADHOC_ARRIVAL_TIME_OPTIONS.map((o) => [o.value, o.label])
@@ -81,24 +87,24 @@ export function AdHocList({
               style={{ background: RAIL_BY_STATUS[request.status] ?? "var(--muted)" }}
             />
 
-            <div className="grid h-20 gap-0 overflow-hidden sm:grid-cols-[minmax(0,1fr)_5rem_25rem]">
+            <div className="grid h-24 gap-0 overflow-hidden sm:grid-cols-[minmax(0,1fr)_5rem_25rem]">
               {/* Left: identity + required data (fills the box) */}
-              <div className="flex min-w-0 flex-col justify-center gap-1 overflow-hidden px-3 py-2">
+              <div className="flex min-w-0 flex-col justify-center gap-[3px] overflow-hidden px-3 py-1.5">
                 <div className="flex min-w-0 items-center gap-1.5">
-                  <h3 className="min-w-0 flex-1 truncate text-sm font-semibold leading-none">
+                  <h3 className="min-w-0 flex-1 truncate text-sm font-semibold leading-tight">
                     {request.employee.fullName}
                   </h3>
                   <StatusBadge status={request.status} />
                 </div>
 
                 <p
-                  className="min-w-0 truncate text-[13px] font-medium text-foreground"
+                  className="min-w-0 truncate text-[13px] font-medium leading-tight text-foreground"
                   title={request.employee.address ?? "—"}
                 >
                   {request.employee.address ?? "—"}
                 </p>
 
-                <div className="flex min-w-0 items-center gap-2 text-[13px]">
+                <div className="flex min-w-0 items-center gap-2 text-[13px] leading-tight">
                   <span className="shrink-0 text-muted-foreground">
                     {request.employee.contactNumber ?? "—"}
                   </span>
@@ -124,7 +130,7 @@ export function AdHocList({
               </div>
 
               {/* Placement tool -- exact 25rem column */}
-              <div className="border-t bg-muted/40 p-1.5 sm:border-t-0 sm:border-l">
+              <div className="flex flex-col justify-center gap-1.5 border-t bg-muted/40 p-1.5 sm:border-t-0 sm:border-l">
                 <AssignmentForm
                   target={{ adHocRequestId: request.id }}
                   options={options}
@@ -141,6 +147,26 @@ export function AdHocList({
                       : undefined
                   }
                   existingComment={request.facilitiesComment}
+                  actions={(live) => (
+                    <div className="flex items-center gap-0.5">
+                      <CopyDetailsButton
+                        employeeName={request.employee.fullName}
+                        address={request.employee.address}
+                        pickupTime={
+                          live.pickupTime || request.routeAssignment?.pickupTime || ""
+                        }
+                        driverName={
+                          live.driverName ||
+                          request.routeAssignment?.vehicleDriver.driverName ||
+                          ""
+                        }
+                      />
+                      <NoteComposer
+                        adHocRequestId={request.id}
+                        existingComment={request.facilitiesComment}
+                      />
+                    </div>
+                  )}
                 />
               </div>
             </div>
