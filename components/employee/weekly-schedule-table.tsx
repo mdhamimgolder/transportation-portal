@@ -92,41 +92,83 @@ export function WeeklyScheduleTable({
         </div>
       )}
 
-      <table className="w-full text-sm">
-        <thead>
-          <tr
-            className="text-left text-[11px] uppercase tracking-wider"
-            style={{ color: "var(--muted-foreground)" }}
-          >
-            <th className="px-4 py-2 font-medium sm:px-5">Day</th>
-            {!summary && <th className="px-3 py-2 font-medium">Date</th>}
-            {!summary && (
+      {summary ? (
+        <table className="w-full table-fixed text-sm">
+          <tbody>
+            <tr className="border-b border-border/60">
+              <th
+                scope="row"
+                className="w-28 px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-wider text-muted-foreground sm:w-36 sm:px-5"
+              >
+                Days
+              </th>
+              {days.map((day) => (
+                <td
+                  key={day.dayOfWeek}
+                  className="px-2 py-3 text-center font-display text-[13px] font-semibold text-foreground"
+                >
+                  {day.label.slice(0, 3)}
+                </td>
+              ))}
+            </tr>
+            <tr>
+              <th
+                scope="row"
+                className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-wider text-muted-foreground sm:px-5"
+              >
+                Arrival time
+              </th>
+              {days.map((day) => {
+                const active = day.needsTransport && day.arrivalTime !== null;
+                return (
+                  <td key={day.dayOfWeek} className="px-2 py-3 text-center">
+                    {active ? (
+                      <span className="font-mono text-[13px] font-medium text-foreground">
+                        {arrivalLabel(day.arrivalTime!)}
+                      </span>
+                    ) : (
+                      <span className="text-[13px] text-muted-foreground">Off</span>
+                    )}
+                  </td>
+                );
+              })}
+            </tr>
+          </tbody>
+        </table>
+      ) : (
+        <table className="w-full text-sm">
+          <thead>
+            <tr
+              className="text-left text-[11px] uppercase tracking-wider"
+              style={{ color: "var(--muted-foreground)" }}
+            >
+              <th className="px-4 py-2 font-medium sm:px-5">Day</th>
+              <th className="px-3 py-2 font-medium">Date</th>
               <th className="hidden px-3 py-2 font-medium sm:table-cell">
                 Status
               </th>
-            )}
-            <th className="px-3 py-2 text-right font-medium">Arrival time</th>
-            {!summary && <th className="w-8" aria-label="Details" />}
-          </tr>
-        </thead>
-        <tbody>
-          {days.map((d) => {
-            const active = d.needsTransport && d.arrivalTime !== null;
-            const isOpen = open === d.dayOfWeek;
-            return (
-              <DayRow
-                key={d.dayOfWeek}
-                day={d}
-                active={active}
-                isOpen={isOpen}
-                compact={compact}
-                summary={summary}
-                onToggle={() => setOpen(isOpen ? null : d.dayOfWeek)}
-              />
-            );
-          })}
-        </tbody>
-      </table>
+              <th className="px-3 py-2 text-right font-medium">Arrival time</th>
+              <th className="w-8" aria-label="Details" />
+            </tr>
+          </thead>
+          <tbody>
+            {days.map((d) => {
+              const active = d.needsTransport && d.arrivalTime !== null;
+              const isOpen = open === d.dayOfWeek;
+              return (
+                <DayRow
+                  key={d.dayOfWeek}
+                  day={d}
+                  active={active}
+                  isOpen={isOpen}
+                  compact={compact}
+                  onToggle={() => setOpen(isOpen ? null : d.dayOfWeek)}
+                />
+              );
+            })}
+          </tbody>
+        </table>
+      )}
 
       {/* Quiet summary footer — the one place the data is condensed. */}
       {!compact && days.length > 0 && (
@@ -163,14 +205,12 @@ function DayRow({
   active,
   isOpen,
   compact,
-  summary,
   onToggle,
 }: {
   day: ScheduleDay;
   active: boolean;
   isOpen: boolean;
   compact: boolean;
-  summary: boolean;
   onToggle: () => void;
 }) {
   const timeChip = active ? (
@@ -219,27 +259,21 @@ function DayRow({
             {day.label}
           </div>
         </td>
-        {!summary && (
-          <td className="px-3 py-3 font-mono text-[13px]" style={{ color: "var(--muted-foreground)" }}>
-            {day.dateLabel}
-          </td>
-        )}
-        {!summary && (
-          <td className="hidden px-3 py-3 sm:table-cell">
-            <StatusPill active={active} />
-          </td>
-        )}
+        <td className="px-3 py-3 font-mono text-[13px]" style={{ color: "var(--muted-foreground)" }}>
+          {day.dateLabel}
+        </td>
+        <td className="hidden px-3 py-3 sm:table-cell">
+          <StatusPill active={active} />
+        </td>
         <td className="px-3 py-3 text-right">{timeChip}</td>
-        {!summary && (
-          <td className="px-2 py-3 text-right">
-            {!compact && (
-              <ChevronDown
-                className={`size-4 transition-transform ${isOpen ? "rotate-180" : ""}`}
-                style={{ color: "var(--muted-foreground)" }}
-              />
-            )}
-          </td>
-        )}
+        <td className="px-2 py-3 text-right">
+          {!compact && (
+            <ChevronDown
+              className={`size-4 transition-transform ${isOpen ? "rotate-180" : ""}`}
+              style={{ color: "var(--muted-foreground)" }}
+            />
+          )}
+        </td>
       </tr>
 
       {/* Expandable detail line — date, driver, vehicle, pick-up time only. */}
