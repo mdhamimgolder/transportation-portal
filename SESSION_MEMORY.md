@@ -57,6 +57,36 @@ work fast without interruption.
 - **tsx scripts** need `import "dotenv/config"` at top; no top-level await (use `async main()`);
   temp scripts live in repo root (`_name.ts`) and are deleted after verifying.
 
+## Latest Session (2026-09-04b) — Auto Route Planner: auto-learn on RUN MAPPING + sidebar link
+**Built; tsc + eslint verified. Committed locally on main (feat + docs commits; lib/routing/* + office-locations/route-shifts force-added). NOT pushed — push only when the human explicitly says so.**
+1. **"Learn from history" is now automatic** — `generateWeeklyRoutes` (the RUN
+   MAPPING action in `actions/route-generation.actions.ts`) calls
+   `trainRoutePlannerFromHistory()` BEFORE clearing drafts/generating, so every
+   mapping run replans with a freshly rebuilt learned set. A failed refresh
+   never blocks mapping (the 5 min/km estimate is the fallback); outcome is
+   returned in `GenerateRoutesResult.learning` and shown as an amber inline
+   note in the result card when it fails.
+2. **Manual button removed** from `components/facilities/auto-route-planner-client.tsx`
+   (with `learnFromHistory` fn, `learning` state, `useToast`/`toast` — toast was
+   only used there). Route memory card now reads "Automatic — no button needed",
+   "Not trained yet — runs automatically on your next mapping", and refreshes
+   stats via `getRouteLearningStats()` after each run. Running-indicator text
+   mentions the memory refresh first.
+3. **Auto Route Planner was invisible in the UI** — files existed on disk but the
+   Facilities sidebar (`app/facilities/layout.tsx`) had NO nav link. Added
+   "Auto Route Planner" → `/facilities/automated-route-planner` (icon key
+   `automation`) between Pick Schedule and Ad-hoc Transport. Note: layout guard
+   is still `requireRole([Role.FACILITIES])` only (page allows SUPER_ADMIN too).
+4. **Discovery — the whole route-planner feature is UNTRACKED in git**:
+   `actions/route-{generation,learning,override,setting}.actions.ts`,
+   `app/facilities/{automated-route-planner,route-setting,pickup-point-coordinates}/`,
+   `components/facilities/{auto-route-planner-client,route-map,vehicle-pickup-points-manager,pickup-point-coordinates}.tsx`,
+   `components/facilities/route-setting/`, `components/ui/searchable-combobox.tsx`,
+   plus ALL of `lib/` is gitignored (`.gitignore:13`) so `lib/routing/*` isn't
+   tracked either → a fresh clone would have NO planner. Local backup commit DONE
+   (`git add -f` used for the lib files). NOT pushed — awaiting explicit human
+   go-ahead to push.
+
 ## Latest Session (2026-09-04) — Ad-hoc copy/note actions; day-sheet + weekly CSV ordered by arrival time
 **Built; tsc + eslint clean; dev server restarted (fresh .next) + logged in-routes 200; log clean. Committed + pushed: 4304ad7 (band resized), 9e3af94 (this session's features).**
 1. **Ad-hoc band resize + readability** (`components/facilities/adhoc-list.tsx`):
@@ -360,11 +390,12 @@ User: "use one line for comment box and arrival time box; arrival time box fixed
 - **Completed** (prior sessions): BASE ETA scheduling; firstPickupTime; pickup-time math in `lib/routing/pickup-schedule.ts`
   (5 min/km, 5-min grid, ≥5 min gap); route-learning (`RouteLegLearning`, Learn-from-history action); corridor algorithms;
   sync-after-mutation; route-map OSRM; address geocoding.
-- **Not yet done — user action required:** "Learn from history" button NOT clicked yet (learned set empty in DB), and
-  RUN MAPPING NOT re-run since the 5-min grid change, so existing RoutePlans still hold old 6.5-based times.
+- **Not yet done — user action required:** RUN MAPPING NOT re-run since the 5-min grid change, so existing RoutePlans
+  still hold old 6.5-based times. ("Learn from history" is now automatic inside every RUN MAPPING — no manual click.)
 
 ### Open threads / next steps
-1. Human should click **Learn from history**, then **RUN MAPPING** on the auto route planner to see 5-min grid + learned legs live.
+1. Human should click **RUN MAPPING** on the Auto Route Planner (now linked in the Facilities sidebar) — it auto-learns
+   from history first, then maps on the 5-min grid + learned legs.
 2. Unassigned: "Erin Employee" and "Sabrina Ferdous" have approved 10 PM schedules but no active 10 PM point.
 3. Honest limit (say it when relevant): training learns from historical planned pickup gaps, not GPS clock-ins.
 4. Open follow-ups from today: confirm the amber hero eyebrow + `.surface-accent` tint look right in browser;
