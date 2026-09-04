@@ -7,7 +7,8 @@ import { prisma } from "@/lib/prisma";
 import { requireRole } from "@/lib/rbac/guards";
 import { hashPassword } from "@/lib/auth/password";
 import { parseCsv } from "@/lib/csv";
-import { sendCredentialsEmail } from "@/lib/mailer";
+import { sendCredentialsEmail, sendCredentialsEmailNow } from "@/lib/mailer";
+import { randomBytes } from "node:crypto";
 import { Role, ALL_ROLES, OFFICE_LOCATIONS } from "@/lib/constants/enums";
 
 function isValidRole(value: string): value is Role {
@@ -325,6 +326,77 @@ export async function bulkCreateUsersAction(
         ? String(err.message)
         : "An unexpected error occurred during bulk upload.";
     return { error: message };
+  }
+}
+
+export type ResendCredentialsState = {
+  error?: string;
+  result?: {
+    email: string;
+    status: "sent" | "skipped-dev" | "failed";
+    error?: string;
+  };
+};
+
+/**
+ * Re-issue credentials for an existing account: sets a fresh temporary
+ * password (the original plaintext was never stored, so it cannot be resent),
+ * forces a password change on next login, and emails the new credentials.
+ * Unlike the create-flow email, this returns the REAL send result so SMTP
+ * problems (missing env vars, bad app password, …) are visible.
+ */
+export async function resendCredentialsAction(
+  _prevState: ResendCredentialsState,
+  formData: FormData
+): Promise<ResendCredentialsState> {
+  try {
+    await requireRole([Role.SUPER_ADMIN, Role.FACILITIES]);
+
+    const userId = formData.get("userId");
+    if (typeof userId !== "string" || !userId) {
+      return { error: "Missing user." };
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { id: true, email: true, fullName: true, isActive: true },
+    });
+    if (!user) return { error: "User not found." };
+    if (!user.isActive) {
+      return { error: "This account is deactivated — activate it first." };
+    }
+
+    const tempPassword = `Tmp-${randomBytes(6).toString("base64url")}`;
+    const passwordHash = await hashPassword(tempPassword);
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { passwordHash, mustChangePassword: true },
+    });
+
+    const outcome = await sendCredentialsEmailNow({
+      to: user.email,
+      fullName: user.fullName,
+      password: tempPassword,
+    });
+
+    revalidatePath("/facilities/user-info");
+    revalidatePath("/super-admin/users");
+
+    return {
+      result: {
+        email: user.email,
+        status: outcome.status,
+        error: outcome.error,
+      },
+    };
+  } catch (err) {
+    console.error("[resendCredentialsAction]", err);
+    return {
+      error:
+        err instanceof Error
+          ? err.message
+          : "Failed to resend credentials. Please try again.",
+    };
   }
 }
 

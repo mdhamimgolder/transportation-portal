@@ -6,6 +6,7 @@ import { AddEmployeeDialog } from "@/components/super-admin/add-employee-dialog"
 import { BulkUploadDialog } from "@/components/super-admin/bulk-upload-dialog";
 import { EditEmployeeProfileDialog } from "@/components/facilities/edit-employee-profile-dialog";
 import { SetPasswordDialog } from "@/components/shared/set-password-dialog";
+import { ResendCredentialsDialog } from "@/components/shared/resend-credentials-dialog";
 import { Badge } from "@/components/ui/badge";
 import {
   Table,
@@ -114,6 +115,7 @@ export default async function FacilitiesUserInfoPage({
                         pickupLongitude={employee.pickupLongitude}
                       />
                       <SetPasswordDialog userId={employee.id} fullName={employee.fullName} />
+                      <ResendCredentialsDialog userId={employee.id} fullName={employee.fullName} />
                     </div>
                   </TableCell>
                 </TableRow>

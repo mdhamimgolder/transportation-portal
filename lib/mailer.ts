@@ -11,6 +11,10 @@ const transporter = nodemailer.createTransport({
   },
 });
 
+/** Emails actually send only in production. Locally (`next dev`) the mail
+ * module is a no-op — creating test accounts never triggers SMTP. */
+const EMAIL_ENABLED = process.env.NODE_ENV === "production";
+
 export async function sendMail(params: {
   to: string;
   subject: string;
@@ -18,6 +22,11 @@ export async function sendMail(params: {
   html?: string;
 }): Promise<void> {
   const { to, subject, body, html } = params;
+
+  if (!EMAIL_ENABLED) {
+    console.log(`[MAILER] DEV — email skipped. To: ${to} | Subject: ${subject}`);
+    return;
+  }
 
   try {
     await transporter.sendMail({
@@ -52,15 +61,13 @@ export async function sendMailBackground(params: {
   }
 }
 
-/** Sends login credentials to a newly created account (fire-and-forget). */
-export function sendCredentialsEmail(params: {
+function credentialsEmailContent(params: {
   to: string;
   fullName: string;
   password: string;
-}): Promise<void> {
+}): { subject: string; body: string; html: string } {
   const { to, fullName, password } = params;
-  return sendMailBackground({
-    to,
+  return {
     subject: "Your Transportation Portal Account Has Been Created",
     body: `Hi ${fullName},\n\nYour account for the Transportation Portal has been created.\n\nLogin credentials:\nEmail: ${to}\nPassword: ${password}\n\nPlease change your password after signing in for the first time.\n\nBest regards,\nTransportation Team`,
     html: `
@@ -86,5 +93,34 @@ export function sendCredentialsEmail(params: {
         </div>
       </div>
     `,
-  });
+  };
+}
+
+/** Fire-and-forget version used right after account creation. */
+export function sendCredentialsEmail(params: {
+  to: string;
+  fullName: string;
+  password: string;
+}): Promise<void> {
+  const { subject, body, html } = credentialsEmailContent(params);
+  return sendMailBackground({ to: params.to, subject, body, html });
+}
+
+/** Result-returning version for resend flows — surfaces SMTP errors instead
+ * of swallowing them, so Facilities can see WHY an email failed. */
+export async function sendCredentialsEmailNow(params: {
+  to: string;
+  fullName: string;
+  password: string;
+}): Promise<{ status: "sent" | "skipped-dev" | "failed"; error?: string }> {
+  const { subject, body, html } = credentialsEmailContent(params);
+  try {
+    await sendMail({ to: params.to, subject, body, html });
+    return EMAIL_ENABLED ? { status: "sent" } : { status: "skipped-dev" };
+  } catch (error) {
+    return {
+      status: "failed",
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
 }

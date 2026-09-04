@@ -7,6 +7,7 @@ import { AddEmployeeDialog } from "@/components/super-admin/add-employee-dialog"
 import { BulkUploadDialog } from "@/components/super-admin/bulk-upload-dialog";
 import { UserRoleForm } from "@/components/super-admin/user-role-form";
 import { SetPasswordDialog } from "@/components/shared/set-password-dialog";
+import { ResendCredentialsDialog } from "@/components/shared/resend-credentials-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -99,6 +100,7 @@ export default async function SuperAdminUsersPage({
                   <TableCell>
                     <div className="flex items-center gap-1">
                       <SetPasswordDialog userId={user.id} fullName={user.fullName} />
+                      <ResendCredentialsDialog userId={user.id} fullName={user.fullName} />
                       {user.id === session.id ? null : (
                         <form action={toggleUserActiveAction}>
                           <input type="hidden" name="id" value={user.id} />
