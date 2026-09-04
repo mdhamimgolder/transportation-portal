@@ -75,8 +75,13 @@ work fast without interruption.
 3. **Auto Route Planner was invisible in the UI** — files existed on disk but the
    Facilities sidebar (`app/facilities/layout.tsx`) had NO nav link. Added
    "Auto Route Planner" → `/facilities/automated-route-planner` (icon key
-   `automation`) between Pick Schedule and Ad-hoc Transport. Note: layout guard
-   is still `requireRole([Role.FACILITIES])` only (page allows SUPER_ADMIN too).
+   `automation`) between Pick Schedule and Ad-hoc Transport. Follow-up (same
+   session): sidebar also gained **Route Setting** (`settings` icon) and
+   **Pick-up Points** → `/facilities/pickup-point-coordinates` (new `pickup`
+   MapPin key in shared `nav-sidebar.tsx`) — both were fully orphaned (no
+   inbound links). NOTE: `/facilities/weekly-export` is ALSO still orphaned
+   from nav — flagged, not added yet. Layout guard is still
+   `requireRole([Role.FACILITIES])` only (page allows SUPER_ADMIN too).
 4. **Discovery — the whole route-planner feature is UNTRACKED in git**:
    `actions/route-{generation,learning,override,setting}.actions.ts`,
    `app/facilities/{automated-route-planner,route-setting,pickup-point-coordinates}/`,
