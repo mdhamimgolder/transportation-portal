@@ -62,7 +62,7 @@ export function sendCredentialsEmail(params: {
   return sendMailBackground({
     to,
     subject: "Your Transportation Portal Account Has Been Created",
-    body: `Hi ${fullName},\n\nYour account for the Transportation Portal has been created.\n\nLogin credentials:\nEmail: ${to}\nPassword: ${password}\n\nPlease sign in at the portal and change your password if needed.\n\nBest regards,\nTransportation Team`,
+    body: `Hi ${fullName},\n\nYour account for the Transportation Portal has been created.\n\nLogin credentials:\nEmail: ${to}\nPassword: ${password}\n\nPlease change your password after signing in for the first time.\n\nBest regards,\nTransportation Team`,
     html: `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
         <div style="height: 4px; background: #70bccc; border-radius: 4px 4px 0 0;"></div>
@@ -81,6 +81,7 @@ export function sendCredentialsEmail(params: {
               <td style="padding: 10px; border: 1px solid #dee2e6; font-family: monospace;">${password}</td>
             </tr>
           </table>
+          <p style="color: #b45309; font-weight: bold; margin-top: 16px;">Please change your password after signing in for the first time.</p>
           <p style="color: #6c757d; margin-top: 24px;">Best regards,<br><strong>Transportation Team</strong></p>
         </div>
       </div>
