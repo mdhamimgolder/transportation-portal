@@ -102,6 +102,13 @@ work fast without interruption.
    emptyText + no-name error, page description, and the `pickup-schedule.ts`
    missing-coordinates error (now points to profile lat/lng / Pick-up Points
    page instead of "Geocode those addresses first").
+6. **Weekly Export page DELETED** (human: "not required any more") — `git rm -r
+   app/facilities/weekly-export` + removed 4 stale
+   `revalidatePath("/facilities/weekly-export")` calls (`on-behalf.actions.ts`
+   ×1, `weekly-schedule.actions.ts` ×3). `WeekFilter` + `ExportCsvButton`
+   components KEPT — shared with Pick Schedule, Operations weekly-requests and
+   Super-admin reports. Note: pre-existing eslint warning in
+   `weekly-schedule.actions.ts:324` ('session' unused) — untouched, harmless.
 
 ## Latest Session (2026-09-04) — Ad-hoc copy/note actions; day-sheet + weekly CSV ordered by arrival time
 **Built; tsc + eslint clean; dev server restarted (fresh .next) + logged in-routes 200; log clean. Committed + pushed: 4304ad7 (band resized), 9e3af94 (this session's features).**

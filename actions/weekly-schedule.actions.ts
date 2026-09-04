@@ -169,7 +169,6 @@ export async function submitCorporateWeeklySchedule(
 
   revalidatePath("/corporate-employee/my-schedule");
   revalidatePath("/operations/weekly-requests");
-  revalidatePath("/facilities/weekly-export");
   return { success: true };
 }
 
@@ -276,7 +275,6 @@ export async function submitMySchedule(
 
   revalidatePath("/operations/my-schedule");
   revalidatePath("/operations/weekly-requests");
-  revalidatePath("/facilities/weekly-export");
   return { success: true };
 }
 
@@ -584,6 +582,5 @@ export async function bulkUploadWeeklySchedules(
   }
 
   revalidatePath("/operations/weekly-requests");
-  revalidatePath("/facilities/weekly-export");
   return { results: { created, skipped } };
 }
