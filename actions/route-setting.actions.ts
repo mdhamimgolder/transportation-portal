@@ -5,7 +5,6 @@ import { prisma } from "@/lib/prisma";
 import { requireRole } from "@/lib/rbac/guards";
 import { Role } from "@/lib/constants/enums";
 import { getMondayOfWeek } from "@/lib/date/week";
-import { geocodeSearch } from "@/lib/routing/geocoder";
 import { normalizeOfficeLocation } from "@/lib/constants/office-locations";
 import { SHIFT_KEYS } from "@/lib/constants/route-shifts";
 import type { PinState, ShiftKey } from "@/lib/constants/route-shifts";
@@ -184,69 +183,6 @@ export async function toggleVehicleShiftPin(
       success: false,
       pin: null,
       error: error instanceof Error ? error.message : "Failed to update pin.",
-    };
-  }
-}
-
-// ── Address geocoding (OpenStreetMap) ──────────────────────────
-
-export type GeocodeCandidate = {
-  lat: number;
-  lng: number;
-  displayName: string;
-  addressText: string;
-};
-
-/** Search OpenStreetMap for a free-text address (server-side, no CORS). */
-export async function geocodeAddressSearch(
-  term: string
-): Promise<{ results: GeocodeCandidate[]; error?: string }> {
-  try {
-    await requireRole([Role.FACILITIES, Role.SUPER_ADMIN]);
-    const trimmed = term.trim();
-    if (!trimmed) return { results: [] };
-    const results = await geocodeSearch(trimmed);
-    return { results };
-  } catch (error) {
-    return {
-      results: [],
-      error:
-        error instanceof Error ? error.message : "Geocoding failed. Check GEOCODER_URL.",
-    };
-  }
-}
-
-/** Persist a geocoded address into the Address table (upsert by text). */
-export async function saveGeocodedAddress(
-  addressText: string,
-  latitude: number,
-  longitude: number,
-  label?: string
-): Promise<{ success: boolean; addressId?: string; error?: string }> {
-  try {
-    await requireRole([Role.FACILITIES, Role.SUPER_ADMIN]);
-    const text = addressText.trim();
-    if (!text) return { success: false, error: "Address is required." };
-    if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
-      return { success: false, error: "Coordinates must be numbers." };
-    }
-
-    const normalizedLabel = label ? label.trim() : null;
-
-    const address = await prisma.address.upsert({
-      where: { addressText: text },
-      update: { latitude, longitude, ...(normalizedLabel !== null && { label: normalizedLabel }) },
-      create: { addressText: text, latitude, longitude, label: normalizedLabel },
-    });
-
-    revalidatePath("/facilities/route-setting");
-    revalidatePath("/facilities/vehicles");
-
-    return { success: true, addressId: address.id };
-  } catch (error) {
-    return {
-      success: false,
-      error: error instanceof Error ? error.message : "Failed to save address.",
     };
   }
 }
@@ -490,80 +426,6 @@ export async function autoCalcPickupTimes(
         error instanceof Error
           ? error.message
           : "Failed to calculate pickup times.",
-    };
-  }
-}
-
-/** Update an existing saved address (label, address text, or coordinates). */
-export async function updateAddress(
-  id: string,
-  data: {
-    addressText?: string;
-    label?: string;
-    latitude?: number;
-    longitude?: number;
-  }
-): Promise<{ success: boolean; error?: string }> {
-  try {
-    await requireRole([Role.FACILITIES, Role.SUPER_ADMIN]);
-
-    const update: Record<string, string | number | null> = {};
-    if (data.addressText !== undefined) {
-      const text = data.addressText.trim();
-      if (!text) return { success: false, error: "Address text cannot be empty." };
-      update.addressText = text;
-    }
-    if (data.label !== undefined) update.label = data.label.trim() || null;
-    if (data.latitude !== undefined) update.latitude = data.latitude;
-    if (data.longitude !== undefined) update.longitude = data.longitude;
-
-    await prisma.address.update({ where: { id }, data: update });
-
-    revalidatePath("/facilities/route-setting");
-    revalidatePath("/facilities/vehicles");
-
-    return { success: true };
-  } catch (error) {
-    return {
-      success: false,
-      error: error instanceof Error ? error.message : "Failed to update address.",
-    };
-  }
-}
-
-/** Delete a saved address, refusing if it is still referenced anywhere. */
-export async function deleteAddress(
-  id: string
-): Promise<{ success: boolean; error?: string }> {
-  try {
-    await requireRole([Role.FACILITIES, Role.SUPER_ADMIN]);
-
-    const [pickupPoints, tripAssignments, homeUsers, pickupUsers] =
-      await Promise.all([
-        prisma.pickupPoint.count({ where: { addressId: id, isActive: true } }),
-        prisma.tripAssignment.count({ where: { pickupAddressId: id } }),
-        prisma.user.count({ where: { homeAddressId: id } }),
-        prisma.user.count({ where: { pickupAddressId: id } }),
-      ]);
-
-    if (pickupPoints > 0 || tripAssignments > 0 || homeUsers > 0 || pickupUsers > 0) {
-      return {
-        success: false,
-        error:
-          "This address is still in use (pickup points, trips, or employees). Remove it elsewhere first.",
-      };
-    }
-
-    await prisma.address.delete({ where: { id } });
-
-    revalidatePath("/facilities/route-setting");
-    revalidatePath("/facilities/vehicles");
-
-    return { success: true };
-  } catch (error) {
-    return {
-      success: false,
-      error: error instanceof Error ? error.message : "Failed to delete address.",
     };
   }
 }

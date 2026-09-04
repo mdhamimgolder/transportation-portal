@@ -65,8 +65,9 @@ export default async function RouteSettingPage({
       <div>
         <h1 className="text-xl font-semibold">Route Setting</h1>
         <p className="text-sm text-muted-foreground">
-          Pickup-point order (10 PM shift), vehicle-to-shift pinning per week,
-          and address geocoding for the auto route planner.
+          Pickup-point order (10 PM shift) and vehicle-to-shift pinning per
+          week. Coordinates come from employee profiles and the Pick-up Points
+          page.
         </p>
       </div>
       <RouteSettingClient

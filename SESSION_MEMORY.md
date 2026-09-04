@@ -91,6 +91,17 @@ work fast without interruption.
    tracked either → a fresh clone would have NO planner. Local backup commit DONE
    (`git add -f` used for the lib files). NOT pushed — awaiting explicit human
    go-ahead to push.
+5. **Route Setting "Geocode an address" card DELETED** (human call: profile
+   lat/lng already covers coordinates) — removed the `Geocoder` component +
+   `refreshAddresses` from `route-setting-client.tsx` (page now stacks
+   SequenceEditor + Pinner, no 2-col grid); deleted the now-dead actions
+   `geocodeAddressSearch` / `saveGeocodedAddress` / `updateAddress` /
+   `deleteAddress` (+ `geocodeSearch` import) from `route-setting.actions.ts`.
+   KEPT `lib/routing/geocoder.ts` — RUN MAPPING's auto-geocode fallback for
+   coordinate-less HOME addresses uses it directly. Copy fixed: AddPointForm
+   emptyText + no-name error, page description, and the `pickup-schedule.ts`
+   missing-coordinates error (now points to profile lat/lng / Pick-up Points
+   page instead of "Geocode those addresses first").
 
 ## Latest Session (2026-09-04) — Ad-hoc copy/note actions; day-sheet + weekly CSV ordered by arrival time
 **Built; tsc + eslint clean; dev server restarted (fresh .next) + logged in-routes 200; log clean. Committed + pushed: 4304ad7 (band resized), 9e3af94 (this session's features).**

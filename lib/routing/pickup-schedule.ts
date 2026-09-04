@@ -140,7 +140,8 @@ export function computePickupSchedule(
       success: false,
       error: `Missing coordinates for: ${missing
         .map((p) => p.name?.trim() || p.id)
-        .join(", ")}. Geocode those addresses first.`,
+        .join(", ")}. Set coordinates for those addresses first (employee
+        profile lat/lng or the Pick-up Points page).`,
     };
   }
 

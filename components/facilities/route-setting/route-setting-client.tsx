@@ -8,15 +8,11 @@ import {
   ChevronLeft,
   ChevronRight,
   Clock,
-  MapPin,
   Pencil,
   Pin,
   Plus,
   Save,
-  Search,
-  Trash2,
   Truck,
-  X,
 } from "lucide-react";
 import { Label } from "@/components/ui/label";
 import {
@@ -30,11 +26,7 @@ import {
   SearchableCombobox,
   type ComboboxOption,
 } from "@/components/ui/searchable-combobox";
-import {
-  createPickupPoint,
-  getAddressesForPickupPoints,
-} from "@/actions/pickup-point.actions";
-import { Badge } from "@/components/ui/badge";
+import { createPickupPoint } from "@/actions/pickup-point.actions";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -55,15 +47,10 @@ import type { PinState, ShiftKey } from "@/lib/constants/route-shifts";
 import {
   autoCalcPickupTimes,
   createVehicle,
-  deleteAddress,
-  geocodeAddressSearch,
   getVehicleShiftPins,
   reorderPickupPoints,
-  saveGeocodedAddress,
   toggleVehicleShiftPin,
-  updateAddress,
   updateVehicle,
-  type GeocodeCandidate,
 } from "@/actions/route-setting.actions";
 import { OFFICE_LOCATIONS } from "@/lib/constants/enums";
 import { formatShortDate, getMondayOfWeek } from "@/lib/date/week";
@@ -323,7 +310,7 @@ function AddPointForm({
     }
     const name = (selectedAddress?.label ?? selectedAddress?.addressText ?? "").trim();
     if (!name) {
-      onError("Selected location has no name. Set a label in Geocode an address first.");
+      onError("Selected location has no name.");
       return;
     }
     setSaving(true);
@@ -367,7 +354,7 @@ function AddPointForm({
             value={addressId || undefined}
             onChange={setAddressId}
             placeholder="Search & select a pickup point"
-            emptyText="No saved points yet — use “Geocode an address” to add one."
+            emptyText="No saved addresses yet — pickup points come from employee profiles."
             options={addresses.map(
               (a): ComboboxOption => ({
                 value: a.id,
@@ -1087,354 +1074,6 @@ function SequenceEditor({
   );
 }
 
-type GeocoderProps = {
-  addresses: AddressOption[];
-  onAddressesChanged: () => void;
-};
-
-function Geocoder({ addresses, onAddressesChanged }: GeocoderProps) {
-  const { toast } = useToast();
-  const [term, setTerm] = useState("");
-  const [searching, setSearching] = useState(false);
-  const [results, setResults] = useState<GeocodeCandidate[]>([]);
-  const [error, setError] = useState<string | null>(null);
-  const [saved, setSaved] = useState<Record<string, boolean>>({});
-  const [savingId, setSavingId] = useState<string | null>(null);
-  const [labels, setLabels] = useState<Record<string, string>>({});
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [editLabel, setEditLabel] = useState("");
-  const [editText, setEditText] = useState("");
-  const [busyId, setBusyId] = useState<string | null>(null);
-  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
-
-  async function search() {
-    const trimmed = term.trim();
-    if (!trimmed) return;
-    setSearching(true);
-    setError(null);
-    setResults([]);
-    setSaved({});
-    setLabels({});
-    try {
-      const res = await geocodeAddressSearch(trimmed);
-      if (res.error) setError(res.error);
-      else setResults(res.results);
-    } finally {
-      setSearching(false);
-    }
-  }
-
-  async function save(candidate: GeocodeCandidate, key: string) {
-    setSavingId(key);
-    try {
-      const label = (labels[key] ?? "").trim();
-      const res = await saveGeocodedAddress(
-        candidate.addressText,
-        candidate.lat,
-        candidate.lng,
-        label || undefined
-      );
-      if (!res.success) {
-        toast({ title: "Save failed", description: res.error, variant: "destructive" });
-        return;
-      }
-      setSaved((prev) => ({ ...prev, [key]: true }));
-      toast({
-        title: "Address saved",
-        description: label || candidate.addressText,
-      });
-      onAddressesChanged();
-    } finally {
-      setSavingId(null);
-    }
-  }
-
-  function startEdit(a: AddressOption) {
-    setEditingId(a.id);
-    setEditLabel(a.label ?? "");
-    setEditText(a.addressText);
-    setConfirmDeleteId(null);
-  }
-
-  function cancelEdit() {
-    setEditingId(null);
-    setEditLabel("");
-    setEditText("");
-  }
-
-  async function saveEdit(a: AddressOption) {
-    setBusyId(a.id);
-    try {
-      const res = await updateAddress(a.id, {
-        addressText: editText,
-        label: editLabel,
-      });
-      if (!res.success) {
-        toast({ title: "Update failed", description: res.error, variant: "destructive" });
-        return;
-      }
-      toast({ title: "Address updated", description: editLabel || editText });
-      cancelEdit();
-      onAddressesChanged();
-    } finally {
-      setBusyId(null);
-    }
-  }
-
-  async function doDelete(a: AddressOption) {
-    setBusyId(a.id);
-    try {
-      const res = await deleteAddress(a.id);
-      if (!res.success) {
-        toast({ title: "Delete failed", description: res.error, variant: "destructive" });
-        setConfirmDeleteId(null);
-        return;
-      }
-      toast({ title: "Address deleted", description: a.label ?? a.addressText });
-      setConfirmDeleteId(null);
-      onAddressesChanged();
-    } finally {
-      setBusyId(null);
-    }
-  }
-
-  return (
-    <Card>
-      <CardHeader className="border-b">
-        <div className="flex items-center justify-between">
-          <CardTitle className="flex items-center gap-2">
-            <MapPin className="size-4 text-teal" />
-            Geocode an address
-          </CardTitle>
-          <Badge
-            variant="outline"
-            className="border-lime/40 text-lime"
-            title="Total saved addresses available as pickup points"
-          >
-            {addresses.length} added
-          </Badge>
-        </div>
-        <CardDescription>
-          Find coordinates for a pickup address using OpenStreetMap, optionally
-          give it a short label, then store it so the auto route planner and the
-          pickup-point dropdown can use it.
-        </CardDescription>
-      </CardHeader>
-      <CardContent>
-        <div className="mb-4">
-          <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-            Saved addresses ({addresses.length})
-          </p>
-          {addresses.length === 0 ? (
-            <p className="text-sm text-muted-foreground">
-              No saved addresses yet. Search below and press “Save address”.
-            </p>
-          ) : (
-            <ul className="space-y-2">
-              {addresses.map((a) => (
-                <li
-                  key={a.id}
-                  className="rounded-lg border p-3"
-                >
-                  {editingId === a.id ? (
-                    <div className="space-y-2">
-                      <div>
-                        <Label>Label</Label>
-                        <Input
-                          value={editLabel}
-                          onChange={(e) => setEditLabel(e.target.value)}
-                          placeholder="e.g. Dhanmondi Hub"
-                          className="mt-1"
-                          disabled={busyId !== null}
-                        />
-                      </div>
-                      <div>
-                        <Label>Address</Label>
-                        <Input
-                          value={editText}
-                          onChange={(e) => setEditText(e.target.value)}
-                          className="mt-1"
-                          disabled={busyId !== null}
-                        />
-                      </div>
-                      <div className="flex gap-2 pt-1">
-                        <Button
-                          type="button"
-                          size="sm"
-                          disabled={busyId !== null || !editText.trim()}
-                          onClick={() => void saveEdit(a)}
-                        >
-                          <Check className="mr-1 size-3.5" />
-                          Save
-                        </Button>
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="ghost"
-                          disabled={busyId !== null}
-                          onClick={cancelEdit}
-                        >
-                          <X className="mr-1 size-3.5" />
-                          Cancel
-                        </Button>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="min-w-0">
-                        <p className="truncate text-sm font-medium">
-                          {a.label ?? a.addressText}
-                        </p>
-                        {a.label && (
-                          <p className="truncate text-xs text-muted-foreground">
-                            {a.addressText}
-                          </p>
-                        )}
-                      </div>
-                      <div className="flex shrink-0 gap-1">
-                        {confirmDeleteId === a.id ? (
-                          <>
-                            <Button
-                              type="button"
-                              size="sm"
-                              variant="destructive"
-                              disabled={busyId !== null}
-                              onClick={() => void doDelete(a)}
-                            >
-                              Confirm
-                            </Button>
-                            <Button
-                              type="button"
-                              size="sm"
-                              variant="ghost"
-                              disabled={busyId !== null}
-                              onClick={() => setConfirmDeleteId(null)}
-                            >
-                              Cancel
-                            </Button>
-                          </>
-                        ) : (
-                          <>
-                            <Button
-                              type="button"
-                              size="icon"
-                              variant="ghost"
-                              title="Edit address"
-                              disabled={busyId !== null}
-                              onClick={() => startEdit(a)}
-                            >
-                              <Pencil className="size-4" />
-                            </Button>
-                            <Button
-                              type="button"
-                              size="icon"
-                              variant="ghost"
-                              title="Delete address"
-                              className="text-destructive hover:text-destructive"
-                              disabled={busyId !== null}
-                              onClick={() => setConfirmDeleteId(a.id)}
-                            >
-                              <Trash2 className="size-4" />
-                            </Button>
-                          </>
-                        )}
-                      </div>
-                    </div>
-                  )}
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-
-        <div className="flex gap-2">
-          <Input
-            value={term}
-            onChange={(e) => setTerm(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") void search();
-            }}
-            placeholder="e.g. Bashundhara, Dhaka"
-            className="max-w-lg"
-          />
-          <Button type="button" disabled={searching || !term.trim()} onClick={() => void search()}>
-            <Search className="mr-1 size-3.5" />
-            {searching ? "Searching…" : "Search"}
-          </Button>
-        </div>
-
-        {error && (
-          <p className="mt-3 text-sm text-destructive">
-            {error} — set GEOCODER_URL so the server can reach a Nominatim
-            instance.
-          </p>
-        )}
-
-        {results.length > 0 && (
-          <ul className="mt-4 space-y-2">
-            {results.map((r, i) => {
-              const key = `${r.lat}-${r.lng}-${i}`;
-              return (
-                <li
-                  key={key}
-                  className="flex flex-col gap-3 rounded-lg border p-3 sm:flex-row sm:items-start sm:justify-between"
-                >
-                  <div className="min-w-0">
-                    <p className="text-sm font-medium">{r.displayName}</p>
-                    <p className="text-xs text-muted-foreground">
-                      {r.lat.toFixed(6)}, {r.lng.toFixed(6)}
-                    </p>
-                    {saved[key] ? (
-                      <p className="mt-1 text-xs text-green">
-                        {labels[key] ? `Label: ${labels[key]}` : "Use the address text as label"}
-                      </p>
-                    ) : (
-                      <div className="mt-2 min-w-0">
-                        <Label htmlFor={`geo-label-${key}`}>Name this point (optional)</Label>
-                        <Input
-                          id={`geo-label-${key}`}
-                          placeholder="e.g. Dhanmondi Hub"
-                          value={labels[key] ?? ""}
-                          onChange={(e) =>
-                            setLabels((prev) => ({ ...prev, [key]: e.target.value }))
-                          }
-                          className="mt-1 max-w-xs"
-                        />
-                      </div>
-                    )}
-                  </div>
-                  {saved[key] ? (
-                    <Badge variant="outline" className="shrink-0 border-green text-green">
-                      <Check className="mr-1 size-3" /> Saved
-                    </Badge>
-                  ) : (
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="outline"
-                      className="shrink-0"
-                      disabled={savingId !== null}
-                      onClick={() => void save(r, key)}
-                    >
-                      Save address
-                    </Button>
-                  )}
-                </li>
-              );
-            })}
-          </ul>
-        )}
-
-        {!searching && !error && results.length === 0 && (
-          <p className="mt-3 text-sm text-muted-foreground">
-            No search yet — type an address and press Search.
-          </p>
-        )}
-      </CardContent>
-    </Card>
-  );
-}
-
 type RouteSettingClientProps = {
   initialWeekStart: string;
   vehicles: VehicleRow[];
@@ -1445,29 +1084,17 @@ type RouteSettingClientProps = {
 export function RouteSettingClient({
   initialWeekStart,
   vehicles,
-  addresses: initialAddresses,
+  addresses,
   pins,
 }: RouteSettingClientProps) {
-  const [addresses, setAddresses] = useState<AddressOption[]>(initialAddresses);
-
-  const refreshAddresses = useCallback(async () => {
-    const res = await getAddressesForPickupPoints();
-    if (res.success) setAddresses(res.data ?? []);
-  }, []);
-
   return (
     <div className="space-y-6">
-      <div className="grid gap-6 lg:grid-cols-2">
-        <SequenceEditor vehicles={vehicles} addresses={addresses} />
-        <div className="space-y-6">
-          <Pinner
-            initialWeekStart={initialWeekStart}
-            vehicles={vehicles}
-            pins={pins}
-          />
-          <Geocoder addresses={addresses} onAddressesChanged={refreshAddresses} />
-        </div>
-      </div>
+      <SequenceEditor vehicles={vehicles} addresses={addresses} />
+      <Pinner
+        initialWeekStart={initialWeekStart}
+        vehicles={vehicles}
+        pins={pins}
+      />
     </div>
   );
 }
