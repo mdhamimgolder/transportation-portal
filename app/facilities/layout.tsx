@@ -21,6 +21,16 @@ export default async function FacilitiesLayout({
       label: "Auto Route Planner",
       icon: "automation",
     },
+    {
+      href: "/facilities/route-setting",
+      label: "Route Setting",
+      icon: "settings",
+    },
+    {
+      href: "/facilities/pickup-point-coordinates",
+      label: "Pick-up Points",
+      icon: "pickup",
+    },
     { href: "/facilities/adhoc", label: "Ad-hoc Transport", icon: "adhoc" },
     { href: "/facilities/vehicles", label: "Vehicles & Drivers", icon: "vehicles" },
     { href: "/facilities/user-info", label: "User Info", icon: "users" },
