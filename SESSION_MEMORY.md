@@ -57,6 +57,38 @@ work fast without interruption.
 - **tsx scripts** need `import "dotenv/config"` at top; no top-level await (use `async main()`);
   temp scripts live in repo root (`_name.ts`) and are deleted after verifying.
 
+## Latest Session (2026-09-04) — Ad-hoc copy/note actions; day-sheet + weekly CSV ordered by arrival time
+**Built; tsc + eslint clean; dev server restarted (fresh .next) + logged in-routes 200; log clean. Committed + pushed: 4304ad7 (band resized), 9e3af94 (this session's features).**
+1. **Ad-hoc band resize + readability** (`components/facilities/adhoc-list.tsx`):
+   - Middle arrival column `7rem → 5rem`; right assignment panel `20rem → 25rem`; band height `h-20 → h-24`
+     (fixed-height row now fits name/address/contact/pickup + icon row + assignment form).
+   - Address + pick-up line bumped `text-xs → text-[13px] font-medium`, tightened `gap-[3px]`/`py-1.5` so the
+     address row never gets clipped by the fixed band (was accidentally hidden before).
+2. **Comobobox dropdown no longer clipped** (`components/facilities/vehicle-driver-combobox.tsx`): the driver list is now
+   rendered through a **React portal at `position:fixed`** (computed from the trigger's bounding rect) so it overflows the
+   `overflow-hidden` fixed-height band instead of being cut off; still `max-h-[10rem] overflow-y-auto`; closes on outside-click/scroll.
+3. **Note box → message icon + copy icon**:
+   - NEW `components/facilities/adhoc-actions.tsx` (client): `NoteComposer` (message icon → Radix Popover with textarea +
+     Send; posts comment-only to `assignRoute`, saving `facilitiesComment` — same field the employee sees on their adhoc page)
+     and `CopyDetailsButton` (copy icon → clipboard text `Employee / Address / Pick-up / Driver`; green check on success).
+   - `components/facilities/assignment-form.tsx` `variant="panel"` no longer has an inline comment input; removed from panel row.
+   - Copy now uses **live form values**: combobox gained `onSelect` (reports chosen option); time Input/Select report
+     `onChange`/`onValueChange`; new `LiveSelection` type + `actions` prop is a render prop `(live) => ReactNode`:
+     copy reads `live.pickupTime || saved.pickupTime` and `live.driverName || saved.driverName` (falls back to saved assignment
+     only when field empty). So copy works before Save.
+   - Copy + message icons placed **beside the Save button** (row alignment), and also rendered beside "Edit" in the collapsed
+     (existing-assignment) view via the same `actions` render prop.
+4. **Arrival-time ordering** (Pick Schedule, user: "10 PM first, then 11 PM, then remaining"):
+   - `lib/queries/route-planning.ts`: `getDaySheet` rows now sort by `arrivalTime` via new `arrivalSortIndex`/`sortByArrival`
+     (order 22→23→0→…→6; empty/null sorts last). Exported reusable `compareArrivalTimes`.
+   - `app/facilities/route-planning/page.tsx`: weekly CSV export rows (`exportSchedules`) sorted by **Monday's** requested
+     arrival using `compareArrivalTimes`, so the export matches the sheet's presentation order.
+5. **Gotcha hit — server→client function prop:** `adhoc-list.tsx` was a SERVER component but passed `actions={(live)=>…}`
+   (a function) to the client `AssignmentForm` → runtime error "Functions cannot be passed directly to Client Components".
+   **Fixed by adding `"use client"` to `adhoc-list.tsx`.** (tsc didn't catch it.)
+6. Left `frontend/package*.json` (`date-fns`, unrelated scaffold) UNSTAGED — not part of this work.
+7. Open (unchanged): Operations notification email still not shared → `OPERATIONS_NOTIFICATION_EMAIL` env/constant to be set later.
+
 ## Latest Session (2026-09-03i) — Account creation: credentials email + validation + facilities role lock; immediate address/contact changes; delete profile-approval module
 **Built; tsc + eslint clean; schema migrated + client regen; build OK; dev server restarted (clean). Committed + pushed (b50751b, plus c9f6ae2 for prior task).**
 1. **New-user credentials email** — `lib/mailer.ts` gained `sendCredentialsEmail({to, fullName, password})`
@@ -316,15 +348,15 @@ User: "use one line for comment box and arrival time box; arrival time box fixed
    5-min grid with ≥5 min gaps.
 
 ### Work State
-- **This session (2026-09-02) fully built + verified** (see Latest Session blocks 09-02 → 09-02e): Refined Inter; #70BCCC accent system;
-  ad-hoc 3-hour rule (actions + both forms); AttentionBoard head removed; hero eyebrow now amber; near-white `.surface-accent` +
-  `--surface` on Search/Upload/Export + all Inputs/Selects; Facilities ad-hoc band = compact h-20 ledger rows (2x2 data grid:
-  address/contact/pickup/email, 10 PM pick-up required, narrow 7rem arrival column, two-row driver+time / note+save panel);   Operations
-  ad-hoc table select-all; Route Planning day-sheet-only with top-right weekly export.
-  **2026-09-02g**: schedule-submission email notice ("Your schedule has been submitted" → view week schedule +
-  day-wise assignment) on the 3 auto-approve paths (`submitMySchedule`, `createWeeklyScheduleOnBehalf`,
-  `bulkUploadWeeklySchedules`) via `sendMailBackground` + `after()`.
-  Nothing committed (branch `main`, last commit `809d81c`, ~50 modified/untracked files).
+- **This session (2026-09-04) built, verified + pushed** (`4304ad7`, `9e3af94`): ad-hoc band resized (5rem arrival / 25rem panel / h-24);
+  driver combobox dropdown renders via portal (not clipped); Note box → message-icon popover (`NoteComposer`) + copy icon
+  (`CopyDetailsButton`, NEW `components/facilities/adhoc-actions.tsx`) beside Save/Edit; copy reflects LIVE driver/time (not just saved);
+  `adhoc-list.tsx` marked `"use client"`; Pick Schedule day-sheet rows + weekly CSV export sorted by arrival time
+  (10 PM → 11 PM → … → 6 AM) via `compareArrivalTimes`. tsc+eslint clean; dev restart; 200s.
+- **PRIMARY OPEN THREAD — Operations notification email not yet provided** (user: "i will share it later").
+  Set `OPERATIONS_NOTIFICATION_EMAIL` env (Vercel) or the constant once shared; currently empty default.
+  All other facilities features (credentials emails, validation, SUPER_ADMIN lock, immediate address/contact + 30-day lock,
+  Pick Schedule rename, arrival ordering, message/copy icons) are committed. Unrelated `frontend/package*.json` change left unstaged.
 - **Completed** (prior sessions): BASE ETA scheduling; firstPickupTime; pickup-time math in `lib/routing/pickup-schedule.ts`
   (5 min/km, 5-min grid, ≥5 min gap); route-learning (`RouteLegLearning`, Learn-from-history action); corridor algorithms;
   sync-after-mutation; route-map OSRM; address geocoding.
