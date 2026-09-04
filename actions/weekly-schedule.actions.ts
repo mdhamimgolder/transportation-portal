@@ -321,7 +321,7 @@ export async function editWeeklySchedule(
   _prevState: EditWeeklyScheduleState,
   formData: FormData
 ): Promise<EditWeeklyScheduleState> {
-  const session = await requireRole([Role.OPERATIONS]);
+  await requireRole([Role.OPERATIONS]);
 
   const scheduleId = formData.get("scheduleId");
   if (typeof scheduleId !== "string" || !scheduleId) {
@@ -467,19 +467,21 @@ export async function bulkUploadWeeklySchedules(
   }
 
   const header = rows[0].map((h) => h.trim().toLowerCase());
-  const colIndex = (name: string) => header.indexOf(name);
+  const colIndex = (...names: string[]) =>
+    names.map((n) => header.indexOf(n)).find((v) => v !== -1) ?? -1;
   const idx = {
-    email: colIndex("employee email"),
+    name: colIndex("employee name", "name"),
+    email: colIndex("employee email", "email"),
     monday: colIndex("monday"),
     tuesday: colIndex("tuesday"),
     wednesday: colIndex("wednesday"),
     thursday: colIndex("thursday"),
     friday: colIndex("friday"),
   };
-  if (Object.values(idx).some((v) => v === -1)) {
+  if ([idx.name, idx.email, idx.monday, idx.tuesday, idx.wednesday, idx.thursday, idx.friday].includes(-1)) {
     return {
       error:
-        "CSV must include Employee Email, Monday, Tuesday, Wednesday, Thursday, and Friday columns.",
+        "CSV must include Employee Name, Employee Email, Monday, Tuesday, Wednesday, Thursday, and Friday columns.",
     };
   }
   const dayCols = [idx.monday, idx.tuesday, idx.wednesday, idx.thursday, idx.friday];
@@ -490,7 +492,12 @@ export async function bulkUploadWeeklySchedules(
   for (let i = 1; i < rows.length; i++) {
     const line = i + 1;
     const cols = rows[i];
+    const name = cols[idx.name]?.trim() ?? "";
     const email = cols[idx.email]?.trim().toLowerCase();
+    if (!name) {
+      skipped.push({ line, reason: "Missing employee name." });
+      continue;
+    }
     if (!email) {
       skipped.push({ line, reason: "Missing employee email." });
       continue;
@@ -499,6 +506,20 @@ export async function bulkUploadWeeklySchedules(
     const employee = await prisma.user.findUnique({ where: { email } });
     if (!employee || employee.role !== Role.EMPLOYEE || !employee.isActive) {
       skipped.push({ line, reason: `No active employee found with email ${email}.` });
+      continue;
+    }
+
+    // The email is the unique key into the system DB; the rest of the employee
+    // profile (code, department, contact, address) is taken from that record.
+    // Cross-check the uploaded name so a typo'd email can't quietly schedule
+    // the wrong person.
+    if (employee.fullName.trim().toLowerCase() !== name.toLowerCase()) {
+      skipped.push({
+        line,
+        reason:
+          `Name does not match the system record for ${email} ` +
+          `(system: ${employee.fullName}; uploaded: ${name}).`,
+      });
       continue;
     }
 

@@ -29,9 +29,8 @@ import {
 const initialState: BulkUploadWeeklyScheduleState = {};
 
 const SAMPLE_HEADERS = [
-  "Employee Email",
   "Employee Name",
-  "Employee ID",
+  "Employee Email",
   "Monday",
   "Tuesday",
   "Wednesday",
@@ -39,9 +38,8 @@ const SAMPLE_HEADERS = [
   "Friday",
 ];
 const SAMPLE_ROW = [
-  "employee@example.com",
   "Erin Employee",
-  "EMP0001",
+  "employee@example.com",
   "10:00 PM",
   "Not Required",
   "1:00 AM",
@@ -124,10 +122,13 @@ function BulkUploadDialogBody({
         <p>
           Required CSV columns:{" "}
           <code className="font-mono">
-            Employee Email, Monday, Tuesday, Wednesday, Thursday, Friday
+            Employee Name, Employee Email, Monday, Tuesday, Wednesday, Thursday, Friday
           </code>
           . Each day is either a time (e.g. <code className="font-mono">10:00 PM</code>)
-          or <code className="font-mono">Not Required</code>. Uploaded schedules are
+          or <code className="font-mono">Not Required</code>. Employees are matched by
+          their <span className="font-medium text-foreground">unique email</span> — the
+          uploaded name must match the system record, and the rest of each
+          employee&apos;s profile comes from the database. Uploaded schedules are
           approved immediately.
         </p>
         <ExportCsvButton
