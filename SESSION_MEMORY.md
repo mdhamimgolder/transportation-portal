@@ -109,6 +109,18 @@ work fast without interruption.
    components KEPT — shared with Pick Schedule, Operations weekly-requests and
    Super-admin reports. Note: pre-existing eslint warning in
    `weekly-schedule.actions.ts:324` ('session' unused) — untouched, harmless.
+7. **TEST MODE: account-creation email/contact validation relaxed + mailer
+   no-op locally** (human wants multiple dummy test accounts) — gated on
+   `NODE_ENV === "production"` (`IS_PROD` / `EMAIL_ENABLED` consts): `next dev`
+   skips the email regex + 11-digit contact check server-side
+   (`createUserAction` in `user-management.actions.ts`) AND the browser checks
+   (`type="email"`→text, contact `pattern` dropped in
+   `add-employee-dialog.tsx` — used by Facilities user-info AND Super-admin
+   users). `sendMail` in `lib/mailer.ts` logs and returns early outside
+   production → NO SMTP locally (covers credentials, password-reset,
+   finalize-notification emails). STILL enforced even in dev: required fields,
+   password ≥8, valid role, unique email + unique employeeCode (DB),
+   employeeCode 9 digits. TODO before go-live: remove the TEST MODE flags.
 
 ## Latest Session (2026-09-04) — Ad-hoc copy/note actions; day-sheet + weekly CSV ordered by arrival time
 **Built; tsc + eslint clean; dev server restarted (fresh .next) + logged in-routes 200; log clean. Committed + pushed: 4304ad7 (band resized), 9e3af94 (this session's features).**

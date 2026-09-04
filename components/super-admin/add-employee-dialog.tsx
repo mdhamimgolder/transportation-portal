@@ -23,6 +23,10 @@ import {
 } from "@/components/ui/dialog";
 import { ALL_ROLES, OFFICE_LOCATIONS, ROLE_LABELS, type Role } from "@/lib/constants/enums";
 
+/** TEST MODE (local only): relax the email/contact browser validation in dev —
+ * mirrors the server-side checks in createUserAction. */
+const IS_PROD = process.env.NODE_ENV === "production";
+
 const initialState: CreateUserState = {};
 
 function SubmitButton() {
@@ -66,7 +70,7 @@ function AddEmployeeDialogBody({ onDone, availableRoles }: { onDone: () => void;
         <Input
           id="email"
           name="email"
-          type="email"
+          type={IS_PROD ? "email" : "text"}
           placeholder="name@commure.com"
           required
           disabled={pending}
@@ -110,8 +114,8 @@ function AddEmployeeDialogBody({ onDone, availableRoles }: { onDone: () => void;
         <Input
           id="contactNumber"
           name="contactNumber"
-          pattern="\d{11}"
-          title="Must be exactly 11 digits"
+          pattern={IS_PROD ? "\\d{11}" : undefined}
+          title={IS_PROD ? "Must be exactly 11 digits" : undefined}
           placeholder="e.g. 01712345678"
           required
           disabled={pending}

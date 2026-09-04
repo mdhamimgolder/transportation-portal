@@ -11,6 +11,14 @@ import { sendCredentialsEmail, sendCredentialsEmailNow } from "@/lib/mailer";
 import { randomBytes } from "node:crypto";
 import { Role, ALL_ROLES, OFFICE_LOCATIONS } from "@/lib/constants/enums";
 
+/**
+ * TEST MODE (local only): the email/contact-number format checks below are
+ * skipped outside production so multiple dummy test accounts can be created
+ * locally via `next dev`. On Vercel NODE_ENV=production → validation fully on.
+ * TODO: remove this test-mode flag before relying on validation again.
+ */
+const IS_PROD = process.env.NODE_ENV === "production";
+
 function isValidRole(value: string): value is Role {
   return (ALL_ROLES as string[]).includes(value);
 }
@@ -45,7 +53,7 @@ export async function createUserAction(
 
     if (!fullName) return { error: "Full name is required." };
     if (!email) return { error: "Email is required." };
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    if (IS_PROD && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
       return { error: "Please enter a valid email address." };
     }
     if (typeof role !== "string" || !isValidRole(role)) {
@@ -60,7 +68,7 @@ export async function createUserAction(
     }
     if (!department) return { error: "Department is required." };
     if (!contactNumber) return { error: "Contact number is required." };
-    if (!/^\d{11}$/.test(contactNumber)) {
+    if (IS_PROD && !/^\d{11}$/.test(contactNumber)) {
       return { error: "Contact number must be exactly 11 digits." };
     }
     if (!address) return { error: "Address is required." };
