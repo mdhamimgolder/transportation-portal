@@ -94,7 +94,7 @@ export function ProfileUpdateForm({
 
       <div className="space-y-2">
         <Label htmlFor="officeLocation">Office Location</Label>
-        <Select name="officeLocation" defaultValue={officeLocation ?? ""} disabled>
+        <Select name="officeLocation" defaultValue={officeLocation ?? ""} required>
           <SelectTrigger id="officeLocation" className="w-full">
             <SelectValue placeholder="Select office location" />
           </SelectTrigger>
@@ -107,8 +107,11 @@ export function ProfileUpdateForm({
           </SelectContent>
         </Select>
         <p className="text-xs text-muted-foreground">
-          Your office location is managed by Facilities.
+          Your office location updates immediately.
         </p>
+        {state.errors?.officeLocation ? (
+          <p className="text-sm text-destructive">{state.errors.officeLocation}</p>
+        ) : null}
       </div>
 
       {state.successMessages && state.successMessages.length > 0 ? (

@@ -7,7 +7,9 @@ import { requireRole } from "@/lib/rbac/guards";
 import {
   Role,
   PickupPointChangeStatus,
+  OFFICE_LOCATIONS,
 } from "@/lib/constants/enums";
+import type { OfficeLocation } from "@/lib/constants/enums";
 import {
   FACILITIES_NOTIFICATION_EMAIL,
   OPERATIONS_NOTIFICATION_EMAIL,
@@ -19,6 +21,7 @@ export type UpdateProfileState = {
     pickupPoint?: string;
     address?: string;
     contactNumber?: string;
+    officeLocation?: string;
   };
   successMessages?: string[];
 };
@@ -38,6 +41,7 @@ export async function updateProfile(
   const pickupPointRaw = formData.get("pickupPoint");
   const addressRaw = formData.get("address");
   const contactNumberRaw = formData.get("contactNumber");
+  const officeLocationRaw = formData.get("officeLocation");
 
   const user = await prisma.user.findUniqueOrThrow({
     where: { id: session.id },
@@ -142,6 +146,24 @@ export async function updateProfile(
         data: { contactNumber: newContactNumber },
       });
       successMessages.push("Your contact number has been updated.");
+    }
+  }
+
+  // Office location: applied immediately (no approval).
+  if (typeof officeLocationRaw === "string") {
+    const newOfficeLocation = officeLocationRaw.trim();
+    if (newOfficeLocation.length > 0) {
+      if (newOfficeLocation !== (user.officeLocation ?? "").trim()) {
+        if (!OFFICE_LOCATIONS.includes(newOfficeLocation as OfficeLocation)) {
+          errors.officeLocation = "Select a valid office location.";
+        } else {
+          await prisma.user.update({
+            where: { id: session.id },
+            data: { officeLocation: newOfficeLocation },
+          });
+          successMessages.push("Your office location has been updated.");
+        }
+      }
     }
   }
 

@@ -53,7 +53,7 @@ export default async function ProfilePage() {
           <CardHeader>
             <CardTitle>Update Profile</CardTitle>
             <p className="text-xs text-muted-foreground mt-2">
-              Address and Contact Number changes apply immediately. Pick-up Point changes are sent to Facilities for review.
+              Address, Contact Number and Office Location changes apply immediately. Pick-up Point changes are sent to Facilities for review.
             </p>
           </CardHeader>
           <CardContent>
