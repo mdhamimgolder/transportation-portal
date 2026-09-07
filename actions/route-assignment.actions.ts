@@ -4,14 +4,74 @@ import { after } from "next/server";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { requireRole } from "@/lib/rbac/guards";
-import { sendMailBackground } from "@/lib/mailer";
+import { trySendMail } from "@/lib/mailer";
 import { Role, AdHocStatus } from "@/lib/constants/enums";
+import { transportArrangedEmail } from "@/lib/email-templates";
 import type { SessionUser } from "@/lib/auth/session";
 
 export type AssignRouteState = {
   error?: string;
   success?: boolean;
 };
+
+type AssignmentEmailKind = "ROUTE_ASSIGNMENT_WEEKLY" | "ROUTE_ASSIGNMENT_ADHOC";
+
+/** Registers the fire-and-forget delivery for one assignment. A PENDING log
+ *  row is written synchronously (so the UI shows the attempt immediately),
+ *  and the `after()` callback records SENT/FAILED + stamps `emailSentAt` only
+ *  when the SMTP send actually succeeded. */
+async function dispatchAssignmentEmail(params: {
+  assignmentId: string;
+  kind: AssignmentEmailKind;
+  employeeName: string;
+  employeeEmail: string;
+  date: Date;
+  driverName: string;
+  driverContact: string;
+  vehicleNumber: string;
+  pickupTime: string;
+}) {
+  const email = transportArrangedEmail({
+    kind: params.kind === "ROUTE_ASSIGNMENT_ADHOC" ? "ADHOC" : "WEEKLY",
+    employeeName: params.employeeName,
+    date: params.date,
+    driverName: params.driverName,
+    contactNumber: params.driverContact,
+    vehicleNumber: params.vehicleNumber,
+    pickupTime: params.pickupTime,
+  });
+
+  const log = await prisma.emailNotificationLog.create({
+    data: {
+      kind: params.kind,
+      recipient: params.employeeEmail,
+      recipientName: params.employeeName,
+      subject: email.subject,
+      routeAssignmentId: params.assignmentId,
+      status: "PENDING",
+    },
+  });
+
+  after(async () => {
+    const outcome = await trySendMail({
+      to: params.employeeEmail,
+      subject: email.subject,
+      body: email.body,
+      html: email.html,
+    });
+    await prisma.emailNotificationLog.update({
+      where: { id: log.id },
+      data: { status: outcome.status, error: outcome.error ?? null },
+    });
+    if (outcome.status === "SENT") {
+      await prisma.routeAssignment.update({
+        where: { id: params.assignmentId },
+        data: { emailSentAt: new Date() },
+      });
+    }
+    revalidatePath("/facilities/route-planning");
+  });
+}
 
 async function upsertAssignmentForWeeklyDay(params: {
   weeklyScheduleDayId: string;
@@ -49,44 +109,29 @@ async function upsertAssignmentForWeeklyDay(params: {
   });
 
   const employee = day.weeklySchedule.employee;
-  after(async () => {
-    await sendMailBackground({
-      to: employee.email,
-      subject: "Your transport has been arranged",
-      body: `Hi ${employee.fullName},\n\nYour transport for ${day.date.toDateString()} has been arranged:\nDriver: ${vehicleDriver.driverName} (${vehicleDriver.contactNumber})\nVehicle: ${vehicleDriver.vehicleNumber}\nPickup time: ${pickupTime}\n\n- Facilities Team`,
-      html: `
-        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
-          <h2 style="color: #1a1a2e;">Your Transport Has Been Arranged</h2>
-          <p>Hi <strong>${employee.fullName}</strong>,</p>
-          <p>Your transport for <strong>${day.date.toDateString()}</strong> has been arranged with the following details:</p>
-          <table style="width: 100%; border-collapse: collapse; margin: 16px 0;">
-            <tr style="background: #f8f9fa;">
-              <td style="padding: 10px; border: 1px solid #dee2e6; font-weight: bold;">Driver</td>
-              <td style="padding: 10px; border: 1px solid #dee2e6;">${vehicleDriver.driverName}</td>
-            </tr>
-            <tr>
-              <td style="padding: 10px; border: 1px solid #dee2e6; font-weight: bold;">Contact</td>
-              <td style="padding: 10px; border: 1px solid #dee2e6;">${vehicleDriver.contactNumber}</td>
-            </tr>
-            <tr style="background: #f8f9fa;">
-              <td style="padding: 10px; border: 1px solid #dee2e6; font-weight: bold;">Vehicle</td>
-              <td style="padding: 10px; border: 1px solid #dee2e6;">${vehicleDriver.vehicleNumber}</td>
-            </tr>
-            <tr>
-              <td style="padding: 10px; border: 1px solid #dee2e6; font-weight: bold;">Pickup Time</td>
-              <td style="padding: 10px; border: 1px solid #dee2e6;">${pickupTime}</td>
-            </tr>
-          </table>
-          <p>Please be ready at the pickup location at the scheduled time.</p>
-          <p style="color: #6c757d; margin-top: 24px;">Best regards,<br><strong>Facilities Team</strong></p>
-        </div>
-      `,
-    });
-    await prisma.routeAssignment.update({
-      where: { id: assignment.id },
-      data: { emailSentAt: new Date() },
-    });
+
+  const existing = await prisma.routeAssignment.findUnique({
+    where: { weeklyScheduleDayId: day.id },
   });
+  const detailsChanged =
+    !existing ||
+    existing.vehicleDriverId !== vehicleDriverId ||
+    existing.pickupTime !== pickupTime ||
+    !existing.emailSentAt;
+
+  if (detailsChanged) {
+    await dispatchAssignmentEmail({
+      assignmentId: assignment.id,
+      kind: "ROUTE_ASSIGNMENT_WEEKLY",
+      employeeName: employee.fullName,
+      employeeEmail: employee.email,
+      date: day.date,
+      driverName: vehicleDriver.driverName,
+      driverContact: vehicleDriver.contactNumber,
+      vehicleNumber: vehicleDriver.vehicleNumber,
+      pickupTime,
+    });
+  }
 
   return assignment;
 }
@@ -131,44 +176,28 @@ async function upsertAssignmentForAdHoc(params: {
     data: { status: AdHocStatus.ASSIGNED },
   });
 
-  after(async () => {
-    await sendMailBackground({
-      to: request.employee.email,
-      subject: "Your ad-hoc transport has been arranged",
-      body: `Hi ${request.employee.fullName},\n\nYour ad-hoc transport for ${request.date.toDateString()} has been arranged:\nDriver: ${vehicleDriver.driverName} (${vehicleDriver.contactNumber})\nVehicle: ${vehicleDriver.vehicleNumber}\nPickup time: ${pickupTime}\n\n- Facilities Team`,
-      html: `
-        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
-          <h2 style="color: #1a1a2e;">Your Ad-Hoc Transport Has Been Arranged</h2>
-          <p>Hi <strong>${request.employee.fullName}</strong>,</p>
-          <p>Your ad-hoc transport for <strong>${request.date.toDateString()}</strong> has been arranged with the following details:</p>
-          <table style="width: 100%; border-collapse: collapse; margin: 16px 0;">
-            <tr style="background: #f8f9fa;">
-              <td style="padding: 10px; border: 1px solid #dee2e6; font-weight: bold;">Driver</td>
-              <td style="padding: 10px; border: 1px solid #dee2e6;">${vehicleDriver.driverName}</td>
-            </tr>
-            <tr>
-              <td style="padding: 10px; border: 1px solid #dee2e6; font-weight: bold;">Contact</td>
-              <td style="padding: 10px; border: 1px solid #dee2e6;">${vehicleDriver.contactNumber}</td>
-            </tr>
-            <tr style="background: #f8f9fa;">
-              <td style="padding: 10px; border: 1px solid #dee2e6; font-weight: bold;">Vehicle</td>
-              <td style="padding: 10px; border: 1px solid #dee2e6;">${vehicleDriver.vehicleNumber}</td>
-            </tr>
-            <tr>
-              <td style="padding: 10px; border: 1px solid #dee2e6; font-weight: bold;">Pickup Time</td>
-              <td style="padding: 10px; border: 1px solid #dee2e6;">${pickupTime}</td>
-            </tr>
-          </table>
-          <p>Please be ready at the pickup location at the scheduled time.</p>
-          <p style="color: #6c757d; margin-top: 24px;">Best regards,<br><strong>Facilities Team</strong></p>
-        </div>
-      `,
-    });
-    await prisma.routeAssignment.update({
-      where: { id: assignment.id },
-      data: { emailSentAt: new Date() },
-    });
+  const existing = await prisma.routeAssignment.findUnique({
+    where: { adHocRequestId: adHocRequestId },
   });
+  const detailsChanged =
+    !existing ||
+    existing.vehicleDriverId !== vehicleDriverId ||
+    existing.pickupTime !== pickupTime ||
+    !existing.emailSentAt;
+
+  if (detailsChanged) {
+    await dispatchAssignmentEmail({
+      assignmentId: assignment.id,
+      kind: "ROUTE_ASSIGNMENT_ADHOC",
+      employeeName: request.employee.fullName,
+      employeeEmail: request.employee.email,
+      date: request.date,
+      driverName: vehicleDriver.driverName,
+      driverContact: vehicleDriver.contactNumber,
+      vehicleNumber: vehicleDriver.vehicleNumber,
+      pickupTime,
+    });
+  }
 
   return assignment;
 }
@@ -396,4 +425,85 @@ export async function copyLastWeekRoutes(formData: FormData): Promise<void> {
   }
 
   revalidatePath("/facilities/route-planning");
+}
+
+export type ResendEmailState = {
+  error?: string;
+  status?: "SENT" | "SKIPPED_DEV" | "FAILED";
+};
+
+/** One-off re-dispatch of an employee notification for a saved assignment.
+ *  Unlike the bulk flow this AWAITS the send so Facilities gets the outcome
+ *  right away (a single email is fast). */
+export async function resendRouteAssignmentEmail(
+  _prevState: ResendEmailState,
+  formData: FormData
+): Promise<ResendEmailState> {
+  await requireRole([Role.FACILITIES, Role.SUPER_ADMIN]);
+
+  const routeAssignmentId = formData.get("routeAssignmentId");
+  if (typeof routeAssignmentId !== "string" || !routeAssignmentId) {
+    return { error: "Missing assignment." };
+  }
+
+  const assignment = await prisma.routeAssignment.findUnique({
+    where: { id: routeAssignmentId },
+    include: {
+      vehicleDriver: true,
+      weeklyScheduleDay: {
+        include: { weeklySchedule: { include: { employee: true } } },
+      },
+      adHocRequest: { include: { employee: true } },
+    },
+  });
+  if (!assignment) return { error: "Assignment not found." };
+
+  const employee =
+    assignment.weeklyScheduleDay?.weeklySchedule.employee ??
+    assignment.adHocRequest?.employee;
+  if (!employee) return { error: "Employee not linked to this assignment." };
+
+  const date =
+    assignment.weeklyScheduleDay?.date ?? assignment.adHocRequest?.date;
+  if (!date) return { error: "Assignment has no travel date." };
+
+  const email = transportArrangedEmail({
+    kind: assignment.adHocRequestId ? "ADHOC" : "WEEKLY",
+    employeeName: employee.fullName,
+    date,
+    driverName: assignment.vehicleDriver.driverName,
+    contactNumber: assignment.vehicleDriver.contactNumber,
+    vehicleNumber: assignment.vehicleDriver.vehicleNumber,
+    pickupTime: assignment.pickupTime,
+  });
+
+  const outcome = await trySendMail({
+    to: employee.email,
+    subject: email.subject,
+    body: email.body,
+    html: email.html,
+  });
+
+  await prisma.emailNotificationLog.create({
+    data: {
+      kind: "ROUTE_ASSIGNMENT_RESEND",
+      recipient: employee.email,
+      recipientName: employee.fullName,
+      subject: email.subject,
+      routeAssignmentId: assignment.id,
+      status: outcome.status,
+      error: outcome.error ?? null,
+    },
+  });
+
+  if (outcome.status === "SENT") {
+    await prisma.routeAssignment.update({
+      where: { id: assignment.id },
+      data: { emailSentAt: new Date() },
+    });
+  }
+
+  revalidatePath("/facilities/route-planning");
+  revalidatePath("/facilities/email-log");
+  return { status: outcome.status, error: outcome.error };
 }

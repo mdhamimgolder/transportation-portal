@@ -6,6 +6,7 @@ import {
   CalendarDays,
   LayoutDashboard,
   LogOut,
+  Mail,
   UserRound,
   Zap,
   type LucideIcon,
@@ -28,6 +29,7 @@ const ICONS: Record<string, LucideIcon> = {
   weekly: CalendarDays,
   adhoc: Zap,
   profile: UserRound,
+  email: Mail,
 };
 
 function initialsOf(name: string): string {

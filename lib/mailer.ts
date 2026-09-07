@@ -61,6 +61,35 @@ export async function sendMailBackground(params: {
   }
 }
 
+export type EmailSendResult = {
+  status: "SENT" | "SKIPPED_DEV" | "FAILED";
+  error?: string;
+};
+
+/** Sends (or skips in dev) and returns the outcome instead of throwing, so
+ * callers can record delivery status per recipient. */
+export async function trySendMail(params: {
+  to: string;
+  subject: string;
+  body: string;
+  html?: string;
+}): Promise<EmailSendResult> {
+  if (!EMAIL_ENABLED) {
+    console.log(`[MAILER] DEV — email skipped. To: ${params.to} | Subject: ${params.subject}`);
+    return { status: "SKIPPED_DEV" };
+  }
+  try {
+    await sendMail(params);
+    return { status: "SENT" };
+  } catch (error) {
+    console.error(`[MAILER] Failed to send email to ${params.to}:`, error);
+    return {
+      status: "FAILED",
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
 function credentialsEmailContent(params: {
   to: string;
   fullName: string;

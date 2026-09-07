@@ -1,12 +1,13 @@
 "use client";
 
-import { useActionState, useState } from "react";
+import { useActionState, useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { useFormStatus } from "react-dom";
 import {
   saveDaySheetAssignments,
   type SaveDaySheetState,
 } from "@/actions/route-assignment.actions";
-import type { DaySheetRow } from "@/lib/queries/route-planning";
+import type { DaySheetRow, DaySheetEmailStatus } from "@/lib/queries/route-planning";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import {
@@ -17,6 +18,29 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+
+const EMAIL_STATUS_PRESENTATION: Record<
+  DaySheetEmailStatus,
+  { label: string; className: string }
+> = {
+  SENT: { label: "Sent", className: "bg-emerald-500/10 text-emerald-600" },
+  PENDING: { label: "Sending…", className: "bg-amber-500/10 text-amber-600" },
+  FAILED: { label: "Failed", className: "bg-rose-500/10 text-rose-600" },
+  SKIPPED_DEV: { label: "Dev skip", className: "bg-muted text-muted-foreground" },
+  NOT_SENT: { label: "Not sent", className: "bg-muted text-muted-foreground" },
+};
+
+function EmailStatusBadge({ status }: { status: DaySheetEmailStatus | null }) {
+  if (!status) {
+    return <span className="text-muted-foreground">—</span>;
+  }
+  const preset = EMAIL_STATUS_PRESENTATION[status];
+  return (
+    <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${preset.className}`}>
+      {preset.label}
+    </span>
+  );
+}
 
 const initialState: SaveDaySheetState = {};
 
@@ -46,9 +70,16 @@ export function RouteDaySheet({
   vehicleLookup: Record<string, { driverName: string; contactNumber: string }>;
 }) {
   const [state, formAction] = useActionState(saveDaySheetAssignments, initialState);
+  const router = useRouter();
   const [values, setValues] = useState<EditableFields[]>(
     rows.map((r) => ({ pickupTime: r.pickupTime, vehicleNumber: r.vehicleNumber }))
   );
+
+  useEffect(() => {
+    if (state.savedCount !== undefined) {
+      router.refresh();
+    }
+  }, [state.savedCount, router]);
 
   function fillColumnFrom(rowIndex: number, field: keyof EditableFields, lines: string[]) {
     setValues((prev) => {
@@ -106,6 +137,7 @@ export function RouteDaySheet({
               <TableHead className="min-w-32">Vehicle No</TableHead>
               <TableHead>Driver Name</TableHead>
               <TableHead>Contact Number</TableHead>
+              <TableHead>Email</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -163,6 +195,9 @@ export function RouteDaySheet({
                   </TableCell>
                   <TableCell className="whitespace-nowrap">
                     {match?.contactNumber ?? "—"}
+                  </TableCell>
+                  <TableCell className="whitespace-nowrap">
+                    <EmailStatusBadge status={row.emailStatus} />
                   </TableCell>
                 </TableRow>
               );

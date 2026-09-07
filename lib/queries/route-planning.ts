@@ -29,6 +29,13 @@ export function compareArrivalTimes(
   return arrivalSortIndex(a ?? null) - arrivalSortIndex(b ?? null);
 }
 
+export type DaySheetEmailStatus =
+  | "PENDING"
+  | "SENT"
+  | "FAILED"
+  | "SKIPPED_DEV"
+  | "NOT_SENT";
+
 export type DaySheetRow = {
   weeklyScheduleDayId: string;
   employeeName: string;
@@ -38,6 +45,7 @@ export type DaySheetRow = {
   requestedArrivalLabel: string | null;
   pickupTime: string;
   vehicleNumber: string;
+  emailStatus: DaySheetEmailStatus | null;
 };
 
 export type DaySheetData = {
@@ -76,24 +84,42 @@ export async function getDaySheet(
     },
     include: {
       weeklySchedule: { include: { employee: true } },
-      routeAssignment: { include: { vehicleDriver: true } },
+      routeAssignment: {
+        include: {
+          vehicleDriver: true,
+          emailLogs: { orderBy: { createdAt: "desc" }, take: 1 },
+        },
+      },
     },
   });
 
   days.sort((a, b) => sortByArrival(a.arrivalTime, b.arrivalTime));
 
-  const rows: DaySheetRow[] = days.map((d) => ({
-    weeklyScheduleDayId: d.id,
-    employeeName: d.weeklySchedule.employee.fullName,
-    employeeCode: d.weeklySchedule.employee.employeeCode,
-    address: d.weeklySchedule.employee.address,
-    pickupPoint: d.weeklySchedule.employee.pickupPoint,
-    requestedArrivalLabel: d.arrivalTime
-      ? arrivalTimeLabels[d.arrivalTime] ?? d.arrivalTime
-      : null,
-    pickupTime: d.routeAssignment?.pickupTime ?? "",
-    vehicleNumber: d.routeAssignment?.vehicleDriver.vehicleNumber ?? "",
-  }));
+  const rows: DaySheetRow[] = days.map((d) => {
+    const log = d.routeAssignment?.emailLogs[0];
+    let emailStatus: DaySheetEmailStatus | null = null;
+    if (d.routeAssignment) {
+      emailStatus = log
+        ? (log.status as DaySheetEmailStatus)
+        : d.routeAssignment.emailSentAt
+          ? "SENT"
+          : "NOT_SENT";
+    }
+
+    return {
+      weeklyScheduleDayId: d.id,
+      employeeName: d.weeklySchedule.employee.fullName,
+      employeeCode: d.weeklySchedule.employee.employeeCode,
+      address: d.weeklySchedule.employee.address,
+      pickupPoint: d.weeklySchedule.employee.pickupPoint,
+      requestedArrivalLabel: d.arrivalTime
+        ? arrivalTimeLabels[d.arrivalTime] ?? d.arrivalTime
+        : null,
+      pickupTime: d.routeAssignment?.pickupTime ?? "",
+      vehicleNumber: d.routeAssignment?.vehicleDriver.vehicleNumber ?? "",
+      emailStatus,
+    };
+  });
 
   return {
     weekLabel: `Week of ${formatShortDate(latest.weekStartDate)}`,

@@ -273,10 +273,39 @@ model RouteAssignment {
   pickupAddress String?
   noShow       Boolean? // Phase 2 hook; null = not tracked
 
+  emailLogs    EmailNotificationLog[]
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([vehicleDriverId])
+}
+
+// ── EMAIL NOTIFICATION DELIVERY LOG ───────────────────────────
+// One row per dispatch attempt for a route assignment. Facilities can see
+// whether an employee notification was actually sent, failed with an error,
+// or is still pending (fire-and-forget `after()` send in progress). The
+// `RouteAssignment.emailSentAt` column is stamped only when status = SENT.
+
+model EmailNotificationLog {
+  id          String   @id @default(cuid())
+  kind        String // ROUTE_ASSIGNMENT_WEEKLY | ROUTE_ASSIGNMENT_ADHOC | ROUTE_ASSIGNMENT_RESEND
+  recipient   String
+  recipientName String
+  subject     String
+
+  status String // PENDING | SENT | FAILED | SKIPPED_DEV
+  error  String?
+
+  routeAssignmentId String?
+  routeAssignment   RouteAssignment? @relation(fields: [routeAssignmentId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([routeAssignmentId])
+  @@index([status])
+  @@index([createdAt])
 }
 
 // ── VEHICLE & DRIVER MASTER LIST ─────────────────────────────
@@ -450,13 +479,19 @@ model RoutePlan {
   
   tripAssignments       TripAssignment[]
   overrides             RoutePlanOverride[]
-  
+
+  // Route analysis (side-of-road + order candidates, geometry, metrics) —
+  // computed on demand from the route map and cached here; `inputHash`
+  // inside the JSON invalidates it when stops / coordinates change.
+  routeAnalysis         Json?
+  appliedCandidateId    String?
+
   createdById           String
-  
+
   createdAt             DateTime @default(now())
   updatedAt             DateTime @updatedAt
   finalizedAt           DateTime?
-  
+
   @@unique([dayDate, vehicleId, arrivalTime])
   @@index([dayDate, arrivalTime])
   @@index([status])
@@ -492,7 +527,13 @@ model TripAssignment {
   
   // Sequence in vehicle (1st, 2nd, 3rd, ..., max 5 for 11 PM/12 AM)
   sequenceInTrip        Int      // 1, 2, 3, 4, 5
-  
+
+  // Chosen carriageway at the stop (from the route analysis): the heading the
+  // vehicle faces when stopped, and where OSRM snapped it on that side.
+  approachBearing       Int?
+  snappedLat            Float?
+  snappedLng            Float?
+
   // Email notification
   emailSentAt           DateTime?
   

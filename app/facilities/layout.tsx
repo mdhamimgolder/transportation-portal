@@ -45,6 +45,7 @@ export default async function FacilitiesLayout({
       label: "Allocation History",
       icon: "history",
     },
+    { href: "/facilities/email-log", label: "Email Log", icon: "email" },
     { href: "/facilities/profile", label: "Profile", icon: "profile" },
   ];
 
