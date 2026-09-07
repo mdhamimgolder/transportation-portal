@@ -13,7 +13,7 @@ const transporter = nodemailer.createTransport({
 
 /** Emails actually send only in production. Locally (`next dev`) the mail
  * module is a no-op — creating test accounts never triggers SMTP. */
-const EMAIL_ENABLED = process.env.NODE_ENV === "production";
+export const EMAIL_ENABLED = process.env.NODE_ENV === "production";
 
 export async function sendMail(params: {
   to: string;

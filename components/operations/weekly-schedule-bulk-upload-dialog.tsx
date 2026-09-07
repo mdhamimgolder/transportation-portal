@@ -83,6 +83,20 @@ function BulkUploadDialogBody({
         </p>
 
         {state.results.created.length > 0 ? (
+          <p
+            className={
+              state.results.emailsEnabled
+                ? "text-xs text-muted-foreground"
+                : "text-sm text-amber-600"
+            }
+          >
+            {state.results.emailsEnabled
+              ? `Schedule emails have been sent to ${state.results.created.length} employee(s).`
+              : "Schedules saved, but employee emails were NOT sent — email sending is disabled outside production."}
+          </p>
+        ) : null}
+
+        {state.results.created.length > 0 ? (
           <div className="space-y-2">
             <p className="text-sm font-medium">Schedules created</p>
             <div className="max-h-48 space-y-1 overflow-y-auto rounded-lg border bg-muted p-3 font-mono text-xs">

@@ -7,7 +7,7 @@ import { requireRole } from "@/lib/rbac/guards";
 import { getSubmissionWindow, getWeekDays, DAY_LABELS, formatShortDate } from "@/lib/date/week";
 import { getTransportSettings } from "@/lib/queries/settings";
 import { NO_TRANSPORT_VALUE, ARRIVAL_TIME_OPTIONS } from "@/lib/constants/arrival-times";
-import { sendMailBackground } from "@/lib/mailer";
+import { sendMailBackground, EMAIL_ENABLED } from "@/lib/mailer";
 import { Role, WeeklyScheduleStatus } from "@/lib/constants/enums";
 import { parseCsv } from "@/lib/csv";
 
@@ -436,7 +436,12 @@ export type BulkUploadWeeklyResultRow = { employeeName: string; email: string };
 export type BulkUploadWeeklySkipRow = { line: number; reason: string };
 export type BulkUploadWeeklyScheduleState = {
   error?: string;
-  results?: { created: BulkUploadWeeklyResultRow[]; skipped: BulkUploadWeeklySkipRow[] };
+  results?: {
+    created: BulkUploadWeeklyResultRow[];
+    skipped: BulkUploadWeeklySkipRow[];
+    /** False in development — the mailer skips sending outside production. */
+    emailsEnabled: boolean;
+  };
 };
 
 const DAY_HEADER_ALIASES: Record<string, string[]> = {
@@ -627,5 +632,11 @@ export async function bulkUploadWeeklySchedules(
 
   revalidatePath("/operations/weekly-requests");
   revalidatePath("/employee/weekly");
-  return { results: { created, skipped } };
+  return {
+    results: {
+      created,
+      skipped,
+      emailsEnabled: EMAIL_ENABLED,
+    },
+  };
 }
