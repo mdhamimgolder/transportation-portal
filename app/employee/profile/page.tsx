@@ -61,6 +61,7 @@ export default async function ProfilePage() {
               pickupPoint={user.pickupPoint}
               address={user.address}
               contactNumber={user.contactNumber}
+              officeLocation={user.officeLocation}
             />
           </CardContent>
         </Card>

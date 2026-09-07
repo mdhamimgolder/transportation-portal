@@ -10,6 +10,14 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { OFFICE_LOCATIONS } from "@/lib/constants/enums";
 
 const initialState: UpdateProfileState = {};
 
@@ -26,10 +34,12 @@ export function ProfileUpdateForm({
   pickupPoint,
   address,
   contactNumber,
+  officeLocation,
 }: {
   pickupPoint: string | null;
   address: string | null;
   contactNumber: string | null;
+  officeLocation: string | null;
 }) {
   const [state, formAction] = useActionState(updateProfile, initialState);
 
@@ -80,6 +90,25 @@ export function ProfileUpdateForm({
         {state.errors?.contactNumber ? (
           <p className="text-sm text-destructive">{state.errors.contactNumber}</p>
         ) : null}
+      </div>
+
+      <div className="space-y-2">
+        <Label htmlFor="officeLocation">Office Location</Label>
+        <Select name="officeLocation" defaultValue={officeLocation ?? ""} disabled>
+          <SelectTrigger id="officeLocation" className="w-full">
+            <SelectValue placeholder="Select office location" />
+          </SelectTrigger>
+          <SelectContent>
+            {OFFICE_LOCATIONS.map((location) => (
+              <SelectItem key={location} value={location}>
+                {location}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <p className="text-xs text-muted-foreground">
+          Your office location is managed by Facilities.
+        </p>
       </div>
 
       {state.successMessages && state.successMessages.length > 0 ? (

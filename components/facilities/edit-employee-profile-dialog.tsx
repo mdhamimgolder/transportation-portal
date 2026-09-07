@@ -17,6 +17,14 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { OFFICE_LOCATIONS } from "@/lib/constants/enums";
 
 const initialState: UpdateEmployeeProfileState = {};
 
@@ -35,6 +43,7 @@ export function EditEmployeeProfileDialog({
   contactNumber,
   address,
   pickupPoint,
+  officeLocation,
   homeLatitude,
   homeLongitude,
   pickupLatitude,
@@ -45,6 +54,7 @@ export function EditEmployeeProfileDialog({
   contactNumber: string | null;
   address: string | null;
   pickupPoint: string | null;
+  officeLocation: string | null;
   homeLatitude: number | null;
   homeLongitude: number | null;
   pickupLatitude: number | null;
@@ -99,6 +109,21 @@ export function EditEmployeeProfileDialog({
               defaultValue={pickupPoint ?? ""}
               required
             />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor={`officeLocation-${userId}`}>Office location</Label>
+            <Select name="officeLocation" defaultValue={officeLocation ?? ""} required>
+              <SelectTrigger id={`officeLocation-${userId}`} className="w-full">
+                <SelectValue placeholder="Select office location" />
+              </SelectTrigger>
+              <SelectContent>
+                {OFFICE_LOCATIONS.map((location) => (
+                  <SelectItem key={location} value={location}>
+                    {location}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
           <div className="grid gap-3 sm:grid-cols-2">
             <div className="space-y-2">

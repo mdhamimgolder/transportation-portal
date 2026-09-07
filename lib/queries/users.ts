@@ -54,6 +54,7 @@ export type EmployeeDirectoryRow = {
   contactNumber: string | null;
   address: string | null;
   pickupPoint: string | null;
+  officeLocation: string | null;
   homeLatitude: number | null;
   homeLongitude: number | null;
   pickupLatitude: number | null;
@@ -78,6 +79,7 @@ export async function getEmployeeDirectory(q?: string): Promise<EmployeeDirector
     contactNumber: u.contactNumber,
     address: u.address,
     pickupPoint: u.pickupPoint,
+    officeLocation: u.officeLocation,
     homeLatitude: u.homeAddress?.latitude ?? null,
     homeLongitude: u.homeAddress?.longitude ?? null,
     pickupLatitude: u.pickupAddress?.latitude ?? null,
@@ -95,6 +97,7 @@ export async function getEmployeeDirectory(q?: string): Promise<EmployeeDirector
       (r.employeeCode?.toLowerCase().includes(needle) ?? false) ||
       (r.department?.toLowerCase().includes(needle) ?? false) ||
       (r.contactNumber?.toLowerCase().includes(needle) ?? false) ||
-      (r.address?.toLowerCase().includes(needle) ?? false)
+      (r.address?.toLowerCase().includes(needle) ?? false) ||
+      (r.officeLocation?.toLowerCase().includes(needle) ?? false)
   );
 }

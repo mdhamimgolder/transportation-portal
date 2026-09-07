@@ -109,6 +109,7 @@ export default async function FacilitiesUserInfoPage({
                         contactNumber={employee.contactNumber}
                         address={employee.address}
                         pickupPoint={employee.pickupPoint}
+                        officeLocation={employee.officeLocation}
                         homeLatitude={employee.homeLatitude}
                         homeLongitude={employee.homeLongitude}
                         pickupLatitude={employee.pickupLatitude}

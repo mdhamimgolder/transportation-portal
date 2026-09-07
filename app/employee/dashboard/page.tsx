@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { CalendarRange } from "lucide-react";
 import { requireRole } from "@/lib/rbac/guards";
-import { Role, ROLE_LABELS, WeeklyScheduleStatus } from "@/lib/constants/enums";
+import { Role, ROLE_LABELS } from "@/lib/constants/enums";
 import { prisma } from "@/lib/prisma";
 import {
   getMondayOfWeek,
@@ -146,24 +146,6 @@ export default async function EmployeeDashboardPage() {
               <CalendarRange className="size-3.5" style={{ color: "var(--role-accent)" }} />
               This week · arrival times
             </p>
-            {currentSchedule?.status ? (
-              <span
-                className="rounded-full px-2 py-0.5 text-[11px] font-semibold"
-                style={
-                  currentSchedule.status === WeeklyScheduleStatus.APPROVED
-                    ? { background: "var(--green)", color: "var(--green-foreground)" }
-                    : currentSchedule.status === WeeklyScheduleStatus.REJECTED
-                    ? { background: "var(--red)", color: "var(--red-foreground)" }
-                    : { background: "var(--amber)", color: "var(--amber-foreground)" }
-                }
-              >
-                {currentSchedule.status === WeeklyScheduleStatus.APPROVED
-                  ? "Approved"
-                  : currentSchedule.status === WeeklyScheduleStatus.REJECTED
-                  ? "Rejected"
-                  : "Pending"}
-              </span>
-            ) : null}
           </div>
 
           {weekDays.length === 0 ? (

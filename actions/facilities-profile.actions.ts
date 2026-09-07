@@ -3,7 +3,8 @@
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { requireRole } from "@/lib/rbac/guards";
-import { Role } from "@/lib/constants/enums";
+import { Role, OFFICE_LOCATIONS } from "@/lib/constants/enums";
+import type { OfficeLocation } from "@/lib/constants/enums";
 
 export type UpdateEmployeeProfileState = {
   error?: string;
@@ -66,6 +67,7 @@ export async function updateEmployeeProfileByFacilitiesAction(
   const contactNumber = requiredField(formData, "contactNumber");
   const address = requiredField(formData, "address");
   const pickupPoint = requiredField(formData, "pickupPoint");
+  const officeLocation = requiredField(formData, "officeLocation");
   const homeLatitude = Number(formData.get("homeLatitude"));
   const homeLongitude = Number(formData.get("homeLongitude"));
   const pickupLatitude = Number(formData.get("pickupLatitude"));
@@ -74,6 +76,10 @@ export async function updateEmployeeProfileByFacilitiesAction(
   if (!contactNumber) return { error: "Contact number is required." };
   if (!address) return { error: "Address is required." };
   if (!pickupPoint) return { error: "Pick-up point is required." };
+  if (!officeLocation) return { error: "Office location is required." };
+  if (!OFFICE_LOCATIONS.includes(officeLocation as OfficeLocation)) {
+    return { error: "Invalid office location." };
+  }
   if (![homeLatitude, homeLongitude, pickupLatitude, pickupLongitude].every(Number.isFinite)) {
     return { error: "Enter valid latitude and longitude values for both locations." };
   }
@@ -105,6 +111,7 @@ export async function updateEmployeeProfileByFacilitiesAction(
       contactNumber,
       address,
       pickupPoint,
+      officeLocation,
       homeAddressId: homeAddress.id,
       pickupAddressId: pickupAddress.id,
     },
