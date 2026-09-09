@@ -64,6 +64,7 @@ export async function updateEmployeeProfileByFacilitiesAction(
     return { error: "Missing employee." };
   }
 
+  const fullName = requiredField(formData, "fullName");
   const contactNumber = requiredField(formData, "contactNumber");
   const address = requiredField(formData, "address");
   const pickupPoint = requiredField(formData, "pickupPoint");
@@ -73,6 +74,13 @@ export async function updateEmployeeProfileByFacilitiesAction(
   const pickupLatitude = Number(formData.get("pickupLatitude"));
   const pickupLongitude = Number(formData.get("pickupLongitude"));
 
+  const employeeCodeRaw = formData.get("employeeCode");
+  const employeeCode =
+    typeof employeeCodeRaw === "string" && employeeCodeRaw.trim()
+      ? employeeCodeRaw.trim()
+      : null;
+
+  if (!fullName) return { error: "Full name is required." };
   if (!contactNumber) return { error: "Contact number is required." };
   if (!address) return { error: "Address is required." };
   if (!pickupPoint) return { error: "Pick-up point is required." };
@@ -95,6 +103,19 @@ export async function updateEmployeeProfileByFacilitiesAction(
     return { error: "Employee not found." };
   }
 
+  // Employee ID is unique in the database ΓÇö catch collisions with a friendly
+  // message instead of a raw Prisma unique-constraint error. Any format is
+  // accepted; an empty value clears the field (column is nullable).
+  if (employeeCode) {
+    const codeOwner = await prisma.user.findUnique({
+      where: { employeeCode },
+      select: { id: true },
+    });
+    if (codeOwner && codeOwner.id !== userId) {
+      return { error: `Employee ID ${employeeCode} is already used by another employee.` };
+    }
+  }
+
   const homeAddress = await prisma.address.upsert({
     where: { addressText: address },
     update: { latitude: homeLatitude, longitude: homeLongitude },
@@ -108,6 +129,8 @@ export async function updateEmployeeProfileByFacilitiesAction(
   await prisma.user.update({
     where: { id: userId },
     data: {
+      fullName,
+      employeeCode,
       contactNumber,
       address,
       pickupPoint,

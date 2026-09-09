@@ -40,6 +40,7 @@ function SubmitButton() {
 export function EditEmployeeProfileDialog({
   userId,
   fullName,
+  employeeCode,
   contactNumber,
   address,
   pickupPoint,
@@ -51,6 +52,7 @@ export function EditEmployeeProfileDialog({
 }: {
   userId: string;
   fullName: string;
+  employeeCode: string | null;
   contactNumber: string | null;
   address: string | null;
   pickupPoint: string | null;
@@ -83,6 +85,26 @@ export function EditEmployeeProfileDialog({
         </DialogHeader>
         <form action={formAction} className="space-y-4">
           <input type="hidden" name="userId" value={userId} />
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="space-y-2">
+              <Label htmlFor={`fullName-${userId}`}>Full name</Label>
+              <Input
+                id={`fullName-${userId}`}
+                name="fullName"
+                defaultValue={fullName}
+                required
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor={`employeeCode-${userId}`}>Employee ID</Label>
+              <Input
+                id={`employeeCode-${userId}`}
+                name="employeeCode"
+                defaultValue={employeeCode ?? ""}
+                placeholder="e.g. 123456789"
+              />
+            </div>
+          </div>
           <div className="space-y-2">
             <Label htmlFor={`contactNumber-${userId}`}>Contact number</Label>
             <Input

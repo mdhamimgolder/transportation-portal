@@ -106,6 +106,7 @@ export default async function FacilitiesUserInfoPage({
                       <EditEmployeeProfileDialog
                         userId={employee.id}
                         fullName={employee.fullName}
+                        employeeCode={employee.employeeCode}
                         contactNumber={employee.contactNumber}
                         address={employee.address}
                         pickupPoint={employee.pickupPoint}
