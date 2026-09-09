@@ -182,14 +182,12 @@ export async function bulkCreateUsersAction(
     idx.department === -1 ||
     idx.contactNumber === -1 ||
     idx.address === -1 ||
-    idx.homeLatitude === -1 ||
-    idx.homeLongitude === -1 ||
     idx.pickupPoint === -1 ||
     idx.password === -1
   ) {
     return {
       error:
-        "CSV must include fullName, email, role, employeeCode, department, contactNumber, address, homeLatitude, homeLongitude, pickupPoint, and password columns.",
+        "CSV must include fullName, email, role, employeeCode, department, contactNumber, address, pickupPoint, and password columns. homeLatitude and homeLongitude are optional.",
     };
   }
 
@@ -198,6 +196,47 @@ export async function bulkCreateUsersAction(
     const employeeCodesInFile = new Set<string>();
     const emailsInFile = new Set<string>();
     const createdCredentials: { email: string; fullName: string; password: string }[] = [];
+
+    // Pre-fetch every existing email / employee ID in TWO queries total
+    // (was: two findUnique round trips per row), and pre-hash every password
+    // in PARALLEL (bcrypt was awaited serially, ~100ms per row).
+    const allEmails = [
+      ...new Set(
+        rows
+          .slice(1)
+          .map((cols) => (cols[idx.email] ?? "").trim().toLowerCase())
+          .filter(Boolean)
+      ),
+    ];
+    const allCodes = [
+      ...new Set(
+        rows
+          .slice(1)
+          .map((cols) => (cols[idx.employeeCode] ?? "").trim())
+          .filter(Boolean)
+      ),
+    ];
+    const [existingEmailRows, existingCodeRows] = await Promise.all([
+      prisma.user.findMany({ where: { email: { in: allEmails } }, select: { email: true } }),
+      prisma.user.findMany({
+        where: { employeeCode: { in: allCodes } },
+        select: { employeeCode: true },
+      }),
+    ]);
+    const existingEmailSet = new Set(existingEmailRows.map((r) => r.email));
+    const existingCodeSet = new Set(existingCodeRows.map((r) => r.employeeCode));
+
+    const passwordHashByLine = new Map<number, string>();
+    await Promise.all(
+      rows.slice(1).map(async (cols, j) => {
+        const pw = (cols[idx.password] ?? "").trim();
+        if (pw) passwordHashByLine.set(j + 2, await hashPassword(pw));
+      })
+    );
+
+    // One address upsert per UNIQUE address text + coordinate variant (was:
+    // per row). Coordinates optional — see the hasCoords comment above.
+    const addressIds = new Map<string, string | null>();
 
   for (let i = 1; i < rows.length; i++) {
     const line = i + 1;
@@ -222,18 +261,23 @@ export async function bulkCreateUsersAction(
       !department ||
       !contactNumber ||
       !address ||
-      !Number.isFinite(homeLatitude) ||
-      !Number.isFinite(homeLongitude) ||
       !pickupPoint ||
       !password
     ) {
       skipped.push({
         line,
-        reason:
-          "Missing or invalid required fields, including homeLatitude and homeLongitude.",
+        reason: "Missing required fields.",
       });
       continue;
     }
+
+    // homeLatitude / homeLongitude are OPTIONAL. When both are provided and
+    // valid they update the address's coordinates; when absent the address
+    // keeps whatever coordinates it already has (or is linked without any for
+    // an address text the system has never seen).
+    const hasCoords =
+      Number.isFinite(homeLatitude) && Number.isFinite(homeLongitude);
+
     if (!isValidRole(role)) {
       skipped.push({ line, reason: `Unknown role "${role}".` });
       continue;
@@ -246,7 +290,7 @@ export async function bulkCreateUsersAction(
       skipped.push({ line, reason: "Password must be at least 8 characters." });
       continue;
     }
-    if (Math.abs(homeLatitude) > 90 || Math.abs(homeLongitude) > 180) {
+    if (hasCoords && (Math.abs(homeLatitude) > 90 || Math.abs(homeLongitude) > 180)) {
       skipped.push({ line, reason: "Home latitude must be -90 to 90 and longitude -180 to 180." });
       continue;
     }
@@ -260,26 +304,37 @@ export async function bulkCreateUsersAction(
       continue;
     }
 
-    const existing = await prisma.user.findUnique({ where: { email } });
-    if (existing) {
+    if (existingEmailSet.has(email)) {
       skipped.push({ line, reason: `Email ${email} already exists.` });
       continue;
     }
-    const existingEmployeeCode = await prisma.user.findUnique({
-      where: { employeeCode },
-      select: { id: true },
-    });
-    if (existingEmployeeCode) {
+    if (existingCodeSet.has(employeeCode)) {
       skipped.push({ line, reason: `Employee ID ${employeeCode} already exists.` });
       continue;
     }
 
-    const passwordHash = await hashPassword(password);
-    const homeAddress = await prisma.address.upsert({
-      where: { addressText: address },
-      update: { latitude: homeLatitude, longitude: homeLongitude },
-      create: { addressText: address, latitude: homeLatitude, longitude: homeLongitude },
-    });
+    const passwordHash = passwordHashByLine.get(line) ?? (await hashPassword(password));
+    const coordKey = hasCoords ? `${homeLatitude},${homeLongitude}` : "keep-as-is";
+    const cacheKey = `${address}::${coordKey}`;
+    let homeAddressId: string | null;
+    if (addressIds.has(cacheKey)) {
+      homeAddressId = addressIds.get(cacheKey) ?? null;
+    } else if (hasCoords) {
+      const homeAddress = await prisma.address.upsert({
+        where: { addressText: address },
+        update: { latitude: homeLatitude, longitude: homeLongitude },
+        create: { addressText: address, latitude: homeLatitude, longitude: homeLongitude },
+      });
+      homeAddressId = homeAddress.id;
+      addressIds.set(cacheKey, homeAddressId);
+    } else {
+      // No coordinates provided: link the existing address untouched, or
+      // skip linking entirely for a brand-new address text (the profile is
+      // still created with the address text).
+      homeAddressId =
+        (await prisma.address.findUnique({ where: { addressText: address } }))?.id ?? null;
+      addressIds.set(cacheKey, homeAddressId);
+    }
 
     let user;
     try {
@@ -292,7 +347,7 @@ export async function bulkCreateUsersAction(
           department,
           contactNumber,
           address,
-          homeAddressId: homeAddress.id,
+          homeAddressId,
           pickupPoint,
           passwordHash,
           mustChangePassword: false,

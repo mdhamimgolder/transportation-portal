@@ -1,7 +1,7 @@
 import { requireRole } from "@/lib/rbac/guards";
 import { Role } from "@/lib/constants/enums";
 import { prisma } from "@/lib/prisma";
-import { formatShortDate, getWeekDays, getSubmissionWindow, DAY_LABELS } from "@/lib/date/week";
+import { formatShortDate, getWeekDays, getSubmissionWindow, toUtcMidnight, DAY_LABELS } from "@/lib/date/week";
 import { getTransportSettings } from "@/lib/queries/settings";
 import { NO_TRANSPORT_VALUE, ARRIVAL_TIME_OPTIONS } from "@/lib/constants/arrival-times";
 import { MAX_UNFILTERED_ROWS } from "@/lib/constants/limits";
@@ -100,7 +100,9 @@ export default async function WeeklyRequestsPage({
     ? weekOptions
     : [
         {
-          value: onBehalfWindow.weekStartDate.toISOString(),
+          // Canonical UTC-midnight value — the bulk-upload action normalizes
+          // to this key, so the option value must match.
+          value: toUtcMidnight(onBehalfWindow.weekStartDate).toISOString(),
           label: `${onBehalfWeekLabel} (current)`,
         },
         ...weekOptions,

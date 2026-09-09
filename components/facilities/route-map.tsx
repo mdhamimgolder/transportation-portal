@@ -12,6 +12,7 @@ import {
   Popup,
 } from "react-leaflet";
 import { MapPin, Route as RouteIcon } from "lucide-react";
+import { isLateNightArrivalLabel } from "@/lib/constants/route-shifts";
 
 /** A single pickup stop on a route map. */
 export interface RouteMapStop {
@@ -37,32 +38,138 @@ interface RouteMapViewProps {
   /** Drive time from the office to the first pickup. */
   departureToFirstMinutes?: number | null;
   routeKey?: string | null;
+  /** Pre-computed road geometry ([lat, lng][]) from the route analysis —
+   * when present the map draws it and skips its own OSRM fetch. */
+  geometry?: [number, number][] | null;
+  /** Real per-leg drive minutes (leg k = point k → point k+1) — overrides
+   * the minutes derived from pickup-time gaps. */
+  legMinutesOverride?: number[] | null;
+  /** Facing direction per stop (by `sequence`) with the snapped road-side
+   * position, from the route analysis. */
+  stopHeadings?: StopHeading[] | null;
+  /** Dimmed reference path (e.g. the current route while previewing another). */
+  ghostGeometry?: [number, number][] | null;
+  /** Real driving totals (minutes + km) for the drawn path, supplied by the
+   * caller when it provides the geometry (route analysis candidate). Shown
+   * in the map footer so routes can be judged at a glance. */
+  roadTotals?: { minutes: number; km: number } | null;
+}
+
+/** Which way the vehicle faces when stopped at a pickup, and where on the road. */
+export interface StopHeading {
+  sequence: number;
+  headingDeg: number | null;
+  lat: number | null;
+  lng: number | null;
 }
 
 const ROUTE_COLOR = "#C6F432";
 const OFFICE_COLOR = "#22D3EE";
+const GHOST_COLOR = "#A1A1AA";
+
+const COMPASS = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
+/** 0..360 → "N" | "NE" | … */
+export function compassLabel(deg: number): string {
+  return COMPASS[Math.round((((deg % 360) + 360) % 360) / 45) % 8];
+}
+
+/**
+ * Allowed deviation (°) around the map route's initial heading. Under 180 so
+ * the opposite carriageway of a divided road is excluded — the vehicle leaves
+ * the FIRST pickup facing the SECOND waypoint (drop-off / next pickup)
+ * instead of being map-matched to the far side and looping around a divider.
+ */
+const INITIAL_HEADING_RANGE = 45;
+
+/**
+ * Build the OSRM `bearings` value constraining the outgoing heading at EVERY
+ * stop to face the NEXT point, leaving the last waypoint (office) free. Under
+ * 180 so the opposite carriageway of a divided road is excluded — the vehicle
+ * leaves each pickup heading toward the following stop (drop-off / next
+ * pickup) instead of being map-matched to the side of the road its lat/lng
+ * pin happens to sit on (a right-side pin with a left-side next stop must
+ * still depart left). Duplicate consecutive points get no constraint (two
+ * riders at the same stop share one visit — a synthetic heading there would
+ * be wrong).
+ */
+function waypointBearingsParam(pts: [number, number][]): string {
+  if (pts.length < 2) return "";
+  const headings = pts.map((p, i) => {
+    const next = pts[i + 1];
+    if (!next) return null;
+    if (Math.abs(p[0] - next[0]) < 1e-9 && Math.abs(p[1] - next[1]) < 1e-9) {
+      return null;
+    }
+    return bearingDeg(
+      { lat: pts[i][0], lng: pts[i][1] },
+      { lat: next[0], lng: next[1] }
+    );
+  });
+  const elements = headings.map((heading) => {
+    if (heading == null || !Number.isFinite(heading)) return "";
+    const h = Math.round(((heading % 360) + 360) % 360);
+    return `${h},${INITIAL_HEADING_RANGE}`;
+  });
+  if (elements.every((el) => el === "")) return "";
+  return elements.join(";");
+}
 
 /* ── Client-side OSRM road geometry (public demo server, cached per route) ── */
 
-const geometryCache = new Map<string, Promise<[number, number][] | null>>();
+/** Road-geometry result: the polyline plus the real driving totals. */
+interface RoadGeometry {
+  line: [number, number][];
+  /** Total driving distance (km) along the drawn path. */
+  totalKm: number | null;
+  /** Total driving duration (min) along the drawn path. */
+  totalMin: number | null;
+}
+
+const geometryCache = new Map<string, Promise<RoadGeometry | null>>();
 
 async function fetchRoadGeometry(
   pts: [number, number][]
-): Promise<[number, number][] | null> {
+): Promise<RoadGeometry | null> {
   const coords = pts
     .map((p) => `${p[1].toFixed(6)},${p[0].toFixed(6)}`)
     .join(";");
-  const url =
-    `https://router.project-osrm.org/route/v1/driving/${coords}` +
+  const query =
     `?overview=simplified&geometries=geojson&alternatives=false&steps=false`;
-  try {
+
+  /** bearings=true runs the constrained request; false retries unconstrained
+   * (a genuine U-turn / divider loop is the only drivable option there). */
+  const run = async (withBearings: boolean): Promise<RoadGeometry | null> => {
+    const bearings = withBearings ? waypointBearingsParam(pts) : "";
+    const url =
+      `https://router.project-osrm.org/route/v1/driving/${coords}` +
+      `${query}${bearings ? `&bearings=${bearings}` : ""}`;
     const res = await fetch(url, { signal: AbortSignal.timeout(15000) });
     if (!res.ok) return null;
     const data = await res.json();
-    const g = data?.routes?.[0]?.geometry;
+    if (data?.code && data.code !== "Ok") return null;
+    const route = data?.routes?.[0];
+    const g = route?.geometry;
     const raw = Array.isArray(g?.coordinates) ? g.coordinates : null;
     if (!raw || raw.length < 2) return null;
-    return raw.map((c: number[]) => [Number(c[1]), Number(c[0])]);
+    return {
+      line: raw.map((c: number[]) => [Number(c[1]), Number(c[0])]),
+      totalKm:
+        typeof route?.distance === "number"
+          ? route.distance / 1000
+          : null,
+      totalMin:
+        typeof route?.duration === "number" ? route.duration / 60 : null,
+    };
+  };
+
+  try {
+    // Constrained first: every stop departs toward the NEXT stop, regardless
+    // of which side of the road its lat/lng pin sits on.
+    const constrained = await run(true);
+    if (constrained) return constrained;
+    // No routable path under the heading constraints — accept the real
+    // geometry (may include a U-turn) instead of losing the map.
+    return await run(false);
   } catch {
     return null;
   }
@@ -143,6 +250,16 @@ function arrowIcon(bearingDeg: number) {
   });
 }
 
+/** Cyan chevron showing the direction the vehicle faces while stopped. */
+function facingIcon(headingDeg: number) {
+  return divIcon({
+    className: "",
+    html: `<div style="width:22px;height:22px;transform:rotate(${headingDeg}deg);"><svg width="22" height="22" viewBox="0 0 24 24"><path d="M12 2l7 9h-4.5v11h-5V11H5z" fill="${OFFICE_COLOR}" fill-opacity="0.95" stroke="#0A0A0B" stroke-width="1"/></svg></div>`,
+    iconSize: [22, 22],
+    iconAnchor: [11, 11],
+  });
+}
+
 function timeChipIcon(minutes: number) {
   return divIcon({
     className: "",
@@ -160,6 +277,11 @@ export function RouteMapView({
   pickupDriveMinutes = null,
   departureToFirstMinutes = null,
   routeKey = null,
+  geometry = null,
+  legMinutesOverride = null,
+  stopHeadings = null,
+  ghostGeometry = null,
+  roadTotals = null,
 }: RouteMapViewProps) {
   const ordered = useMemo(
     () => [...stops].sort((a, b) => a.sequence - b.sequence),
@@ -168,8 +290,12 @@ export function RouteMapView({
 
   /** Late-night shifts ("12 AM" – "6 AM") run the full loop office → pickups
    * → office. 10 PM / 11 PM corridor routes instead drive straight through:
-   * first pickup → last pickup → office. */
-  const isLateNight = /^\d{1,2}\s?am$/i.test((arrivalTime ?? "").trim());
+   * first pickup → last pickup → office. Shared helper so the server-side
+   * analysis and this map never disagree on the topology. */
+  const isLateNight = isLateNightArrivalLabel(arrivalTime);
+
+  const providedGeometry =
+    geometry && geometry.length >= 2 ? geometry : null;
 
   /** Ordered endpoints the vehicle actually drives, expressed as [lat, lng]. */
   const reqPts = useMemo<[number, number][]>(() => {
@@ -190,6 +316,9 @@ export function RouteMapView({
     const n = ordered.length;
     const t: number[] = [];
     if (n === 0) return t;
+    if (legMinutesOverride && legMinutesOverride.length === reqPts.length - 1) {
+      return [...legMinutesOverride];
+    }
     if (isLateNight && destination) {
       t.push(departureToFirstMinutes ?? 0);
       for (let i = 0; i < n; i++) t.push(ordered[i].travelFromPreviousMin ?? 0);
@@ -199,18 +328,19 @@ export function RouteMapView({
       t.push(ordered[n - 1].travelToOfficeMin ?? 0);
     }
     return t;
-  }, [ordered, destination, isLateNight, departureToFirstMinutes]);
+  }, [ordered, destination, isLateNight, departureToFirstMinutes, legMinutesOverride, reqPts.length]);
 
   const reqPtsKey = useMemo(
     () => `${isLateNight}|${reqPts.map((p) => p.join(",")).join(";")}`,
     [reqPts, isLateNight]
   );
 
-  /** Road geometry ([lat,lng][]) for the current request key. undefined =
-   * still routing; null = no routable path. */
+  /** Road geometry for the current request key. undefined = still routing;
+   * null = no routable path. Server-provided geometry (route analysis)
+   * bypasses the fetch entirely. */
   const [geoState, setGeoState] = useState<{
     key: string;
-    value: [number, number][] | null;
+    value: RoadGeometry | null;
   } | null>(null);
 
   const cacheKey = useMemo(
@@ -218,16 +348,36 @@ export function RouteMapView({
     [routeKey, reqPtsKey]
   );
 
-  const geo =
+  const fetchedGeo =
     geoState?.key === cacheKey
       ? geoState.value
       : reqPts.length >= 2
         ? undefined
         : null;
-  const routing = geo === undefined;
+
+  /** Polyline to draw: server-provided geometry wins (it matches the
+   * applied candidate's sides/order), else the client OSRM fetch. */
+  const drawn: [number, number][] = providedGeometry
+    ? providedGeometry
+    : fetchedGeo && fetchedGeo.line.length >= 2
+      ? fetchedGeo.line
+      : reqPts;
+  const routing = !providedGeometry && fetchedGeo === undefined;
+
+  /** Real driving totals for the footer: caller-supplied totals (route
+   * analysis candidate) win; else the fetched route's OSRM distance /
+   * duration; else the leg-time sum. */
+  const displayTotals = useMemo(() => {
+    if (roadTotals) return { km: roadTotals.km, min: roadTotals.minutes };
+    if (providedGeometry) return null;
+    if (fetchedGeo && fetchedGeo.line.length >= 2) {
+      return { km: fetchedGeo.totalKm, min: fetchedGeo.totalMin };
+    }
+    return null;
+  }, [roadTotals, providedGeometry, fetchedGeo]);
 
   useEffect(() => {
-    if (reqPts.length < 2) return;
+    if (reqPts.length < 2 || providedGeometry) return;
     let cancelled = false;
     let promise = geometryCache.get(cacheKey);
     if (!promise) {
@@ -240,10 +390,15 @@ export function RouteMapView({
     return () => {
       cancelled = true;
     };
-  }, [cacheKey, reqPts]);
+  }, [cacheKey, reqPts, providedGeometry]);
 
-  const drawn: [number, number][] =
-    geo && geo.length >= 2 ? geo : reqPts;
+  const headingBySequence = useMemo(() => {
+    const m = new Map<number, StopHeading>();
+    for (const h of stopHeadings ?? []) {
+      if (h.headingDeg != null) m.set(h.sequence, h);
+    }
+    return m;
+  }, [stopHeadings]);
 
   /** Split the drawn path into per-leg sub-paths at the pickup/office points. */
   const legs = useMemo(() => {
@@ -283,6 +438,20 @@ export function RouteMapView({
               attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
               url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png"
             />
+            {ghostGeometry && ghostGeometry.length >= 2 ? (
+              <Polyline
+                positions={ghostGeometry}
+                pathOptions={{
+                  color: GHOST_COLOR,
+                  weight: 3,
+                  opacity: 0.55,
+                  dashArray: "6 8",
+                  lineCap: "round",
+                  lineJoin: "round",
+                }}
+              />
+            ) : null}
+
             {legs.length > 0 ? (
               <Polyline
                 positions={drawn}
@@ -335,26 +504,50 @@ export function RouteMapView({
               />
             )}
 
-            {ordered.map((s) => (
-              <Marker
-                key={`stop-${s.sequence}`}
-                position={[s.lat, s.lng]}
-                icon={stopIcon(s.sequence)}
-              >
-                <Popup>
-                  <strong>{s.name}</strong>
-                  {s.label ? <span style={{ display: "block" }}>{s.label}</span> : null}
-                  {s.time ? (
-                    <span style={{ display: "block", color: "#A1A1AA" }}>
-                      Pick-up {s.time}
-                      {s.travelToOfficeMin != null
-                        ? ` · ${Math.round(s.travelToOfficeMin)} min to office`
-                        : ""}
-                    </span>
-                  ) : null}
-                </Popup>
-              </Marker>
-            ))}
+            {ordered.map((s) => {
+              const h = headingBySequence.get(s.sequence);
+              if (!h || h.headingDeg == null) return null;
+              const pos: [number, number] =
+                h.lat != null && h.lng != null ? [h.lat, h.lng] : [s.lat, s.lng];
+              return (
+                <Marker
+                  key={`facing-${s.sequence}`}
+                  position={pos}
+                  icon={facingIcon(h.headingDeg)}
+                  interactive={false}
+                  zIndexOffset={-100}
+                />
+              );
+            })}
+
+            {ordered.map((s) => {
+              const h = headingBySequence.get(s.sequence);
+              return (
+                <Marker
+                  key={`stop-${s.sequence}`}
+                  position={[s.lat, s.lng]}
+                  icon={stopIcon(s.sequence)}
+                >
+                  <Popup>
+                    <strong>{s.name}</strong>
+                    {s.label ? <span style={{ display: "block" }}>{s.label}</span> : null}
+                    {s.time ? (
+                      <span style={{ display: "block", color: "#A1A1AA" }}>
+                        Pick-up {s.time}
+                        {s.travelToOfficeMin != null
+                          ? ` · ${Math.round(s.travelToOfficeMin)} min to office`
+                          : ""}
+                      </span>
+                    ) : null}
+                    {h && h.headingDeg != null ? (
+                      <span style={{ display: "block", color: OFFICE_COLOR }}>
+                        Stop facing {compassLabel(h.headingDeg)} ({Math.round(h.headingDeg)}°)
+                      </span>
+                    ) : null}
+                  </Popup>
+                </Marker>
+              );
+            })}
             {destination && (
               <Marker
                 position={[destination.lat, destination.lng]}
@@ -399,6 +592,16 @@ export function RouteMapView({
             ? `Pickup drive ≈ ${Math.round(pickupDriveMinutes)} min`
             : null}
         </span>
+        {displayTotals ? (
+          <span className="flex items-center gap-1.5 tabular-nums">
+            <RouteIcon className="size-3.5" />
+            {displayTotals.km != null && displayTotals.min != null
+              ? `Road: ${Math.round(displayTotals.min)} min · ${displayTotals.km.toFixed(1)} km`
+              : displayTotals.km != null
+                ? `Road: ${displayTotals.km.toFixed(1)} km`
+                : `Road: ${Math.round(displayTotals.min as number)} min`}
+          </span>
+        ) : null}
         <span className="flex items-center gap-1.5">
           <span
             className="inline-block size-2.5 rounded-full"
@@ -406,6 +609,23 @@ export function RouteMapView({
           />
           {destination?.name ?? "Office"}
         </span>
+        {headingBySequence.size > 0 ? (
+          <span className="flex items-center gap-1.5">
+            <svg width="12" height="12" viewBox="0 0 24 24" aria-hidden>
+              <path d="M12 2l7 9h-4.5v11h-5V11H5z" fill={OFFICE_COLOR} />
+            </svg>
+            Direction the vehicle faces at each stop
+          </span>
+        ) : null}
+        {ghostGeometry && ghostGeometry.length >= 2 ? (
+          <span className="flex items-center gap-1.5">
+            <span
+              className="h-0 w-5 border-t-2 border-dashed"
+              style={{ borderColor: GHOST_COLOR }}
+            />
+            Current route
+          </span>
+        ) : null}
         {vehicleNumber && <span className="ml-auto">{vehicleNumber}</span>}
       </div>
     </div>

@@ -4,7 +4,12 @@ import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { requireRole } from "@/lib/rbac/guards";
 import { Role } from "@/lib/constants/enums";
-import { getMondayOfWeek, getWeekDays, DAY_LABELS } from "@/lib/date/week";
+import {
+  getMondayOfWeek,
+  getWeekDays,
+  toUtcMidnight,
+  DAY_LABELS,
+} from "@/lib/date/week";
 import { officeCoordinatesFor } from "@/lib/constants/office-locations";
 import {
   generate10PMRoutes,
@@ -12,6 +17,7 @@ import {
   generate12AMPlus6AMRoutes,
 } from "@/lib/routing/algorithms";
 import { trainRoutePlannerFromHistory } from "@/actions/route-learning.actions";
+import type { RouteAnalysis } from "@/lib/routing/route-analysis.types";
 
 export interface GenerateRoutesResult {
   success: boolean;
@@ -46,10 +52,8 @@ function parseDayString(value: string): Date {
 
 /** Normalize a local-midnight Date to UTC midnight. Timestamps are stored in
  * UTC (`weekStartDate`, `weeklyScheduleDay.date`), so week-boundary lookups
- * must compare against UTC-midnight values regardless of the server's timezone. */
-function toUtcMidnight(date: Date): Date {
-  return new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
-}
+ * must compare against UTC-midnight values regardless of the server's timezone.
+ * (Shared implementation: lib/date/week.ts.) */
 
 /** Minutes-from-midnight reference for each arrival label (same day for 10/11
  * PM; late-night labels fall on the following calendar day, so 1440 + shift). */
@@ -391,6 +395,7 @@ export async function getRouteDayStats(dayDate: Date) {
 }
 
 export interface GeneratedRouteTrip {
+  id: string;
   sequenceInTrip: number;
   pickupTime: string | null;
   employeeName: string;
@@ -403,6 +408,9 @@ export interface GeneratedRouteTrip {
   travelFromPreviousMin: number | null;
   /** Drive minutes from this stop to the office arrival. */
   travelToOfficeMin: number | null;
+  /** Heading (° from north) the vehicle faces at this stop once a route
+   * analysis candidate has been applied; null otherwise. */
+  approachBearing: number | null;
 }
 
 export interface GeneratedRouteDetail {
@@ -411,6 +419,9 @@ export interface GeneratedRouteDetail {
   arrivalTime: string;
   routeType: string;
   status: string;
+  /** Cached route analysis (side-of-road + order candidates), if computed. */
+  routeAnalysis: RouteAnalysis | null;
+  appliedCandidateId: string | null;
   departureTime: string | null;
   estimatedCompletionTime: string | null;
   vehicle: {
@@ -497,12 +508,21 @@ export async function getGeneratedRouteDetails(
             ) - pickupDriveMinutes
           )
         : null;
+    const rawAnalysis = plan.routeAnalysis as unknown;
+    const routeAnalysis =
+      rawAnalysis &&
+      typeof rawAnalysis === "object" &&
+      (rawAnalysis as { version?: unknown }).version === 1
+        ? (rawAnalysis as RouteAnalysis)
+        : null;
     const detail: GeneratedRouteDetail = {
       id: plan.id,
       dayOfWeek: plan.dayOfWeek,
       arrivalTime: plan.arrivalTime,
       routeType: plan.routeType,
       status: plan.status,
+      routeAnalysis,
+      appliedCandidateId: plan.appliedCandidateId ?? null,
       departureTime: plan.departureTime
         ? plan.departureTime.toISOString()
         : null,
@@ -549,6 +569,7 @@ export async function getGeneratedRouteDetails(
             t.pickupAddress?.addressText ?? t.employee.address ?? null;
         }
         return {
+          id: t.id,
           sequenceInTrip: t.sequenceInTrip,
           pickupTime: t.pickupTime,
           employeeName: t.employee.fullName,
@@ -565,6 +586,7 @@ export async function getGeneratedRouteDetails(
               : (t.pickupAddress?.longitude ?? null),
           travelFromPreviousMin: fromPrevious,
           travelToOfficeMin: toOffice,
+          approachBearing: t.approachBearing ?? null,
         };
       }),
     };

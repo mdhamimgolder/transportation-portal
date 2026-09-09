@@ -49,6 +49,112 @@ function toRad(degrees: number): number {
 }
 
 /**
+ * Great-circle initial bearing (degrees, clockwise from north, 0..360) from
+ * `a` to `b`. Used to enforce the vehicle's STARTING heading at a pickup so
+ * OSRM snaps to the carriageway that actually heads toward the destination
+ * instead of the opposite side of a divided road (which forces a U-turn /
+ * loop around the divider).
+ */
+export function bearingDegrees(
+  a: { lat: number; lng: number },
+  b: { lat: number; lng: number }
+): number {
+  const φ1 = toRad(a.lat);
+  const φ2 = toRad(b.lat);
+  const Δλ = toRad(b.lng - a.lng);
+  const y = Math.sin(Δλ) * Math.cos(φ2);
+  const x =
+    Math.cos(φ1) * Math.sin(φ2) -
+    Math.sin(φ1) * Math.cos(φ2) * Math.cos(Δλ);
+  return ((Math.atan2(y, x) * 180) / Math.PI + 360) % 360;
+}
+
+/**
+ * Build the OSRM `bearings` value constraining the outgoing heading at EVERY
+ * intermediate waypoint to face the NEXT point, so the vehicle leaves each
+ * stop on the carriageway that heads toward the following stop — regardless
+ * of which side of the road the stop's lat/lng pin sits on. A pin on the
+ * right side of a divided road (e.g. a pickup point on the far carriageway)
+ * must not force the route to start on that side when the next stop lies the
+ * other way.
+ *
+ * `headings[i]` is the heading to enforce at waypoint i (`null` = leave that
+ * waypoint unconstrained). Returns "" when there is nothing to constrain.
+ *
+ * Format per OSRM: `bearings={value},{range};{value},{range};...` with a
+ * `;`-separated element per waypoint; an empty element means "no
+ * restriction". The range is the allowed deviation (0..180) around the
+ * heading — keeping it well under 180 excludes the opposite carriageway.
+ */
+export function waypointBearingParam(
+  headings: Array<number | null | undefined>,
+  rangeDeg: number
+): string {
+  if (headings.length < 2 || rangeDeg < 0) return "";
+  const elements = headings.map((heading) => {
+    if (heading == null || !Number.isFinite(heading)) return "";
+    const h = Math.round(((heading % 360) + 360) % 360);
+    return `${h},${rangeDeg}`;
+  });
+  if (elements.every((el) => el === "")) return "";
+  return elements.join(";");
+}
+
+/** One waypoint's OSRM bearing filter: heading (° clockwise from north) ± range. */
+export interface BearingConstraint {
+  deg: number;
+  range: number;
+}
+
+/** Normalize any heading to the integer range 0..359. */
+export function normalizeHeading(deg: number): number {
+  return ((Math.round(deg) % 360) + 360) % 360;
+}
+
+/**
+ * Build the OSRM `bearings` query value for an arbitrary set of per-waypoint
+ * constraints (`null` = unconstrained). Returns "" when nothing is
+ * constrained so callers can omit the parameter entirely.
+ */
+export function bearingsParam(
+  entries: ReadonlyArray<BearingConstraint | null | undefined>
+): string {
+  if (!entries.some((e) => e && Number.isFinite(e.deg))) return "";
+  return entries
+    .map((e) =>
+      e && Number.isFinite(e.deg)
+        ? `${normalizeHeading(e.deg)},${Math.max(0, Math.min(180, Math.round(e.range)))}`
+        : ""
+    )
+    .join(";");
+}
+
+/**
+ * Build the OSRM `radiuses` query value (metres per waypoint, `null` =
+ * unlimited). Returns "" when every entry is unlimited.
+ */
+export function radiusesParam(
+  entries: ReadonlyArray<number | null | undefined>
+): string {
+  if (!entries.some((r) => r != null && Number.isFinite(r))) return "";
+  return entries
+    .map((r) => (r != null && Number.isFinite(r) ? String(Math.round(r)) : "unlimited"))
+    .join(";");
+}
+
+/** OSRM "Could not find a matching segment for coordinate 3" → 3 (null if absent). */
+export function parseNoSegmentIndex(message: string): number | null {
+  const m = /coordinate\s+(\d+)/i.exec(message ?? "");
+  return m ? Number(m[1]) : null;
+}
+
+/** Smallest absolute angle (0..180) between two headings in degrees. */
+export function headingDifference(a: number, b: number): number {
+  const d = Math.abs(normalizeHeading(a) - normalizeHeading(b));
+  return d > 180 ? 360 - d : d;
+}
+
+/**
  * Simple geographic clustering using Haversine distance
  * Groups locations that are close to each other
  * @param locations - Array of {lat, lng, id, name}

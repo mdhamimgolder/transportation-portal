@@ -45,6 +45,17 @@ import {
   getRouteLearningStats,
   type RouteLearningStats,
 } from "@/actions/route-learning.actions";
+import {
+  analyzeRoutePlan,
+  applyRouteCandidate,
+} from "@/actions/route-analysis.actions";
+import type {
+  CandidateId,
+  RouteAnalysis,
+} from "@/lib/routing/route-analysis.types";
+import { RouteComparePanel } from "@/components/facilities/route-compare-panel";
+import { ManualPlanUploadDialog } from "@/components/facilities/manual-plan-upload-dialog";
+import type { RouteMapStop, StopHeading } from "@/components/facilities/route-map";
 import { DAY_LABELS, formatShortDate, getMondayOfWeek } from "@/lib/date/week";
 
 /** Client-only lazy load: Leaflet needs `window`, which is absent during SSR. */
@@ -113,6 +124,12 @@ export function AutoRoutePlannerClient({ initialWeekStart, initialOverview }: Pr
   }, [weekStart, loadDetails]);
 
   useEffect(() => {
+    getRouteLearningStats()
+      .then((s) => setLearningStats(s))
+      .catch(() => setLearningStats(null));
+  }, []);
+
+  const refreshLearningStats = useCallback(() => {
     getRouteLearningStats()
       .then((s) => setLearningStats(s))
       .catch(() => setLearningStats(null));
@@ -266,6 +283,9 @@ export function AutoRoutePlannerClient({ initialWeekStart, initialOverview }: Pr
                     {learningStats.confidentLegs} trusted legs ·{" "}
                     {learningStats.legCount} total ·{" "}
                     {learningStats.observationCount} past pickups used
+                    {learningStats.manualEntryCount > 0
+                      ? ` · ${learningStats.manualEntryCount} manual-plan rows`
+                      : ""}
                     {learningStats.lastTrainedAt
                       ? ` · last trained ${new Date(
                           learningStats.lastTrainedAt
@@ -278,15 +298,20 @@ export function AutoRoutePlannerClient({ initialWeekStart, initialOverview }: Pr
                   </span>
                 )}
               </div>
-              <span className="shrink-0 text-xs text-muted-foreground">
-                Automatic — no button needed
-              </span>
+              <div className="flex shrink-0 items-center gap-2">
+                <ManualPlanUploadDialog onImported={refreshLearningStats} />
+                <span className="text-xs text-muted-foreground">
+                  Automatic after each mapping
+                </span>
+              </div>
             </div>
             <p className="mt-2 text-xs text-muted-foreground">
               Every RUN MAPPING first mines all past route plans for the real
               pickup-to-pickup gaps Facilities tuned day by day, then plans with
               them. Confident legs (3+ observations) replace the 5 min/km
-              estimate.
+              estimate. Use “Teach from manual plan” to upload a route plan you
+              made by hand — its real pickup gaps are merged into the same
+              memory and survive every retrain.
             </p>
           </div>
         </CardContent>
@@ -520,7 +545,12 @@ export function AutoRoutePlannerClient({ initialWeekStart, initialOverview }: Pr
           ) : routesDetail && routesDetail[activeDay]?.routes.length > 0 ? (
             <div className="space-y-3">
               {routesDetail[activeDay].routes.map((route) => (
-                <GeneratedRouteCard key={route.id} route={route} />
+                <GeneratedRouteCard
+                  key={route.id}
+                  route={route}
+                  // Silent reload (no skeleton) so an open map stays mounted.
+                  onChanged={() => loadDetails(weekStart)}
+                />
               ))}
             </div>
           ) : (
@@ -552,16 +582,20 @@ export function AutoRoutePlannerClient({ initialWeekStart, initialOverview }: Pr
             . Skipped points pull later ETAs earlier (15 min each).
           </div>
           <div className="rounded-lg border p-4">
-            <p className="font-semibold text-foreground">11 PM — dynamic (max 5)</p>
-            Employees are clustered in groups of up to 5. OSRM solves the pickup
-            order (/trip) and pickup times come from the distance matrix. Home
-            addresses are auto-geocoded via OpenStreetMap when missing.
+            <p className="font-semibold text-foreground">11 PM — dynamic (max 4)</p>
+            Employees are grouped by road corridor (up to 4 per vehicle), the
+            farthest-from-office rider is picked up first and the route walks
+            back far → near. Pickup times are back-calculated from the shift
+            arrival using OSRM road minutes. Home addresses are auto-geocoded
+            via OpenStreetMap when missing.
           </div>
           <div className="rounded-lg border p-4">
             <p className="font-semibold text-foreground">12 AM-6 AM — reuse</p>
-            Same dynamic clustering per shift, reusing 10 PM vehicles after a
-            rest period (45 min by default). Vehicles pinned to a shift in Route
-            Setting are used first.
+            Same corridor grouping per late-night shift, reusing the office&apos;s
+            10 PM vehicles when available. Vehicles pinned to a shift in Route
+            Setting are used first. Open any route&apos;s map to compare the
+            drawn path with a side-of-road-aware and an optimized order, and
+            apply one.
           </div>
         </CardContent>
       </Card>
@@ -611,14 +645,89 @@ const STATUS_TONE: Record<string, string> = {
   EXECUTED: "bg-muted text-muted-foreground border-border",
 };
 
+/** Which candidate to draw first: same order with fixed sides when available. */
+function defaultCandidate(analysis: RouteAnalysis | null): CandidateId {
+  if (!analysis) return "current";
+  return analysis.candidates.some((c) => c.id === "current_sided")
+    ? "current_sided"
+    : "current";
+}
+
 function GeneratedRouteCard({
   route,
+  onChanged,
 }: {
   route: GeneratedRouteDetail;
+  onChanged: () => void;
 }) {
   const [showMap, setShowMap] = useState(false);
+  const [analysis, setAnalysis] = useState<RouteAnalysis | null>(route.routeAnalysis);
+  const [analyzing, setAnalyzing] = useState(false);
+  const [analysisError, setAnalysisError] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<CandidateId>(() =>
+    defaultCandidate(route.routeAnalysis)
+  );
+  const [applying, setApplying] = useState(false);
+  const [applyMessage, setApplyMessage] = useState<{ tone: "ok" | "error"; text: string } | null>(null);
 
-  const mapStops = route.trips
+  // A refreshed detail (after Apply / RUN MAPPING) carries the plan's cached
+  // analysis — adopt it when the prop changes (derived-state adjustment).
+  const [syncedAnalysisProp, setSyncedAnalysisProp] = useState(route.routeAnalysis);
+  if (route.routeAnalysis !== syncedAnalysisProp) {
+    setSyncedAnalysisProp(route.routeAnalysis);
+    // While a fresh analysis is in flight (e.g. right after Apply) keep the
+    // in-flight result authoritative over the plan's cached copy.
+    if (!analyzing) {
+      setAnalysis(route.routeAnalysis);
+      setSelectedId(defaultCandidate(route.routeAnalysis));
+    }
+  }
+
+  async function runAnalysis(force: boolean) {
+    setAnalyzing(true);
+    setAnalysisError(null);
+    try {
+      const res = await analyzeRoutePlan(route.id, { force });
+      if (res.success) {
+        setAnalysis(res.analysis);
+        setSelectedId(defaultCandidate(res.analysis));
+      } else {
+        setAnalysisError(res.error);
+      }
+    } finally {
+      setAnalyzing(false);
+    }
+  }
+
+  function toggleMap() {
+    const next = !showMap;
+    setShowMap(next);
+    if (next && !analysis && !analyzing) void runAnalysis(false);
+  }
+
+  async function apply(id: CandidateId, alsoUpdatePresetSequence: boolean) {
+    setApplying(true);
+    setApplyMessage(null);
+    try {
+      const res = await applyRouteCandidate(route.id, id, { alsoUpdatePresetSequence });
+      if (res.success) {
+        setApplyMessage({
+          tone: res.error ? "error" : "ok",
+          text: res.error ?? "Route updated — stops re-sequenced and pickup times recalculated.",
+        });
+        onChanged();
+        // The applied order is now the stored one — re-judge it so the panel
+        // and the map reflect the new baseline.
+        void runAnalysis(true);
+      } else {
+        setApplyMessage({ tone: "error", text: res.error ?? "Failed to apply the route." });
+      }
+    } finally {
+      setApplying(false);
+    }
+  }
+
+  const storedStops: RouteMapStop[] = route.trips
     .filter((t) => t.pickupLat != null && t.pickupLng != null)
     .map((t) => ({
       lat: t.pickupLat as number,
@@ -630,6 +739,58 @@ function GeneratedRouteCard({
       travelFromPreviousMin: t.travelFromPreviousMin,
       travelToOfficeMin: t.travelToOfficeMin,
     }));
+
+  const candidate = analysis?.candidates.find((c) => c.id === selectedId) ?? null;
+  const currentCandidate = analysis?.candidates.find((c) => c.id === "current") ?? null;
+  // (`Map` is the lucide icon in this file — use a plain record.)
+  const timeByTripId: Record<string, string | null> = Object.fromEntries(
+    route.trips.map((t) => [t.id, t.pickupTime])
+  );
+
+  // Stops as the selected candidate drives them (one marker per physical
+  // stop; shared stops list every rider). Times only make sense while the
+  // order is the stored one — an optimized order gets its times on Apply.
+  let mapStops: RouteMapStop[] = storedStops;
+  let stopHeadings: StopHeading[] | null = null;
+  let legMinutes: number[] | null = null;
+  let pickupDriveMinutes = route.pickupDriveMinutes;
+  let departureToFirstMinutes = route.departureToFirstMinutes;
+  if (analysis && candidate) {
+    const stops: RouteMapStop[] = [];
+    const headings: StopHeading[] = [];
+    candidate.order.forEach((w, pos) => {
+      const wp = analysis.waypoints[w];
+      if (!wp || wp.isOffice) return;
+      const seq = stops.length + 1;
+      const side = candidate.stops[pos];
+      stops.push({
+        lat: wp.lat,
+        lng: wp.lng,
+        sequence: seq,
+        name: wp.employeeNames.join(", "),
+        label: wp.label,
+        time: candidate.id === "optimized" ? null : timeByTripId[wp.tripIds[0]] ?? null,
+        travelFromPreviousMin: pos > 0 ? candidate.legMinutes[pos - 1] ?? null : null,
+        travelToOfficeMin: null,
+      });
+      headings.push({
+        sequence: seq,
+        headingDeg: side?.headingDeg ?? null,
+        lat: side?.snappedLat ?? null,
+        lng: side?.snappedLng ?? null,
+      });
+    });
+    mapStops = stops;
+    stopHeadings = headings;
+    legMinutes = candidate.legMinutes;
+    const stopLegs =
+      analysis.topology === "loop" ? candidate.legMinutes.slice(1) : candidate.legMinutes;
+    pickupDriveMinutes = stopLegs.reduce((a, b) => a + b, 0);
+    departureToFirstMinutes =
+      analysis.topology === "loop"
+        ? candidate.legMinutes[0] ?? null
+        : candidate.officeToFirstMinutes;
+  }
 
   return (
     <div className="overflow-hidden rounded-lg border">
@@ -645,7 +806,7 @@ function GeneratedRouteCard({
                 size="sm"
                 className="h-6 gap-1 px-2 text-xs"
                 aria-expanded={showMap}
-                onClick={() => setShowMap((v) => !v)}
+                onClick={toggleMap}
               >
                 <Map className="size-3.5" />
                 {showMap ? "Hide route map" : "Route map"}
@@ -670,16 +831,82 @@ function GeneratedRouteCard({
       </div>
 
       {showMap && (
-        <div className="border-b bg-card px-4 py-3">
+        <div className="space-y-3 border-b bg-card px-4 py-3">
           <RouteMapView
             stops={mapStops}
             destination={route.destination}
             vehicleNumber={route.vehicle.vehicleNumber}
             arrivalTime={route.arrivalTime}
-            pickupDriveMinutes={route.pickupDriveMinutes}
-            departureToFirstMinutes={route.departureToFirstMinutes}
-            routeKey={route.id}
+            pickupDriveMinutes={pickupDriveMinutes}
+            departureToFirstMinutes={departureToFirstMinutes}
+            routeKey={`${route.id}|${candidate?.id ?? "stored"}`}
+            geometry={candidate?.geometry ?? null}
+            legMinutesOverride={legMinutes}
+            stopHeadings={stopHeadings}
+            roadTotals={
+              candidate
+                ? {
+                    minutes: candidate.metrics.durationMin,
+                    km: candidate.metrics.distanceKm,
+                  }
+                : null
+            }
+            ghostGeometry={
+              candidate && candidate.id !== "current" && currentCandidate
+                ? currentCandidate.geometry
+                : null
+            }
           />
+
+          {analyzing && !analysis ? (
+            <p className="flex items-center gap-2 text-xs text-muted-foreground">
+              <RefreshCw className="size-3.5 animate-spin" />
+              Analyzing route — checking the side of the road at every stop and
+              testing alternative stop orders…
+            </p>
+          ) : null}
+          {analysisError ? (
+            <p className="flex flex-wrap items-center gap-2 text-xs text-destructive">
+              <AlertTriangle className="size-3.5" />
+              {analysisError}
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-6 px-2 text-xs"
+                onClick={() => void runAnalysis(true)}
+              >
+                Retry
+              </Button>
+            </p>
+          ) : null}
+          {analysis ? (
+            <RouteComparePanel
+              analysis={analysis}
+              selectedId={selectedId}
+              onSelect={setSelectedId}
+              appliedCandidateId={route.appliedCandidateId}
+              routeType={route.routeType}
+              applying={applying}
+              onApply={apply}
+              analyzing={analyzing}
+              onReanalyze={() => void runAnalysis(true)}
+            />
+          ) : null}
+          {applyMessage ? (
+            <p
+              className={`flex items-center gap-2 text-xs ${
+                applyMessage.tone === "ok" ? "text-green" : "text-destructive"
+              }`}
+            >
+              {applyMessage.tone === "ok" ? (
+                <CheckCircle2 className="size-3.5" />
+              ) : (
+                <AlertTriangle className="size-3.5" />
+              )}
+              {applyMessage.text}
+            </p>
+          ) : null}
         </div>
       )}
 

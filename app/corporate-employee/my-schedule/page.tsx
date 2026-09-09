@@ -1,7 +1,13 @@
 import { requireRole } from "@/lib/rbac/guards";
 import { Role } from "@/lib/constants/enums";
 import { prisma } from "@/lib/prisma";
-import { getSubmissionWindow, getWeekDays, DAY_LABELS, formatShortDate } from "@/lib/date/week";
+import {
+  getSubmissionWindow,
+  getWeekDays,
+  toUtcMidnight,
+  DAY_LABELS,
+  formatShortDate,
+} from "@/lib/date/week";
 import { getTransportSettings } from "@/lib/queries/settings";
 import { NO_TRANSPORT_VALUE, ARRIVAL_TIME_OPTIONS } from "@/lib/constants/arrival-times";
 import { CorporateWeeklyScheduleForm } from "@/components/corporate-employee/weekly-schedule-form";
@@ -18,13 +24,16 @@ export default async function MySchedulePage() {
     settings.weeklyLockHour,
     settings.weeklyLockMinute
   );
-  const weekDates = getWeekDays(window.weekStartDate);
+  // Canonical week key (UTC-midnight Monday) — must match how schedules are
+  // stored, otherwise the saved week is never found here.
+  const weekStartDate = toUtcMidnight(window.weekStartDate);
+  const weekDates = getWeekDays(weekStartDate);
 
   const existing = await prisma.weeklySchedule.findUnique({
     where: {
       employeeId_weekStartDate: {
         employeeId: session.id,
-        weekStartDate: window.weekStartDate,
+        weekStartDate,
       },
     },
     include: { days: true },

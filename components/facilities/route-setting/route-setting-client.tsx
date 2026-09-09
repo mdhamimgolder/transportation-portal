@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useState } from "react";
 import {
   ArrowDown,
   ArrowUp,
@@ -12,6 +12,8 @@ import {
   Pin,
   Plus,
   Save,
+  Search,
+  Trash,
   Truck,
 } from "lucide-react";
 import { Label } from "@/components/ui/label";
@@ -46,12 +48,12 @@ import {
 import type { PinState, ShiftKey } from "@/lib/constants/route-shifts";
 import {
   autoCalcPickupTimes,
-  createVehicle,
   getVehicleShiftPins,
   reorderPickupPoints,
   toggleVehicleShiftPin,
   updateVehicle,
 } from "@/actions/route-setting.actions";
+import { deletePickupPoint } from "@/actions/pickup-point.actions";
 import { OFFICE_LOCATIONS } from "@/lib/constants/enums";
 import { formatShortDate, getMondayOfWeek } from "@/lib/date/week";
 
@@ -96,9 +98,399 @@ type PinnerProps = {
   initialWeekStart: string;
   vehicles: VehicleRow[];
   pins: PinState[];
+  selectedVehicleId: string | null;
+  onSelectVehicle: (vehicleId: string) => void;
 };
 
-function Pinner({ initialWeekStart, vehicles, pins: initialPins }: PinnerProps) {
+type AddressOption = {
+  id: string;
+  addressText: string;
+  label?: string | null;
+  latitude: number;
+  longitude: number;
+};
+
+/** Format a lat/lng pair the way Facilities reads it ("23.822664, 90.364146"). */
+function formatLatLng(latitude: number, longitude: number): string {
+  return `${latitude.toFixed(6)}, ${longitude.toFixed(6)}`;
+}
+
+// Simple vehicle list — shows only vehicle numbers, clickable to edit
+function SimpleVehicleList({
+  vehicles,
+  selectedVehicleId,
+  onSelectVehicle,
+}: {
+  vehicles: VehicleRow[];
+  selectedVehicleId: string | null;
+  onSelectVehicle: (vehicleId: string) => void;
+}) {
+  const [vehicleSearch, setVehicleSearch] = useState("");
+  const filteredVehicles = vehicles.filter((vehicle) =>
+    vehicle.vehicleNumber.toLowerCase().includes(vehicleSearch.toLowerCase().trim())
+  );
+
+  return (
+    <Card>
+      <CardHeader className="border-b">
+        <CardTitle className="flex items-center gap-2">
+          <Truck className="size-4 text-teal" />
+          Select vehicle and set settings
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3 py-4">
+        {vehicles.length > 0 && (
+          <div className="relative">
+            <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              aria-label="Search vehicles"
+              placeholder="Search vehicles"
+              value={vehicleSearch}
+              onChange={(event) => setVehicleSearch(event.target.value)}
+              className="pl-9"
+            />
+          </div>
+        )}
+        {vehicles.length === 0 ? (
+          <div className="rounded-lg border border-dashed p-6 text-center">
+            <p className="text-sm text-muted-foreground">
+              No active vehicles yet. Create one to get started.
+            </p>
+          </div>
+        ) : (
+          <div className="max-h-[24rem] space-y-1 overflow-y-auto pr-1">
+            {filteredVehicles.map((v) => (
+              <button
+                key={v.id}
+                onClick={() => onSelectVehicle(v.id)}
+                className={`w-full rounded-lg border px-3 py-2 text-left transition-all ${
+                  selectedVehicleId === v.id
+                    ? "border-teal/50 bg-teal/10"
+                    : "hover:border-muted-foreground/50 hover:bg-accent/50"
+                }`}
+              >
+                <p
+                  className={`text-sm font-normal ${
+                    selectedVehicleId === v.id ? "text-teal" : "text-black"
+                  }`}
+                >
+                  {v.vehicleNumber}
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  {v.driverName || "Driver not assigned"}
+                </p>
+              </button>
+            ))}
+            {filteredVehicles.length === 0 && (
+              <p className="rounded-lg border border-dashed py-4 text-center text-xs text-muted-foreground">
+                No matching vehicles.
+              </p>
+            )}
+          </div>
+        )}
+
+      </CardContent>
+    </Card>
+  );
+}
+
+// Detailed vehicle editor — shown when a vehicle is selected
+function VehicleDetailEditor({
+  vehicle: initialVehicle,
+  addresses,
+  pointsByVehicle,
+  onPointsChange,
+  onVehicleUpdate,
+}: {
+  vehicle: VehicleRow | null;
+  addresses: AddressOption[];
+  pointsByVehicle: Record<string, PickupPointRow[]>;
+  onPointsChange: (vehicleId: string, points: PickupPointRow[]) => void;
+  onVehicleUpdate: (
+    updated: VehicleRow,
+    pickupUpdates?: Array<{ id: string; baseETA: string }>
+  ) => void;
+}) {
+  const { toast } = useToast();
+  const [editingVehicle, setEditingVehicle] = useState(false);
+  const [calcBusy, setCalcBusy] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [dirty, setDirty] = useState(false);
+
+  if (!initialVehicle) {
+    return (
+      <Card>
+        <CardContent className="flex items-center justify-center py-12">
+          <p className="text-sm text-muted-foreground">
+            Select a vehicle from the left to configure its pickup sequence.
+          </p>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  const vehicle = initialVehicle;
+  const points = pointsByVehicle[vehicle.id] ?? [];
+  const order = points.map((p) => p.id);
+
+  function movePoint(index: number, dir: -1 | 1) {
+    const target = index + dir;
+    if (target < 0 || target >= order.length) return;
+    const next = [...points];
+    [next[index], next[target]] = [next[target], next[index]];
+    onPointsChange(vehicle.id, next);
+    setDirty(true);
+  }
+
+  async function addPoint(point: PickupPointRow) {
+    const updated = [...points, point];
+    onPointsChange(vehicle.id, updated);
+    setDirty(true);
+    // Auto-recompute pickup times
+    try {
+      const res = await autoCalcPickupTimes(vehicle.id);
+      if (res.success && res.updates) {
+        const updates = res.updates;
+        onPointsChange(
+          vehicle.id,
+          updated.map((p) => {
+            const match = updates.find((u) => u.id === p.id);
+            return match ? { ...p, baseETA: match.baseETA } : p;
+          })
+        );
+      }
+    } catch {
+      // best effort
+    }
+  }
+
+  async function saveOrder() {
+    setSaving(true);
+    try {
+      const res = await reorderPickupPoints(vehicle.id, order);
+      if (!res.success) {
+        toast({ title: "Reorder failed", description: res.error, variant: "destructive" });
+        return;
+      }
+      setDirty(false);
+      toast({ title: "Sequence saved", description: "Pickup order updated." });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function autoCalc() {
+    setCalcBusy(true);
+    try {
+      const res = await autoCalcPickupTimes(vehicle.id);
+      if (!res.success) {
+        toast({
+          title: "Pickup times not set",
+          description: res.error,
+          variant: "destructive",
+        });
+        return;
+      }
+      const updates = res.updates ?? [];
+      onPointsChange(
+        vehicle.id,
+        points.map((p) => {
+          const match = updates.find((u) => u.id === p.id);
+          return match ? { ...p, baseETA: match.baseETA } : p;
+        })
+      );
+      toast({
+        title: "Pickup times set",
+        description:
+          res.method === "first_pickup"
+            ? `Anchored from first pickup; office arrival ≈ ${res.computedOfficeArrival ?? "—"}`
+            : "Calculated from BASE ETA at ~5 min/km.",
+      });
+    } finally {
+      setCalcBusy(false);
+    }
+  }
+
+  async function deletePoint(pointId: string) {
+    try {
+      const res = await deletePickupPoint(pointId);
+      if (!res.success) {
+        toast({
+          title: "Failed to delete",
+          description: res.error,
+          variant: "destructive",
+        });
+        return;
+      }
+      const updated = points.filter((p) => p.id !== pointId);
+      onPointsChange(vehicle.id, updated);
+      setDirty(true);
+      toast({ title: "Pickup point deleted" });
+    } catch (error) {
+      toast({
+        title: "Error deleting pickup point",
+        description: error instanceof Error ? error.message : "Unknown error",
+        variant: "destructive",
+      });
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader className="border-b">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <CardTitle>{vehicle.vehicleNumber}</CardTitle>
+            <CardDescription>
+              {vehicle.vehicleType} · Capacity {vehicle.capacity}
+              {vehicle.officeLocation ? ` · ${vehicle.officeLocation}` : ""}
+            </CardDescription>
+          </div>
+          {!editingVehicle && (
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={() => setEditingVehicle(true)}
+            >
+              <Pencil className="mr-1 size-3.5" />
+              Edit
+            </Button>
+          )}
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-6">
+        {editingVehicle && (
+          <EditVehicleForm
+            vehicle={vehicle}
+            onSaved={(updated, pickupUpdates) => {
+              onVehicleUpdate(updated, pickupUpdates);
+              setEditingVehicle(false);
+            }}
+            onCancel={() => setEditingVehicle(false)}
+          />
+        )}
+
+        <div className="space-y-3">
+          <div className="flex items-center justify-between">
+            <h4 className="font-semibold">Pickup sequence</h4>
+            <div className="flex gap-2">
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={points.length === 0 || calcBusy}
+                onClick={() => void autoCalc()}
+              >
+                <Clock className="mr-1 size-3.5" />
+                {calcBusy ? "Calculating…" : "Set times"}
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                disabled={!dirty || saving || points.length === 0}
+                onClick={() => void saveOrder()}
+              >
+                <Save className="mr-1 size-3.5" />
+                {saving ? "Saving…" : "Save"}
+              </Button>
+            </div>
+          </div>
+
+          {points.length > 0 ? (
+            <ol className="divide-y rounded-lg border">
+              {order.map((pointId, idx) => {
+                const point = points.find((p) => p.id === pointId)!;
+                const isLast = idx === order.length - 1;
+                return (
+                  <li
+                    key={pointId}
+                    className="flex items-center justify-between gap-3 px-4 py-3"
+                  >
+                    <div className="flex min-w-0 items-center gap-3">
+                      <span className="flex size-6 shrink-0 items-center justify-center rounded-full border border-teal/50 bg-teal/10 text-xs font-semibold text-teal">
+                        {idx + 1}
+                      </span>
+                      <div className="min-w-0">
+                        <p className="truncate font-medium text-sm">{point.name}</p>
+                        <p className="truncate text-xs text-muted-foreground">
+                          {point.baseETA}
+                          {point.address ? ` · ${point.address.addressText}` : ""}
+                        </p>
+                        {point.address ? (
+                          <p className="truncate font-mono text-xs text-teal">
+                            {formatLatLng(point.address.latitude, point.address.longitude)}
+                          </p>
+                        ) : (
+                          <p className="truncate text-xs font-medium text-destructive">
+                            No address linked — coordinates missing
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                    <div className="flex shrink-0 gap-1">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="icon"
+                        className="size-6"
+                        disabled={idx === 0}
+                        onClick={() => movePoint(idx, -1)}
+                      >
+                        <ArrowUp className="size-3" />
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="icon"
+                        className="size-6"
+                        disabled={isLast}
+                        onClick={() => movePoint(idx, 1)}
+                      >
+                        <ArrowDown className="size-3" />
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="icon"
+                        className="size-6"
+                        onClick={() => void deletePoint(pointId)}
+                      >
+                        <Trash className="size-3" />
+                      </Button>
+                    </div>
+                  </li>
+                );
+              })}
+            </ol>
+          ) : (
+            <p className="rounded-lg border border-dashed py-4 text-center text-xs text-muted-foreground">
+              No pickup points yet — add one below.
+            </p>
+          )}
+
+          <AddPointForm
+            vehicle={vehicle}
+            addresses={addresses}
+            defaultSequence={points.length + 1}
+            onCreated={(point) => void addPoint(point)}
+            onError={(msg) =>
+              toast({ title: "Add point failed", description: msg, variant: "destructive" })
+            }
+          />
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function Pinner({
+  initialWeekStart,
+  vehicles,
+  pins: initialPins,
+  selectedVehicleId,
+  onSelectVehicle,
+}: PinnerProps) {
   const { toast } = useToast();
   const [weekStart, setWeekStart] = useState<Date>(
     () => new Date(`${initialWeekStart}T00:00:00`)
@@ -176,7 +568,7 @@ function Pinner({ initialWeekStart, vehicles, pins: initialPins }: PinnerProps) 
   return (
     <Card>
       <CardHeader className="border-b">
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between gap-4">
           <CardTitle className="flex items-center gap-2">
             <Pin className="size-4 text-teal" />
             Vehicle → route pinning
@@ -191,7 +583,7 @@ function Pinner({ initialWeekStart, vehicles, pins: initialPins }: PinnerProps) 
             >
               <ChevronLeft className="size-4" />
             </Button>
-            <span className="min-w-32 text-center text-sm font-medium">
+            <span className="min-w-32 text-center text-xs font-medium sm:text-sm">
               Week of {formatShortDate(weekStart)}
             </span>
             <Button
@@ -206,30 +598,42 @@ function Pinner({ initialWeekStart, vehicles, pins: initialPins }: PinnerProps) 
           </div>
         </div>
         <CardDescription>
-          Pinned vehicles are used for that shift when RUN MAPPING generates
-          this week — with auto-solving pickup order for 11 PM+ and reuse for
-          12 AM-6 AM.
+          Pin vehicles for use in RUN MAPPING this week.
         </CardDescription>
       </CardHeader>
-      <CardContent>
-        <div className="overflow-x-auto">
+      <CardContent className="p-0">
+        <div className="max-h-[28rem] overflow-auto" tabIndex={0} aria-label="Vehicle routes — scrollable list">
           <table className="w-full border-collapse text-sm">
-            <thead>
+            <thead className="sticky top-0 z-10 bg-card">
               <tr className="border-b text-left text-xs uppercase tracking-wide text-muted-foreground">
-                <th className="px-3 py-2 font-medium">Vehicle</th>
-                <th className="px-3 py-2 text-center font-medium">10 PM</th>
-                <th className="px-3 py-2 text-center font-medium">11 PM</th>
-                <th className="px-3 py-2 text-center font-medium">12 AM-6 AM</th>
+                <th className="px-4 py-2.5 font-medium">Vehicle</th>
+                <th className="px-3 py-2.5 text-center font-medium">10 PM</th>
+                <th className="px-3 py-2.5 text-center font-medium">11 PM</th>
+                <th className="px-4 py-2.5 text-center font-medium">12 AM-6 AM</th>
               </tr>
             </thead>
             <tbody>
               {vehicles.map((v) => (
-                <tr key={v.id} className="border-b last:border-0 hover:bg-accent/40">
-                  <td className="px-3 py-2">
-                    <p className="font-medium">{v.vehicleNumber}</p>
+                <tr
+                  key={v.id}
+                  onClick={() => onSelectVehicle(v.id)}
+                  className={`cursor-pointer border-b last:border-0 hover:bg-accent/40 ${
+                    selectedVehicleId === v.id ? "bg-teal/10" : ""
+                  }`}
+                >
+                  <td className="px-4 py-2">
+                    <p
+                      className={`text-sm ${
+                        selectedVehicleId === v.id
+                          ? "font-medium text-teal"
+                          : "font-normal text-black"
+                      }`}
+                    >
+                      {v.vehicleNumber}
+                    </p>
                     {v.pickupPoints.length > 0 && (
                       <p className="text-xs text-muted-foreground">
-                        {v.pickupPoints.length} pickup point
+                        {v.pickupPoints.length} point
                         {v.pickupPoints.length > 1 ? "s" : ""}
                       </p>
                     )}
@@ -257,29 +661,23 @@ function Pinner({ initialWeekStart, vehicles, pins: initialPins }: PinnerProps) 
               ))}
               {vehicles.length === 0 && (
                 <tr>
-                  <td colSpan={4} className="px-3 py-6 text-center text-muted-foreground">
-                    No active vehicles. Add them in the Vehicles page first.
+                  <td colSpan={4} className="px-4 py-6 text-center text-sm text-muted-foreground">
+                    No active vehicles.
                   </td>
                 </tr>
               )}
             </tbody>
           </table>
         </div>
+        {vehicles.length > 0 && (
+          <p className="border-t px-4 py-2 text-xs text-muted-foreground">
+            {vehicles.length} active vehicle{vehicles.length === 1 ? "" : "s"} — scroll to see all
+          </p>
+        )}
       </CardContent>
     </Card>
   );
 }
-
-type SequenceProps = {
-  vehicles: VehicleRow[];
-  addresses: AddressOption[];
-};
-
-type AddressOption = {
-  id: string;
-  addressText: string;
-  label?: string | null;
-};
 
 type AddPointFormProps = {
   vehicle: VehicleRow;
@@ -301,7 +699,6 @@ function AddPointForm({
   const [saving, setSaving] = useState(false);
 
   const selectedAddress = addresses.find((a) => a.id === addressId);
-
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     if (!addressId) {
@@ -344,7 +741,7 @@ function AddPointForm({
   return (
     <form onSubmit={(e) => void submit(e)} className="space-y-3 border-t p-4">
       <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-        Add pickup point — {vehicle.vehicleNumber}
+        Add pickup point
       </p>
       <div className="grid gap-3 sm:grid-cols-2">
         <div className="space-y-1 sm:col-span-2">
@@ -353,8 +750,8 @@ function AddPointForm({
             id={`pp-address-${vehicle.id}`}
             value={addressId || undefined}
             onChange={setAddressId}
-            placeholder="Search & select a pickup point"
-            emptyText="No saved addresses yet — pickup points come from employee profiles."
+            placeholder="Search & select"
+            emptyText="No saved addresses yet."
             options={addresses.map(
               (a): ComboboxOption => ({
                 value: a.id,
@@ -373,11 +770,8 @@ function AddPointForm({
             )}
           />
           {selectedAddress && (
-            <p className="text-xs text-muted-foreground">
-              Point name:{" "}
-              <span className="font-medium text-foreground">
-                {selectedAddress.label ?? selectedAddress.addressText}
-              </span>
+            <p className="font-mono text-xs text-teal">
+              Coordinates: {formatLatLng(selectedAddress.latitude, selectedAddress.longitude)}
             </p>
           )}
         </div>
@@ -391,233 +785,21 @@ function AddPointForm({
             onChange={(e) => setSequence(Number(e.target.value))}
           />
         </div>
-        <div className="space-y-1">
-          <Label>Pickup time</Label>
-          <div className="flex h-9 items-center rounded-md border border-dashed px-3 text-xs text-muted-foreground">
-            Auto — from the vehicle&apos;s first pickup time (5 min/km)
-          </div>
-        </div>
       </div>
       <Button type="submit" size="sm" disabled={saving}>
         <Plus className="mr-1 size-3.5" />
-        {saving ? "Adding…" : "Add point"}
+        {saving ? "Adding…" : "Add"}
       </Button>
     </form>
   );
 }
 
-type CreateVehicleFormProps = {
-  nextSequence: number;
-  onCreated: (vehicle: VehicleRow) => void;
-};
-
-function CreateVehicleForm({ nextSequence, onCreated }: CreateVehicleFormProps) {
-  const [open, setOpen] = useState(false);
-  const [vehicleNumber, setVehicleNumber] = useState("");
-  const [vehicleType, setVehicleType] = useState("10-SEATER");
-  const [capacity, setCapacity] = useState(10);
-  const [driverName, setDriverName] = useState("");
-  const [driverContact, setDriverContact] = useState("");
-  const [officeLocation, setOfficeLocation] = useState("Regnum");
-  const [baseETA, setBaseETA] = useState("22:00");
-  const [firstPickupTime, setFirstPickupTime] = useState("20:00");
-  const [error, setError] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
-
-  async function submit(e: React.FormEvent) {
-    e.preventDefault();
-    setError(null);
-    setSaving(true);
-    try {
-      const formData = new FormData();
-      formData.set("vehicleNumber", vehicleNumber.trim());
-      formData.set("vehicleType", vehicleType);
-      formData.set("capacity", String(capacity));
-      formData.set("driverName", driverName.trim());
-      formData.set("driverContact", driverContact.trim());
-      formData.set("officeLocation", officeLocation);
-      formData.set("baseETA", baseETA);
-      formData.set("firstPickupTime", firstPickupTime);
-      const res = await createVehicle(formData);
-      if (!res.success) {
-        setError(res.error ?? "Failed to create vehicle.");
-        return;
-      }
-      onCreated({
-        id: res.vehicleId!,
-        vehicleNumber: vehicleNumber.trim(),
-        vehicleType,
-        capacity,
-        driverName: driverName.trim() || null,
-        driverContact: driverContact.trim() || null,
-        officeLocation,
-        baseETA,
-        firstPickupTime,
-        pickupPoints: [],
-      });
-      setVehicleNumber("");
-      setVehicleType("10-SEATER");
-      setCapacity(10);
-      setDriverName("");
-      setDriverContact("");
-      setOfficeLocation("Regnum");
-      setBaseETA("22:00");
-      setFirstPickupTime("20:00");
-      setOpen(false);
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  return (
-    <div className="rounded-lg border border-dashed">
-      <div className="p-4">
-        {!open ? (
-          <button
-            type="button"
-            onClick={() => setOpen(true)}
-            className="flex items-center gap-2 text-sm font-medium text-muted-foreground hover:text-foreground"
-          >
-            <Plus className="size-4" />
-            Add a vehicle
-          </button>
-        ) : (
-          <form onSubmit={(e) => void submit(e)} className="space-y-3">
-            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-              Create vehicle (advanced routing)
-            </p>
-            <div className="grid gap-3 sm:grid-cols-2">
-              <div className="space-y-1">
-                <Label htmlFor="cv-number">Vehicle no</Label>
-                <Input
-                  id="cv-number"
-                  placeholder="e.g. BT-1108"
-                  value={vehicleNumber}
-                  onChange={(e) => setVehicleNumber(e.target.value)}
-                  required
-                />
-              </div>
-              <div className="space-y-1">
-                <Label htmlFor="cv-type">Vehicle type</Label>
-                <Select value={vehicleType} onValueChange={setVehicleType}>
-                  <SelectTrigger id="cv-type" className="w-full">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="10-SEATER">10-SEATER</SelectItem>
-                    <SelectItem value="4-SEATER">4-SEATER</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-1">
-                <Label htmlFor="cv-capacity">Capacity</Label>
-                <Input
-                  id="cv-capacity"
-                  type="number"
-                  min={1}
-                  value={capacity}
-                  onChange={(e) => setCapacity(Number(e.target.value))}
-                  required
-                />
-              </div>
-              <div className="space-y-1">
-                <Label htmlFor="cv-driver">Driver name</Label>
-                <Input
-                  id="cv-driver"
-                  placeholder="Optional"
-                  value={driverName}
-                  onChange={(e) => setDriverName(e.target.value)}
-                />
-              </div>
-              <div className="space-y-1">
-                <Label htmlFor="cv-office">Office location</Label>
-                <Select
-                  value={officeLocation}
-                  onValueChange={(value) => setOfficeLocation(value)}
-                >
-                  <SelectTrigger id="cv-office" className="w-full">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {OFFICE_LOCATIONS.map((office) => (
-                      <SelectItem key={office} value={office}>
-                        {office}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-1">
-                <Label htmlFor="cv-base-eta">BASE ETA</Label>
-                <Select value={baseETA} onValueChange={setBaseETA}>
-                  <SelectTrigger id="cv-base-eta" className="w-full">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {BASE_ETA_OPTIONS.map((option) => (
-                      <SelectItem key={option.value} value={option.value}>
-                        {option.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <p className="text-xs text-muted-foreground">
-                  Default office arrival time.
-                </p>
-              </div>
-              <div className="space-y-1">
-                <Label htmlFor="cv-first-pickup">First pickup time</Label>
-                <Input
-                  id="cv-first-pickup"
-                  type="time"
-                  value={firstPickupTime}
-                  onChange={(e) => setFirstPickupTime(e.target.value)}
-                />
-                <p className="text-xs text-muted-foreground">
-                  Time the vehicle reaches its first pickup point.
-                </p>
-              </div>
-              <div className="space-y-1 sm:col-span-2">
-                <Label htmlFor="cv-contact">Driver contact</Label>
-                <Input
-                  id="cv-contact"
-                  placeholder="Optional"
-                  value={driverContact}
-                  onChange={(e) => setDriverContact(e.target.value)}
-                />
-              </div>
-            </div>
-            {error && <p className="text-sm text-destructive">{error}</p>}
-            <div className="flex gap-2">
-              <Button type="submit" size="sm" disabled={saving}>
-                {saving ? "Creating…" : "Create vehicle"}
-              </Button>
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                onClick={() => {
-                  setOpen(false);
-                  setError(null);
-                }}
-              >
-                Cancel
-              </Button>
-            </div>
-            <p className="text-xs text-muted-foreground">
-              Then use “Add point” on the new vehicle to build its 10 PM pickup
-              sequence (first point is point {nextSequence}).
-            </p>
-          </form>
-        )}
-      </div>
-    </div>
-  );
-}
-
 type EditVehicleFormProps = {
   vehicle: VehicleRow;
-  onSaved: (updated: VehicleRow) => void;
+  onSaved: (
+    updated: VehicleRow,
+    pickupUpdates?: Array<{ id: string; baseETA: string }>
+  ) => void;
   onCancel: () => void;
 };
 
@@ -663,7 +845,7 @@ function EditVehicleForm({ vehicle, onSaved, onCancel }: EditVehicleFormProps) {
         officeLocation,
         baseETA,
         firstPickupTime,
-      });
+      }, res.pickupUpdates);
       toast({
         title: "Vehicle updated",
         description: `${vehicle.vehicleNumber} saved.`,
@@ -679,11 +861,11 @@ function EditVehicleForm({ vehicle, onSaved, onCancel }: EditVehicleFormProps) {
       className="space-y-3 border-t bg-muted/30 p-4"
     >
       <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-        Edit vehicle — {vehicle.vehicleNumber}
+        Edit vehicle
       </p>
       <div className="grid gap-3 sm:grid-cols-2">
         <div className="space-y-1">
-          <Label htmlFor={`ev-type-${vehicle.id}`}>Vehicle type</Label>
+          <Label htmlFor={`ev-type-${vehicle.id}`}>Type</Label>
           <Select value={vehicleType} onValueChange={setVehicleType}>
             <SelectTrigger id={`ev-type-${vehicle.id}`} className="w-full">
               <SelectValue />
@@ -706,7 +888,7 @@ function EditVehicleForm({ vehicle, onSaved, onCancel }: EditVehicleFormProps) {
           />
         </div>
         <div className="space-y-1">
-          <Label htmlFor={`ev-driver-${vehicle.id}`}>Driver name</Label>
+          <Label htmlFor={`ev-driver-${vehicle.id}`}>Driver</Label>
           <Input
             id={`ev-driver-${vehicle.id}`}
             placeholder="Optional"
@@ -715,7 +897,7 @@ function EditVehicleForm({ vehicle, onSaved, onCancel }: EditVehicleFormProps) {
           />
         </div>
         <div className="space-y-1">
-          <Label htmlFor={`ev-office-${vehicle.id}`}>Office location</Label>
+          <Label htmlFor={`ev-office-${vehicle.id}`}>Office</Label>
           <Select
             value={officeLocation}
             onValueChange={(value) => setOfficeLocation(value)}
@@ -746,21 +928,15 @@ function EditVehicleForm({ vehicle, onSaved, onCancel }: EditVehicleFormProps) {
               ))}
             </SelectContent>
           </Select>
-          <p className="text-xs text-muted-foreground">
-            Default office arrival time.
-          </p>
         </div>
         <div className="space-y-1">
-          <Label htmlFor={`ev-first-pickup-${vehicle.id}`}>First pickup time</Label>
+          <Label htmlFor={`ev-first-pickup-${vehicle.id}`}>First pickup</Label>
           <Input
             id={`ev-first-pickup-${vehicle.id}`}
             type="time"
             value={firstPickupTime}
             onChange={(e) => setFirstPickupTime(e.target.value)}
           />
-          <p className="text-xs text-muted-foreground">
-            Time the vehicle reaches its first pickup point.
-          </p>
         </div>
         <div className="space-y-1 sm:col-span-2">
           <Label htmlFor={`ev-contact-${vehicle.id}`}>Driver contact</Label>
@@ -776,7 +952,7 @@ function EditVehicleForm({ vehicle, onSaved, onCancel }: EditVehicleFormProps) {
       <div className="flex gap-2">
         <Button type="submit" size="sm" disabled={saving}>
           <Save className="mr-1 size-3.5" />
-          {saving ? "Saving…" : "Save vehicle"}
+          {saving ? "Saving…" : "Save"}
         </Button>
         <Button type="button" size="sm" variant="outline" onClick={onCancel}>
           Cancel
@@ -787,290 +963,42 @@ function EditVehicleForm({ vehicle, onSaved, onCancel }: EditVehicleFormProps) {
 }
 
 function SequenceEditor({
-  vehicles: initialVehicles,
+  vehicles,
   addresses,
-}: SequenceProps) {
-  const { toast } = useToast();
-  const [vehicles, setVehicles] = useState<VehicleRow[]>(initialVehicles);
-  const [pointsByVehicle, setPointsByVehicle] = useState<
-    Record<string, PickupPointRow[]>
-  >(() =>
-    Object.fromEntries(initialVehicles.map((v) => [v.id, [...v.pickupPoints]]))
-  );
-  const [dirty, setDirty] = useState<Record<string, boolean>>({});
-  const [saving, setSaving] = useState<Record<string, boolean>>({});
-  const [calcBusy, setCalcBusy] = useState<Record<string, boolean>>({});
-  const [editingVehicleId, setEditingVehicleId] = useState<string | null>(null);
-
-  const orders = useMemo(
-    () =>
-      Object.fromEntries(
-        vehicles.map(
-          (v) => [v.id, (pointsByVehicle[v.id] ?? []).map((p) => p.id)]
-        )
-      ),
-    [vehicles, pointsByVehicle]
-  );
-
-  function move(vehicleId: string, index: number, dir: -1 | 1) {
-    const order = orders[vehicleId] ?? [];
-    const target = index + dir;
-    if (target < 0 || target >= order.length) return;
-    const next = [...order];
-    [next[index], next[target]] = [next[target], next[index]];
-    setPointsByVehicle((prev) => {
-      const current = [...(prev[vehicleId] ?? [])];
-      const [moved] = current.splice(index, 1);
-      current.splice(target, 0, moved);
-      return { ...prev, [vehicleId]: current };
-    });
-    setDirty((prev) => ({ ...prev, [vehicleId]: true }));
-  }
-
-  async function addPoint(vehicleId: string, point: PickupPointRow) {
-    setPointsByVehicle((prev) => ({
-      ...prev,
-      [vehicleId]: [...(prev[vehicleId] ?? []), point],
-    }));
-    setDirty((prev) => ({ ...prev, [vehicleId]: true }));
-    // The sequence changed → recompute remaining pickup times so every point
-    // stays anchored off the vehicle's first pickup time (5 min/km).
-    try {
-      const res = await autoCalcPickupTimes(vehicleId);
-      if (res.success && res.updates) {
-        const updates = res.updates;
-        setPointsByVehicle((prev) => ({
-          ...prev,
-          [vehicleId]: (prev[vehicleId] ?? []).map((p) => {
-            const match = updates.find((u) => u.id === p.id);
-            return match ? { ...p, baseETA: match.baseETA } : p;
-          }),
-        }));
-      }
-    } catch {
-      // best effort — the point was already created server-side
-    }
-  }
-
-  function addVehicle(vehicle: VehicleRow) {
-    setVehicles((prev) => [...prev, vehicle]);
-    setPointsByVehicle((prev) => ({ ...prev, [vehicle.id]: [] }));
-  }
-
-  function handleVehicleSaved(updated: VehicleRow) {
-    setVehicles((prev) =>
-      prev.map((x) => (x.id === updated.id ? updated : x))
-    );
-    setEditingVehicleId(null);
-  }
-
-  async function saveOrder(vehicleId: string) {
-    const order = orders[vehicleId] ?? [];
-    setSaving((prev) => ({ ...prev, [vehicleId]: true }));
-    try {
-      const res = await reorderPickupPoints(vehicleId, order);
-      if (!res.success) {
-        toast({ title: "Reorder failed", description: res.error, variant: "destructive" });
-        return;
-      }
-      setDirty((prev) => ({ ...prev, [vehicleId]: false }));
-      toast({ title: "Sequence saved", description: "Pickup order updated." });
-    } finally {
-      setSaving((prev) => ({ ...prev, [vehicleId]: false }));
-    }
-  }
-
-  async function autoCalc(vehicleId: string) {
-    setCalcBusy((prev) => ({ ...prev, [vehicleId]: true }));
-    try {
-      const res = await autoCalcPickupTimes(vehicleId);
-      if (!res.success) {
-        toast({
-          title: "Pickup times not set",
-          description: res.error,
-          variant: "destructive",
-        });
-        return;
-      }
-      const updates = res.updates ?? [];
-      setPointsByVehicle((prev) => ({
-        ...prev,
-        [vehicleId]: (prev[vehicleId] ?? []).map((p) => {
-          const match = updates.find((u) => u.id === p.id);
-          return match ? { ...p, baseETA: match.baseETA } : p;
-        }),
-      }));
-      toast({
-        title: "Pickup times set",
-        description:
-          res.method === "first_pickup"
-            ? `Anchored from the first pickup time; office arrival ≈ ${res.computedOfficeArrival ?? "—"} (5 min/km).`
-            : "Calculated backwards from the vehicle BASE ETA at ~5 min/km, reaching the office by base ETA.",
-      });
-    } finally {
-      setCalcBusy((prev) => ({ ...prev, [vehicleId]: false }));
-    }
-  }
+  selectedVehicleId,
+  onSelectVehicle,
+  pointsByVehicle,
+  onPointsChange,
+  onVehicleUpdate,
+}: {
+  vehicles: VehicleRow[];
+  addresses: AddressOption[];
+  selectedVehicleId: string | null;
+  onSelectVehicle: (vehicleId: string) => void;
+  pointsByVehicle: Record<string, PickupPointRow[]>;
+  onPointsChange: (vehicleId: string, points: PickupPointRow[]) => void;
+  onVehicleUpdate: (
+    updated: VehicleRow,
+    pickupUpdates?: Array<{ id: string; baseETA: string }>
+  ) => void;
+}) {
+  const selectedVehicle = vehicles.find((v) => v.id === selectedVehicleId) ?? null;
 
   return (
-    <Card>
-      <CardHeader className="border-b">
-        <CardTitle className="flex items-center gap-2">
-          <Truck className="size-4 text-teal" />
-          Pickup sequence — 10 PM shift
-        </CardTitle>
-        <CardDescription>
-          The first pickup point time is set on each vehicle (create / edit).
-          Every later point is auto-calculated as the previous point plus the
-          drive time (~5 min/km), so the office is reached right after the
-          last point. Order the points with the arrows, add points, then save —
-          run “Set pickup times” anytime to recompute.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-6">
-        {vehicles.length === 0 && (
-          <div className="rounded-lg border border-dashed p-6 text-center">
-            <p className="text-sm text-muted-foreground">
-              No active vehicles yet. Use “Add a vehicle” below to create one for
-              the 10 PM pickup sequence.
-            </p>
-          </div>
-        )}
-
-        {vehicles.map((v) => {
-          const order = orders[v.id] ?? [];
-          const hasPoints = order.length > 0;
-          return (
-            <div key={v.id} className="rounded-lg border">
-              <div className="flex items-center justify-between gap-3 border-b px-4 py-3">
-                <div>
-                  <p className="font-semibold">{v.vehicleNumber}</p>
-                  <p className="text-xs text-muted-foreground">
-                    {v.vehicleType} · capacity {v.capacity}
-                    {v.officeLocation ? ` · ${v.officeLocation}` : ""}
-                    {v.driverName ? ` · ${v.driverName}` : ""}
-                    {v.baseETA ? ` · BASE ETA ${v.baseETA}` : ""}
-                    {v.firstPickupTime
-                      ? ` · first pickup ${v.firstPickupTime}`
-                      : ""}
-                  </p>
-                </div>
-                <div className="flex items-center gap-2">
-                  {editingVehicleId !== v.id && (
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="outline"
-                      onClick={() => setEditingVehicleId(v.id)}
-                    >
-                      <Pencil className="mr-1 size-3.5" />
-                      Edit
-                    </Button>
-                  )}
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="outline"
-                    disabled={!hasPoints || calcBusy[v.id]}
-                    onClick={() => void autoCalc(v.id)}
-                  >
-                    <Clock className="mr-1 size-3.5" />
-                    {calcBusy[v.id] ? "Calculating…" : "Set pickup times"}
-                  </Button>
-                  <Button
-                    type="button"
-                    size="sm"
-                    disabled={!dirty[v.id] || saving[v.id] || !hasPoints}
-                    onClick={() => void saveOrder(v.id)}
-                  >
-                    <Save className="mr-1 size-3.5" />
-                    {saving[v.id] ? "Saving…" : "Save order"}
-                  </Button>
-                </div>
-              </div>
-
-              {editingVehicleId === v.id && (
-                <EditVehicleForm
-                  vehicle={v}
-                  onSaved={handleVehicleSaved}
-                  onCancel={() => setEditingVehicleId(null)}
-                />
-              )}
-
-              {hasPoints ? (
-                <ol className="divide-y">
-                  {order.map((pointId, idx) => {
-                    const point = (pointsByVehicle[v.id] ?? []).find(
-                      (p) => p.id === pointId
-                    )!;
-                    const isLast = idx === order.length - 1;
-                    return (
-                      <li
-                        key={pointId}
-                        className="flex items-center justify-between gap-3 px-4 py-3"
-                      >
-                        <div className="flex min-w-0 items-center gap-3">
-                          <span className="flex size-7 shrink-0 items-center justify-center rounded-full border border-teal/50 bg-teal/10 text-xs font-semibold text-teal">
-                            {idx + 1}
-                          </span>
-                          <div className="min-w-0">
-                            <p className="truncate font-medium">{point.name}</p>
-                            <p className="truncate text-xs text-muted-foreground">
-                              pickup {point.baseETA}
-                              {point.address ? ` · ${point.address.addressText}` : ""}
-                            </p>
-                          </div>
-                        </div>
-                        <div className="flex shrink-0 gap-1">
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="icon"
-                            className="size-7"
-                            aria-label={`Move ${point.name} up`}
-                            disabled={idx === 0}
-                            onClick={() => move(v.id, idx, -1)}
-                          >
-                            <ArrowUp className="size-3.5" />
-                          </Button>
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="icon"
-                            className="size-7"
-                            aria-label={`Move ${point.name} down`}
-                            disabled={isLast}
-                            onClick={() => move(v.id, idx, 1)}
-                          >
-                            <ArrowDown className="size-3.5" />
-                          </Button>
-                        </div>
-                      </li>
-                    );
-                  })}
-                </ol>
-              ) : (
-                <p className="px-4 py-3 text-xs text-muted-foreground">
-                  No pickup points yet — add the first point below.
-                </p>
-              )}
-
-              <AddPointForm
-                vehicle={v}
-                addresses={addresses}
-                defaultSequence={order.length + 1}
-                onCreated={(point) => addPoint(v.id, point)}
-                onError={(msg) =>
-                  toast({ title: "Add point failed", description: msg, variant: "destructive" })
-                }
-              />
-            </div>
-          );
-        })}
-
-        <CreateVehicleForm nextSequence={1} onCreated={addVehicle} />
-      </CardContent>
-    </Card>
+    <>
+      <SimpleVehicleList
+        vehicles={vehicles}
+        selectedVehicleId={selectedVehicleId}
+        onSelectVehicle={onSelectVehicle}
+      />
+      <VehicleDetailEditor
+        vehicle={selectedVehicle}
+        addresses={addresses}
+        pointsByVehicle={pointsByVehicle}
+        onPointsChange={onPointsChange}
+        onVehicleUpdate={onVehicleUpdate}
+      />
+    </>
   );
 }
 
@@ -1083,17 +1011,65 @@ type RouteSettingClientProps = {
 
 export function RouteSettingClient({
   initialWeekStart,
-  vehicles,
+  vehicles: initialVehicles,
   addresses,
   pins,
 }: RouteSettingClientProps) {
+  const [vehicles, setVehicles] = useState<VehicleRow[]>(initialVehicles);
+  const [pointsByVehicle, setPointsByVehicle] = useState<
+    Record<string, PickupPointRow[]>
+  >(() =>
+    Object.fromEntries(initialVehicles.map((v) => [v.id, [...v.pickupPoints]]))
+  );
+  const [selectedVehicleId, setSelectedVehicleId] = useState<string | null>(
+    initialVehicles.length > 0 ? initialVehicles[0].id : null
+  );
+
+  function updateVehicle(
+    updated: VehicleRow,
+    pickupUpdates?: Array<{ id: string; baseETA: string }>
+  ) {
+    setVehicles((prev) =>
+      prev.map((x) => (x.id === updated.id ? updated : x))
+    );
+    if (pickupUpdates) {
+      const updatesById = new Map(
+        pickupUpdates.map((point) => [point.id, point.baseETA])
+      );
+      setPointsByVehicle((prev) => ({
+        ...prev,
+        [updated.id]: (prev[updated.id] ?? []).map((point) => {
+          const baseETA = updatesById.get(point.id);
+          return baseETA ? { ...point, baseETA } : point;
+        }),
+      }));
+    }
+  }
+
   return (
-    <div className="space-y-6">
-      <SequenceEditor vehicles={vehicles} addresses={addresses} />
+    <div
+      className="grid gap-6"
+      style={{
+        gridTemplateColumns: "1fr 2fr 2fr",
+      }}
+    >
+      <SequenceEditor
+        vehicles={vehicles}
+        addresses={addresses}
+        selectedVehicleId={selectedVehicleId}
+        onSelectVehicle={setSelectedVehicleId}
+        pointsByVehicle={pointsByVehicle}
+        onPointsChange={(vehicleId, points) => {
+          setPointsByVehicle((prev) => ({ ...prev, [vehicleId]: points }));
+        }}
+        onVehicleUpdate={updateVehicle}
+      />
       <Pinner
         initialWeekStart={initialWeekStart}
         vehicles={vehicles}
         pins={pins}
+        selectedVehicleId={selectedVehicleId}
+        onSelectVehicle={setSelectedVehicleId}
       />
     </div>
   );

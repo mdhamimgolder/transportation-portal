@@ -25,40 +25,109 @@ export default async function RouteSettingPage({
     ? getMondayOfWeek(parseDayString(weekParam))
     : getSubmissionWindow().weekStartDate;
 
-  const [vehicles, pins, addresses] = await Promise.all([
-    prisma.vehicle.findMany({
+  // Pickup-point coordinates page fetches named addresses via these two queries
+  const [vehicleDrivers, pins, pickupPointNames, linkedPointAddressIds] = await Promise.all([
+    prisma.vehicleDriver.findMany({
       where: { isActive: true },
-      select: {
-        id: true,
-        vehicleNumber: true,
-        vehicleType: true,
-        capacity: true,
-        driverName: true,
-        driverContact: true,
-        officeLocation: true,
-        baseETA: true,
-        firstPickupTime: true,
-        pickupSequence: {
-          where: { isActive: true },
-          orderBy: { sequence: "asc" },
-          select: {
-            id: true,
-            name: true,
-            sequence: true,
-            baseETA: true,
-            isActive: true,
-            address: { select: { addressText: true, latitude: true, longitude: true } },
-          },
-        },
-      },
-      orderBy: { vehicleNumber: "asc" },
+      select: { driverName: true, contactNumber: true, vehicleNumber: true },
+      orderBy: { driverName: "asc" },
     }),
     getVehicleShiftPins(weekStart.toISOString().split("T")[0]),
-    prisma.address.findMany({
-      select: { id: true, addressText: true, label: true },
-      orderBy: { addressText: "asc" },
+    prisma.user.findMany({
+      where: { role: Role.EMPLOYEE, pickupPoint: { not: null } },
+      select: { pickupPoint: true },
+    }),
+    prisma.pickupPoint.findMany({
+      where: { isActive: true },
+      select: { addressId: true },
     }),
   ]);
+
+  const pointNames = [
+    ...new Set(
+      pickupPointNames
+        .map((u) => u.pickupPoint?.trim())
+        .filter((n): n is string => Boolean(n))
+    ),
+  ];
+  const linkedIds = linkedPointAddressIds.map((p) => p.addressId);
+
+  // ONLY pickup points for "Add pickup point" — never employee home addresses.
+  // A pickup point is a named point on the coordinates page (User.pickupPoint)
+  // or an address already linked by an active vehicle PickupPoint.
+  const addresses = await prisma.address.findMany({
+    where: {
+      OR: [
+        ...(pointNames.length
+          ? [{ addressText: { in: pointNames, mode: "insensitive" as const } }]
+          : []),
+        ...(linkedIds.length ? [{ id: { in: linkedIds } }] : []),
+      ],
+    },
+    select: { id: true, addressText: true, label: true, latitude: true, longitude: true },
+    orderBy: { addressText: "asc" },
+  });
+
+  await Promise.all(
+    vehicleDrivers.map((record) =>
+      prisma.vehicle.upsert({
+        where: { vehicleNumber: record.vehicleNumber.trim() },
+        update: {
+          driverName: record.driverName,
+          driverContact: record.contactNumber,
+          isActive: true,
+        },
+        create: {
+          vehicleNumber: record.vehicleNumber.trim(),
+          vehicleType: "STANDARD",
+          capacity: 4,
+          driverName: record.driverName,
+          driverContact: record.contactNumber,
+          officeLocation: "Regnum",
+        },
+      })
+    )
+  );
+
+  const vehicles = await prisma.vehicle.findMany({
+    where: {
+      isActive: true,
+      vehicleNumber: {
+        in: vehicleDrivers.map((record) => record.vehicleNumber.trim()),
+      },
+    },
+    select: {
+      id: true,
+      vehicleNumber: true,
+      vehicleType: true,
+      capacity: true,
+      driverName: true,
+      driverContact: true,
+      officeLocation: true,
+      baseETA: true,
+      firstPickupTime: true,
+      pickupSequence: {
+        where: { isActive: true },
+        orderBy: { sequence: "asc" },
+        select: {
+          id: true,
+          name: true,
+          sequence: true,
+          baseETA: true,
+          isActive: true,
+          address: { select: { addressText: true, latitude: true, longitude: true } },
+        },
+      },
+    },
+    orderBy: { vehicleNumber: "asc" },
+  });
+
+  const driverByVehicleNumber = new Map(
+    vehicleDrivers.map((record) => [
+      record.vehicleNumber.trim().toUpperCase(),
+      record.driverName,
+    ])
+  );
 
   return (
     <div className="space-y-6">
@@ -74,12 +143,17 @@ export default async function RouteSettingPage({
         initialWeekStart={weekStart.toISOString().split("T")[0]}
         vehicles={vehicles.map((v) => ({
           ...v,
+          driverName:
+            driverByVehicleNumber.get(v.vehicleNumber.trim().toUpperCase()) ??
+            v.driverName,
           pickupPoints: v.pickupSequence,
         }))}
         addresses={addresses.map((a) => ({
           id: a.id,
           addressText: a.addressText,
           label: a.label,
+          latitude: a.latitude,
+          longitude: a.longitude,
         }))}
         pins={pins.error ? [] : pins.pins}
       />

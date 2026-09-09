@@ -32,12 +32,21 @@
 import { prisma } from "@/lib/prisma";
 import { haversineDistance, minutesToTimeString } from "./utils";
 import { officeCoordinatesFor } from "@/lib/constants/office-locations";
+import {
+  PICKUP_GRID_MINUTES,
+  snapPickupMinutesDown,
+  snapPickupMinutesUp,
+} from "./schedule-math";
+
+export {
+  PICKUP_GRID_MINUTES,
+  snapPickupMinutesDown,
+  snapPickupMinutesUp,
+  backCalculatePickupMinutes,
+} from "./schedule-math";
 
 /** City-speed assumption: 1 km of driving takes ~5 minutes. */
 export const MINUTES_PER_KM = 5;
-
-/** All pickup times snap to this increment (5-minute grid). */
-export const PICKUP_GRID_MINUTES = 5;
 
 /** A learned leg is trusted once it has at least this many observations. */
 export const LEARN_MIN_SAMPLES = 3;
@@ -87,15 +96,6 @@ function normalizeTime(raw: string | null | undefined): string | null {
   return `${h.padStart(2, "0")}:${m}`;
 }
 
-/** Round `minutes` down to the nearest 5-minute grid point (>= 0). */
-export function snapPickupMinutesDown(minutes: number): number {
-  return Math.max(0, Math.floor(minutes / PICKUP_GRID_MINUTES) * PICKUP_GRID_MINUTES);
-}
-
-/** Round `minutes` up to the nearest 5-minute grid point. */
-export function snapPickupMinutesUp(minutes: number): number {
-  return Math.ceil(minutes / PICKUP_GRID_MINUTES) * PICKUP_GRID_MINUTES;
-}
 
 function legKey(fromKey: string | null | undefined, toKey: string | null | undefined): string | null {
   return fromKey && toKey ? `${fromKey}->${toKey}` : null;

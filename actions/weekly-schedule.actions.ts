@@ -1,12 +1,24 @@
 "use server";
 
-import { after } from "next/server";
+
 import { revalidatePath } from "next/cache";
+import { after } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireRole } from "@/lib/rbac/guards";
-import { getSubmissionWindow, getWeekDays, DAY_LABELS, formatShortDate } from "@/lib/date/week";
+import {
+  getSubmissionWindow,
+  getWeekDays,
+  getMondayOfWeek,
+  toUtcMidnight,
+  DAY_LABELS,
+  formatShortDate,
+} from "@/lib/date/week";
 import { getTransportSettings } from "@/lib/queries/settings";
-import { NO_TRANSPORT_VALUE, ARRIVAL_TIME_OPTIONS } from "@/lib/constants/arrival-times";
+import {
+  NO_TRANSPORT_VALUE,
+  ARRIVAL_TIME_OPTIONS,
+  normalizeArrivalTimeInput,
+} from "@/lib/constants/arrival-times";
 import { sendMailBackground, EMAIL_ENABLED } from "@/lib/mailer";
 import { Role, WeeklyScheduleStatus } from "@/lib/constants/enums";
 import { parseCsv } from "@/lib/csv";
@@ -22,7 +34,7 @@ type SubmitNoticeArgs = {
   days: { dayOfWeek: number; date: Date; needsTransport: boolean; arrivalTime: string | null }[];
 };
 
-function sendScheduleSubmittedNotice({ to, fullName, weekStartDate, days }: SubmitNoticeArgs) {
+async function sendScheduleSubmittedNotice({ to, fullName, weekStartDate, days }: SubmitNoticeArgs) {
   const subject = "Your schedule has been submitted";
   const bodyRows = days
     .map((d) => {
@@ -42,24 +54,22 @@ function sendScheduleSubmittedNotice({ to, fullName, weekStartDate, days }: Subm
     })
     .join("");
 
-  return after(async () => {
-    await sendMailBackground({
-      to,
-      subject,
-      body: `Hi ${fullName},\n\nYour weekly schedule for the week of ${weekStartDate.toDateString()} has been submitted successfully.\n\nDay-wise schedule:\n${bodyRows}\n\nTo view your current week schedule and find your day-wise assignment, please log in to the system and open the "My Schedule" page.\n\nThank you.`,
-      html: `
-        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
-          <h2 style="color: #1a1a2e;">Your Schedule Has Been Submitted</h2>
-          <p>Hi <strong>${fullName}</strong>,</p>
-          <p>Your weekly schedule for the week of <strong>${weekStartDate.toDateString()}</strong> has been submitted successfully.</p>
-          <table style="width: 100%; border-collapse: collapse; margin: 16px 0;">
-            ${htmlRows}
-          </table>
-          <p>To view your current week schedule and find your day-wise assignment, please <strong>log in to the system</strong> and open the <strong>My Schedule</strong> page.</p>
-          <p style="color: #6c757d; margin-top: 24px;">Best regards,<br><strong>Transportation Team</strong></p>
-        </div>
-      `,
-    });
+  await sendMailBackground({
+    to,
+    subject,
+    body: `Hi ${fullName},\n\nYour weekly schedule for the week of ${weekStartDate.toDateString()} has been submitted successfully.\n\nDay-wise schedule:\n${bodyRows}\n\nTo view your current week schedule and find your day-wise assignment, please log in to the system and open the "My Schedule" page.\n\nThank you.`,
+    html: `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+        <h2 style="color: #1a1a2e;">Your Schedule Has Been Submitted</h2>
+        <p>Hi <strong>${fullName}</strong>,</p>
+        <p>Your weekly schedule for the week of <strong>${weekStartDate.toDateString()}</strong> has been submitted successfully.</p>
+        <table style="width: 100%; border-collapse: collapse; margin: 16px 0;">
+          ${htmlRows}
+        </table>
+        <p>To view your current week schedule and find your day-wise assignment, please <strong>log in to the system</strong> and open the <strong>My Schedule</strong> page.</p>
+        <p style="color: #6c757d; margin-top: 24px;">Best regards,<br><strong>Transportation Team</strong></p>
+      </div>
+    `,
   });
 }
 
@@ -102,13 +112,13 @@ export async function submitCorporateWeeklySchedule(
     dayValues.push(value);
   }
 
-  const weekDates = getWeekDays(window.weekStartDate);
+  const weekDates = getWeekDays(toUtcMidnight(window.weekStartDate));
 
   const existing = await prisma.weeklySchedule.findUnique({
     where: {
       employeeId_weekStartDate: {
         employeeId: session.id,
-        weekStartDate: window.weekStartDate,
+        weekStartDate: toUtcMidnight(window.weekStartDate),
       },
     },
   });
@@ -126,7 +136,7 @@ export async function submitCorporateWeeklySchedule(
         await prisma.weeklySchedule.create({
           data: {
             employeeId: session.id,
-            weekStartDate: window.weekStartDate,
+            weekStartDate: toUtcMidnight(window.weekStartDate),
           },
         })
       ).id;
@@ -194,6 +204,9 @@ export async function submitMySchedule(
   if (Number.isNaN(weekStartDate.getTime())) {
     return { error: "Invalid week." };
   }
+  // Canonical week key: UTC-midnight Monday (RUN MAPPING queries this exact
+  // value — a local-midnight key would make the schedule invisible to it).
+  const normalizedWeekStart = toUtcMidnight(getMondayOfWeek(weekStartDate));
 
   const dayValues: string[] = [];
   for (let i = 0; i < 5; i++) {
@@ -204,13 +217,13 @@ export async function submitMySchedule(
     dayValues.push(value);
   }
 
-  const weekDates = getWeekDays(weekStartDate);
+  const weekDates = getWeekDays(normalizedWeekStart);
 
   const existing = await prisma.weeklySchedule.findUnique({
     where: {
       employeeId_weekStartDate: {
         employeeId: session.id,
-        weekStartDate,
+        weekStartDate: normalizedWeekStart,
       },
     },
   });
@@ -219,7 +232,7 @@ export async function submitMySchedule(
     ? existing.id
     : (
         await prisma.weeklySchedule.create({
-          data: { employeeId: session.id, weekStartDate },
+          data: { employeeId: session.id, weekStartDate: normalizedWeekStart },
         })
       ).id;
 
@@ -423,9 +436,14 @@ const ARRIVAL_LABEL_TO_VALUE = Object.fromEntries(
 );
 
 function parseDayCell(cell: string): string | null {
+  const normalized = normalizeArrivalTimeInput(cell);
+  if (normalized === NO_TRANSPORT_VALUE) return NO_TRANSPORT_VALUE;
+  if (normalized && VALID_DAY_VALUES.has(normalized)) return normalized;
+
   const trimmed = cell.trim();
   if (!trimmed || trimmed.toLowerCase() === "not required") return NO_TRANSPORT_VALUE;
   if (trimmed.toUpperCase() === NO_TRANSPORT_VALUE) return NO_TRANSPORT_VALUE;
+
   const mapped = ARRIVAL_LABEL_TO_VALUE[trimmed.toLowerCase()];
   if (mapped) return mapped;
   if (VALID_DAY_VALUES.has(trimmed)) return trimmed;
@@ -470,10 +488,13 @@ export async function bulkUploadWeeklySchedules(
   if (typeof weekStartValue !== "string" || !weekStartValue) {
     return { error: "Select a week to upload for." };
   }
-  const weekStartDate = new Date(weekStartValue);
-  if (Number.isNaN(weekStartDate.getTime())) {
+  const parsedWeek = new Date(weekStartValue);
+  if (Number.isNaN(parsedWeek.getTime())) {
     return { error: "Invalid week." };
   }
+  // Canonical week key: UTC-midnight Monday (RUN MAPPING queries this exact
+  // value — a local-midnight key would make the schedule invisible to it).
+  const weekStartDate = toUtcMidnight(getMondayOfWeek(parsedWeek));
   const weekDates = getWeekDays(weekStartDate);
 
   const file = formData.get("file");
@@ -513,6 +534,28 @@ export async function bulkUploadWeeklySchedules(
   const created: BulkUploadWeeklyResultRow[] = [];
   const skipped: BulkUploadWeeklySkipRow[] = [];
 
+  // Pre-fetch every referenced employee in ONE query (was: one `findUnique`
+  // per row — the biggest DB-side slowdown on large files).
+  const emailsInFile = [
+    ...new Set(
+      rows
+        .slice(1)
+        .map((row) => (row[emailCol] ?? "").trim().toLowerCase())
+        .filter(Boolean)
+    ),
+  ];
+  const employeesByEmail = new Map(
+    (
+      await prisma.user.findMany({
+        where: { email: { in: emailsInFile } },
+      })
+    ).map((user) => [user.email, user])
+  );
+
+  // Emails are collected here and sent AFTER the response (via `after`),
+  // instead of one awaited SMTP round trip per row inside the loop.
+  const notices: SubmitNoticeArgs[] = [];
+
   for (let r = 1; r < rows.length; r++) {
     const row = rows[r];
     const line = r + 1;
@@ -529,7 +572,7 @@ export async function bulkUploadWeeklySchedules(
     }
 
     // Match by unique email — the rest of the profile comes from the database.
-    const employee = await prisma.user.findUnique({ where: { email: rawEmail } });
+    const employee = employeesByEmail.get(rawEmail);
     if (!employee) {
       skipped.push({ line, reason: `No employee found with email "${rawEmail}".` });
       continue;
@@ -566,30 +609,30 @@ export async function bulkUploadWeeklySchedules(
       continue;
     }
 
-    const existing = await prisma.weeklySchedule.findUnique({
+    // One upsert (was: findUnique + create + update = up to 3 round trips).
+    const now = new Date();
+    const schedule = await prisma.weeklySchedule.upsert({
       where: {
         employeeId_weekStartDate: { employeeId: employee.id, weekStartDate },
       },
-    });
-
-    const scheduleId = existing
-      ? existing.id
-      : (
-          await prisma.weeklySchedule.create({
-            data: { employeeId: employee.id, weekStartDate },
-          })
-        ).id;
-
-    await prisma.weeklySchedule.update({
-      where: { id: scheduleId },
-      data: {
+      update: {
         status: WeeklyScheduleStatus.APPROVED,
         rejectReason: null,
-        submittedAt: new Date(),
+        submittedAt: now,
         reviewedById: session.id,
-        reviewedAt: new Date(),
+        reviewedAt: now,
+      },
+      create: {
+        employeeId: employee.id,
+        weekStartDate,
+        status: WeeklyScheduleStatus.APPROVED,
+        rejectReason: null,
+        submittedAt: now,
+        reviewedById: session.id,
+        reviewedAt: now,
       },
     });
+    const scheduleId = schedule.id;
 
     const uploadedDays: SubmitNoticeArgs["days"] = [];
     for (let d = 0; d < 5; d++) {
@@ -601,26 +644,35 @@ export async function bulkUploadWeeklySchedules(
         needsTransport,
         arrivalTime: needsTransport ? value : null,
       });
-      await prisma.weeklyScheduleDay.upsert({
-        where: {
-          weeklyScheduleId_dayOfWeek: { weeklyScheduleId: scheduleId, dayOfWeek: d + 1 },
-        },
-        update: {
-          needsTransport,
-          arrivalTime: needsTransport ? value : null,
-          date: weekDates[d],
-        },
-        create: {
-          weeklyScheduleId: scheduleId,
-          dayOfWeek: d + 1,
-          date: weekDates[d],
-          needsTransport,
-          arrivalTime: needsTransport ? value : null,
-        },
-      });
     }
 
-    sendScheduleSubmittedNotice({
+    // All 5 day-upserts fire together instead of awaited one-by-one.
+    await Promise.all(
+      uploadedDays.map((d) =>
+        prisma.weeklyScheduleDay.upsert({
+          where: {
+            weeklyScheduleId_dayOfWeek: {
+              weeklyScheduleId: scheduleId,
+              dayOfWeek: d.dayOfWeek,
+            },
+          },
+          update: {
+            needsTransport: d.needsTransport,
+            arrivalTime: d.arrivalTime,
+            date: d.date,
+          },
+          create: {
+            weeklyScheduleId: scheduleId,
+            dayOfWeek: d.dayOfWeek,
+            date: d.date,
+            needsTransport: d.needsTransport,
+            arrivalTime: d.arrivalTime,
+          },
+        })
+      )
+    );
+
+    notices.push({
       to: employee.email,
       fullName: employee.fullName,
       weekStartDate,
@@ -629,6 +681,12 @@ export async function bulkUploadWeeklySchedules(
 
     created.push({ employeeName: employee.fullName, email: employee.email });
   }
+
+  // Send all schedule emails after the response is returned (was: awaited per
+  // row — the #1 reason bulk upload felt slow in production).
+  after(async () => {
+    await Promise.allSettled(notices.map((notice) => sendScheduleSubmittedNotice(notice)));
+  });
 
   revalidatePath("/operations/weekly-requests");
   revalidatePath("/employee/weekly");

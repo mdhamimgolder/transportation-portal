@@ -29,6 +29,15 @@ export function getMondayOfWeek(date: Date): Date {
   return d;
 }
 
+/** The same calendar date as `date`, expressed at UTC midnight. Week keys
+ * (`weeklySchedule.weekStartDate`, `weeklyScheduleDay.date`) are stored this
+ * way so RUN MAPPING / route-generation lookups never depend on the server's
+ * timezone — every schedule-creating flow MUST pass its week through this
+ * before writing to the database. */
+export function toUtcMidnight(date: Date): Date {
+  return new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+}
+
 export type SubmissionWindow = {
   /** Monday of the Mon-Fri week currently open for submission. */
   weekStartDate: Date;

@@ -5,6 +5,7 @@ import { prisma } from "@/lib/prisma";
 import { requireRole } from "@/lib/rbac/guards";
 import { Role } from "@/lib/constants/enums";
 import { LEARN_MIN_SAMPLES } from "@/lib/routing/pickup-schedule";
+import { legObservationsFromManualEntries } from "@/lib/routing/manual-plan-training";
 
 /**
  * "Skill-up" data mining.
@@ -193,6 +194,28 @@ export async function trainRoutePlannerFromHistory(): Promise<LearnFromHistoryRe
       }
     }
 
+    // ── Manual-plan knowledge ("Teach from manual plan" CSV rows) ──────
+    // Ground-truth rows Facilities uploaded by hand are merged into the same
+    // aggregate so a retrain never wipes the hand-tuned leg times.
+    const manualEntries = await prisma.manualRoutePlanEntry.findMany();
+    const manual = legObservationsFromManualEntries(
+      manualEntries.map((e) => ({
+        id: e.id,
+        date: e.date,
+        shiftKey: e.shiftKey,
+        vehicleNumber: e.vehicleNumber,
+        addressId: e.addressId,
+        pickupLabel: e.pickupLabel,
+        pickupMinutes: e.pickupMinutes,
+        orderIndex: e.orderIndex,
+        officeLabel: e.officeLabel,
+        arrivalMinutes: e.arrivalMinutes,
+      }))
+    );
+    for (const obs of manual.observations) {
+      record(obs.fromKey, obs.fromLabel, obs.toKey, obs.toLabel, obs.gapMinutes, obs.shiftKey);
+    }
+
     const rows = Array.from(aggByKey.values()).map((agg) => ({
       fromKey: agg.fromKey,
       toKey: agg.toKey,
@@ -245,6 +268,8 @@ export type RouteLearningStats = {
   observationCount: number;
   confidentLegs: number;
   lastTrainedAt: string | null;
+  /** Rows ingested from manually made route plans ("Teach from manual plan"). */
+  manualEntryCount: number;
   sample: Array<{
     from: string | null;
     to: string | null;
@@ -257,9 +282,12 @@ export type RouteLearningStats = {
 /** Current learned-set summary for the auto route planner UI. */
 export async function getRouteLearningStats(): Promise<RouteLearningStats> {
   await requireRole([Role.FACILITIES, Role.SUPER_ADMIN]);
-  const all = await prisma.routeLegLearning.findMany({
-    orderBy: [{ sampleCount: "desc" }, { avgMinutes: "asc" }],
-  });
+  const [all, manualEntryCount] = await Promise.all([
+    prisma.routeLegLearning.findMany({
+      orderBy: [{ sampleCount: "desc" }, { avgMinutes: "asc" }],
+    }),
+    prisma.manualRoutePlanEntry.count(),
+  ]);
   let lastTrainedAt: string | null = null;
   for (const row of all) {
     const ts = row.updatedAt.getTime();
@@ -272,6 +300,7 @@ export async function getRouteLearningStats(): Promise<RouteLearningStats> {
     observationCount: all.reduce((sum, r) => sum + r.sampleCount, 0),
     confidentLegs: all.filter((r) => r.sampleCount >= LEARN_MIN_SAMPLES).length,
     lastTrainedAt,
+    manualEntryCount,
     sample: all.slice(0, 8).map((r) => ({
       from: r.fromLabel,
       to: r.toLabel,

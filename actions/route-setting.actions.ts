@@ -61,12 +61,32 @@ export async function reorderPickupPoints(
       return { success: false, error: "Picker includes stale pickup points. Refresh and retry." };
     }
 
-    // Phase 1 -- move everyone far away so renumbering can't collide.
+    // Soft-deleted rows still hold DB-unique (vehicleId, sequence) slots —
+    // push them far above the working range so renumbering never collides.
+    const squatters = await prisma.pickupPoint.findMany({
+      where: { vehicleId, isActive: false },
+      select: { id: true },
+    });
+    const maxRow = await prisma.pickupPoint.aggregate({
+      where: { vehicleId },
+      _max: { sequence: true },
+    });
+    let bump = (maxRow._max.sequence ?? 0) + 1000;
+    for (const row of squatters) {
+      await prisma.pickupPoint.update({
+        where: { id: row.id },
+        data: { sequence: bump++ },
+      });
+    }
+
+    // Phase 1 -- move everyone far away so renumbering can't collide
+    // (temp slots start above every sequence now in the table).
+    const tempBase = bump > 10000 ? bump : 10000;
     await prisma.$transaction([
       ...points.map((p, idx) =>
         prisma.pickupPoint.update({
           where: { id: p.id },
-          data: { sequence: idx + 10000 },
+          data: { sequence: tempBase + idx },
         })
       ),
     ]);
@@ -312,7 +332,11 @@ export async function updateVehicle(
     baseETA?: string | null;
     firstPickupTime?: string | null;
   }
-): Promise<{ success: boolean; error?: string }> {
+): Promise<{
+  success: boolean;
+  pickupUpdates?: Array<{ id: string; baseETA: string }>;
+  error?: string;
+}> {
   try {
     await requireRole([Role.FACILITIES, Role.SUPER_ADMIN]);
 
@@ -369,12 +393,21 @@ export async function updateVehicle(
     await prisma.vehicle.update({ where: { id: input.id }, data });
 
     // First pickup time / BASE ETA edits re-anchor the whole pickup schedule.
-    await syncPickupPointTimes(input.id).catch(() => null);
+    const schedule = await syncPickupPointTimes(input.id);
+    if (!schedule.success) {
+      return { success: false, error: schedule.error };
+    }
 
     revalidatePath("/facilities/route-setting");
     revalidatePath("/facilities/vehicles");
 
-    return { success: true };
+    return {
+      success: true,
+      pickupUpdates: schedule.points.map((point) => ({
+        id: point.id,
+        baseETA: point.pickup,
+      })),
+    };
   } catch (error) {
     return {
       success: false,

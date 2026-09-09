@@ -7,6 +7,35 @@ import { revalidatePath } from "next/cache";
 import { syncPickupPointTimes } from "@/lib/routing/pickup-schedule";
 
 /**
+ * The (vehicleId, sequence) pair is UNIQUE at the database level — soft-deleted
+ * (isActive=false) rows keep occupying their sequence slot and block new
+ * points at that position. Move any INACTIVE row holding `sequence` to a free
+ * high slot (above every sequence of the vehicle) so the position opens up.
+ * Active rows are never touched.
+ */
+async function clearInactiveRowsFromSequence(
+  vehicleId: string,
+  sequence: number
+): Promise<void> {
+  const squatters = await prisma.pickupPoint.findMany({
+    where: { vehicleId, sequence, isActive: false },
+    select: { id: true },
+  });
+  if (squatters.length === 0) return;
+  const maxRow = await prisma.pickupPoint.aggregate({
+    where: { vehicleId },
+    _max: { sequence: true },
+  });
+  let next = (maxRow._max.sequence ?? 0) + 1000;
+  for (const row of squatters) {
+    await prisma.pickupPoint.update({
+      where: { id: row.id },
+      data: { sequence: next++ },
+    });
+  }
+}
+
+/**
  * Create a new pickup point for a vehicle
  */
 export async function createPickupPoint(input: {
@@ -19,11 +48,14 @@ export async function createPickupPoint(input: {
   await requireRole([Role.FACILITIES, Role.SUPER_ADMIN]);
 
   try {
-    // Check if sequence already exists for this vehicle
+    // Only an ACTIVE point is a real conflict — soft-deleted rows squatting on
+    // the slot are pushed out of the way first (they still hold the DB-unique
+    // (vehicleId, sequence) index).
     const existing = await prisma.pickupPoint.findFirst({
       where: {
         vehicleId: input.vehicleId,
         sequence: input.sequence,
+        isActive: true,
       },
     });
 
@@ -33,6 +65,7 @@ export async function createPickupPoint(input: {
         error: `Sequence ${input.sequence} already exists for this vehicle`,
       };
     }
+    await clearInactiveRowsFromSequence(input.vehicleId, input.sequence);
 
     const point = await prisma.pickupPoint.create({
       data: {
@@ -74,6 +107,36 @@ export async function updatePickupPoint(input: {
   await requireRole([Role.FACILITIES, Role.SUPER_ADMIN]);
 
   try {
+    const current = await prisma.pickupPoint.findUnique({
+      where: { id: input.id },
+      select: { vehicleId: true, sequence: true },
+    });
+    if (!current) {
+      return { success: false, error: "Pickup point not found" };
+    }
+
+    // Moving to an occupied position: an ACTIVE row is a real conflict; a
+    // soft-deleted row squatting on the slot is pushed out of the way first
+    // (it still holds the DB-unique (vehicleId, sequence) index).
+    if (input.sequence !== undefined && input.sequence !== current.sequence) {
+      const clash = await prisma.pickupPoint.findFirst({
+        where: {
+          vehicleId: current.vehicleId,
+          sequence: input.sequence,
+          isActive: true,
+          id: { not: input.id },
+        },
+        select: { id: true },
+      });
+      if (clash) {
+        return {
+          success: false,
+          error: `Sequence ${input.sequence} already exists for this vehicle`,
+        };
+      }
+      await clearInactiveRowsFromSequence(current.vehicleId, input.sequence);
+    }
+
     const point = await prisma.pickupPoint.update({
       where: { id: input.id },
       data: {

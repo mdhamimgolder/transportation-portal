@@ -49,6 +49,44 @@ export const LATE_NIGHT_LABELS: string[] = ARRIVAL_TIMES_BY_SHIFT[
   "12AM-6AM"
 ].map((value) => LABEL_FOR_ARRIVAL_VALUE[value]);
 
+/**
+ * True when a RoutePlan arrival LABEL ("12 AM" … "6 AM") is a late-night
+ * shift. Late-night vehicles drive the full loop office → pickups → office,
+ * while 10 PM / 11 PM routes drive pickups → office only. Shared by the route
+ * map and the server-side route analysis so the two never disagree.
+ */
+export function isLateNightArrivalLabel(
+  label: string | null | undefined
+): boolean {
+  const norm = (label ?? "").toUpperCase().replace(/\s+/g, "");
+  return LATE_NIGHT_LABELS.some(
+    (l) => l.toUpperCase().replace(/\s+/g, "") === norm
+  );
+}
+
+/**
+ * Minutes-from-midnight a vehicle must reach the office for an arrival LABEL.
+ * Late-night labels fall on the next calendar day, hence 1440 + shift.
+ * Null for unknown labels.
+ */
+export function arrivalMinutesForLabel(
+  label: string | null | undefined
+): number | null {
+  const norm = (label ?? "").toUpperCase().replace(/\s+/g, "");
+  const map: Record<string, number> = {
+    "10PM": 22 * 60,
+    "11PM": 23 * 60,
+    "12AM": 24 * 60,
+    "1AM": 25 * 60,
+    "2AM": 26 * 60,
+    "3AM": 27 * 60,
+    "4AM": 28 * 60,
+    "5AM": 29 * 60,
+    "6AM": 30 * 60,
+  };
+  return map[norm] ?? null;
+}
+
 /** Which shift a stored "HH:mm" arrival value belongs to (null if unknown). */
 export function shiftKeyForArrivalTime(
   arrivalTime: string | null | undefined

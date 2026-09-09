@@ -63,6 +63,7 @@ model User {
   
   // New: Route planning relations
   tripAssignments       TripAssignment[] @relation("TripAssignmentEmployee")
+  manualRoutePlanEntries ManualRoutePlanEntry[] @relation("ManualRoutePlanEntryEmployee")
 
   @@index([role])
   @@index([isActive])
@@ -611,4 +612,36 @@ model RouteLegLearning {
   @@unique([fromKey, toKey, shiftKey])
   @@index([shiftKey])
   @@index([updatedAt])
+}
+
+// Raw rows ingested from a MANUALLY made route plan (CSV upload from
+// Facilities). Each row is one employee's pickup on one date/shift/vehicle.
+// These ground-truth rows are merged into `RouteLegLearning` by
+// `trainRoutePlannerFromHistory` (alongside mined history), so the real
+// pickup gaps Facilities tuned by hand are never lost on a retrain.
+// Times are minutes-from-midnight; arrivalMinutes may exceed 1440 for
+// late-night runs that land after midnight.
+model ManualRoutePlanEntry {
+  id            String   @id @default(cuid())
+  date          DateTime // plan date (UTC midnight), groups rows into one run
+  shiftKey      String   // "10PM" | "11PM" | "12AM-6AM"
+  vehicleNumber String
+
+  employeeId String
+  employee   User   @relation("ManualRoutePlanEntryEmployee", fields: [employeeId], references: [id])
+
+  addressId     String? // pickup address used for the "addr:<id>" learning key
+  pickupLabel   String  // human-readable pickup point name
+  pickupMinutes Int     // 0..1439
+  orderIndex    Int?    // visiting order as written on the manual plan
+  officeLabel   String  // "Regnum" | "Spectra"
+  arrivalMinutes Int    // office arrival, may be >= 1440 after midnight wrap
+  sourceFile    String? // original CSV filename
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([date, shiftKey, vehicleNumber, employeeId])
+  @@index([shiftKey])
+  @@index([date])
 }

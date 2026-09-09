@@ -24,6 +24,33 @@ work fast without interruption.
 - Roles gating Facilities UI: `requireRole([Role.FACILITIES, Role.SUPER_ADMIN])`.
 - Machine TZ = Asia/Dhaka; DB stores week/day dates as UTC midnight. Test week: `2026-08-24`.
 
+## ⚠️ CORE INSTRUCTION — 11 PM / late-night allocation order (user-mandated, NEVER violate)
+The user has repeated this rule multiple times after live allocation mistakes. It applies
+EVERY time an 11 PM (or 12 AM–6 AM) arrival allocation / route generation / reordering
+task is touched, and overrides any "optimization" that would reorder stops otherwise:
+
+1. **Pick up the FARTHEST-from-office employee FIRST** — measured by the DISTANCE MATRIX
+   road distance in **KM** (`toOfficeKm` / `matrixDistanceKm`), never by minutes. Road
+   MINUTES invert for near homes (one-way loops, slow roads — the Cha-19-9425 bug:
+   Atia 8.21 km won the anchor over Tanjilur 8.45 km because of minutes).
+2. **Then come one by one, far → near**, following the distance matrix and the actual
+   route path back to the office. The saved visiting order must be strictly
+   non-increasing in `toOfficeKm`.
+3. `planCorridorRoutes` enforces this with a **final sort of every route's `order` by
+   `toOfficeKm` desc before returning** — grouping (corridor path + attach) decides WHO
+   rides together; the sort decides the visiting order. If touching allocation code,
+   PRESERVE this sort and the km-based anchor; never revert to minutes or drop the sort.
+4. Corridor attach can never insert before the far-first anchor (`nearestLegInsertion`
+   searches positions 1..seq.length only) — keep that too.
+5. After any change here: dry-run the real planner on real week data and assert every
+   route's order is strictly far → near by km; then `npx tsc --noEmit` + eslint, and tell
+   the user to re-run route generation so stored plans pick up the fix.
+6. **Amendment (user decision 2026-09-07):** far → near stays the GENERATOR default and is
+   never changed by code. Facilities may, per route, apply a shorter order proposed by the
+   **route analysis** (Auto Route Planner → Route map → Compare routes → Apply). That is an
+   explicit human choice recorded as `RoutePlanOverride.changeType = "ROUTE_OPTIMIZED"`;
+   the panel shows the far→near breaks of every candidate so the trade-off is visible.
+
 ## Key conventions / decisions (source of truth)
 - **Pickup-time rule (5-minute rule)** — `lib/routing/pickup-schedule.ts` is the ONLY source
   of the schedule math; generation + route-setting sync + auto-calc all use it:
@@ -41,8 +68,12 @@ work fast without interruption.
   sequences; employees attach to the vehicle owning their active pickup point
   (`User.pickupAddressId`). Missing point ⇒ per-employee error, never a silent empty route.
 - **11 PM / 12 AM–6 AM** (`generateCorridorRoutes`): density clustering, cap 4,
-  `GROUPING_RADIUS_KM = 2.0`, `GROUPING_OFFICE_DIRECTION_SLACK_KM = 1.0`; farthest-from-office
-  picked up first, route walks back to office. Back-calc pickup times anchored on arrival,
+  `GROUPING_RADIUS_KM = 2.0`, `GROUPING_OFFICE_DIRECTION_SLACK_KM = 1.0`;
+  farthest-from-office picked up first **by distance-matrix road km**
+  (`member.toOfficeKm` — NOT minutes: road minutes invert for near homes,
+  one-way loops), route walks back to office, every route's final order
+  strictly far → near (final sort in `planCorridorRoutes`). Back-calc pickup
+  times anchored on arrival,
   then snapped to 5-min grid with ≥5 min gaps (wraps past midnight for late shifts).
 - `RoutePlan.arrivalTime` stores labels (`"10 PM"`, `"11 PM"`, `"12 AM"`, …, `"6 AM"`);
   `weeklyScheduleDay.arrivalTime` stores `"HH:mm"` (`"22:00"`, `"23:00"`, …).
@@ -56,6 +87,268 @@ work fast without interruption.
   `C:\Users\HAMIM~1.GOL\AppData\Local\Temp\opencode\next-dev.log`.
 - **tsx scripts** need `import "dotenv/config"` at top; no top-level await (use `async main()`);
   temp scripts live in repo root (`_name.ts`) and are deleted after verifying.
+
+## Latest Session (2026-09-09) — "Teach from manual plan": CSV ingest trains route memory
+**User:** automated route plan pickup times not regular; wants to feed MANUALLY made route plans so
+the system learns perfect pickup times. Decision: CSV format + full ingest into the existing
+route-learning pipeline. Built; 8/8 unit tests, tsc + eslint clean, migration applied, server restarted.
+1. **Schema — `ManualRoutePlanEntry`** (migration `20260909164445_manual_route_plan_entries`):
+   id, date (UTC midnight), shiftKey, vehicleNumber, employeeId→User (+relation `manualRoutePlanEntries`),
+   addressId? (learning-key source), pickupLabel, pickupMinutes (0..1439), orderIndex?, officeLabel,
+   arrivalMinutes (may be ≥1440 conceptually; stored 0..1440 raw), sourceFile?.
+   Unique `(date, shiftKey, vehicleNumber, employeeId)` → re-upload of same CSV is an upsert (idempotent).
+2. **`lib/routing/manual-plan-training.ts`** (pure, tested): `parseClockTime` ("20:35" or "8:35 PM",
+   24:00 allowed), `shiftKeyForShiftLabel` ("10 PM"/"11PM"/"12 AM".."6 AM"/"late night" → shiftKey),
+   `legObservationsFromManualEntries` — groups rows per date+shift+vehicle, orders stops
+   chronologically via `rotateForChronology` (largest circular gap = midnight wrap; handles
+   late-night runs crossing midnight), emits pickup→pickup + last→office observations, gap range
+   1..240, issues reported per group (never throws). Tests: `npx tsx --test lib/routing/__tests__/manual-plan-training.test.ts`.
+3. **`actions/manual-route-plan.actions.ts`** — `importManualRoutePlanCsv`: requireRole
+   FACILITIES/SUPER_ADMIN, parseCsv, header matching case/space-insensitive; REQUIRED
+   date/shift/vehicleNumber/employeeEmail/pickupTime/officeArrival; optional
+   employeeName/pickupPoint/visitOrder/office. Employee resolved by email (insensitive) else exact
+   fullName; addressId = pickupAddressId ?? homeAddressId (row skipped w/ reason if none);
+   pickupLabel = CSV pickupPoint || user.pickupPoint || address label/text; officeLabel = CSV office
+   || user.officeLocation || Regnum. Upserts rows then calls `trainRoutePlannerFromHistory()` so
+   route memory refreshes immediately. Returns {stored, updated, skipped[], learning?}.
+4. **`actions/route-learning.actions.ts`** — `trainRoutePlannerFromHistory` now ALSO loads all
+   `ManualRoutePlanEntry` rows and merges their leg observations into the same `aggByKey` before the
+   deleteMany+createMany, so manual knowledge survives every automatic retrain (RUN MAPPING).
+   `getRouteLearningStats` + `RouteLearningStats` gained `manualEntryCount`.
+5. **UI** — `components/facilities/manual-plan-upload-dialog.tsx`: "Teach from manual plan" dialog
+   (Download template via ExportCsvButton + upload + stored/updated/skipped report + learning
+   summary), placed in the Route memory card of `auto-route-planner-client.tsx`
+   (`refreshLearningStats` callback refreshes stats after import; card text updated;
+   stats line shows "· N manual-plan rows" when > 0).
+6. NOTE: the planner's 11 PM far→near CORE rule untouched — this feature only feeds better leg
+   TIMES into `RouteLegLearning` (used by pickup-schedule + corridor back-calc).
+7. **Bulk profile upload: home lat/long now OPTIONAL** (`actions/user-management.actions.ts`,
+   user request). CSV format unchanged (columns may still be present); values optional:
+   provided+valid → address upsert updates lat/lng; absent → existing address linked untouched,
+   brand-new address text → profile created without homeAddressId link (Address.lat/lng NOT NULL).
+   Header check + per-row validation + range check (only when provided) updated; dialog untouched.
+
+## Latest Session (2026-09-08) — Email delivery monitor: per-row status, Email log page, resend
+**User:** after Facilities fills driver + pick-up time and "Save all" on Pick Schedule,
+some employees (e.g. utcha.barua / hamim.golder / niaz.makdum @commure.com) didn't get the email. Wants
+to KNOW when a notification wasn't triggered. Built; tsc + eslint clean; no test run; committed + pushed.
+1. **Diagnosis:** all 2026-09-07 assignments had `emailSentAt` stamped (delivery ATTEMPTED for everyone),
+   and local SMTP creds (hamim.golder@commure.com + app password) authenticate fine. So the gap was
+   OPACITY: `after()` + `sendMailBackground` swallow SMTP errors and `emailSentAt` was stamped even on
+   failure — there is no record of actual delivery. (May also be spam filters / prod SMTP differs.)
+2. **Schema — `EmailNotificationLog`** (migration `20260907173706_email_notification_log`):
+   id, kind (`ROUTE_ASSIGNMENT_WEEKLY`/`ADHOC`/`RESEND`), recipient, recipientName, subject,
+   status (`PENDING`/`SENT`/`FAILED`/`SKIPPED_DEV`), error?, routeAssignmentId? (SetNull), createdAt/updatedAt.
+3. **Mailer** — added `trySendMail()` in `lib/mailer.ts`: returns `{status,error}` instead of throwing
+   (SENT / SKIPPED_DEV / FAILED). `sendMailBackground` untouched for the other flows.
+4. **`actions/route-assignment.actions.ts`** — replaced the inline emails with a shared
+   `dispatchAssignmentEmail()`: creates a PENDING log row synchronously → `after()` does
+   `trySendMail` → updates log to SENT/FAILED(+error) → stamps `RouteAssignment.emailSentAt` ONLY on SENT → revalidates.
+   Duplicate-email guard: only dispatch when the assignment is new / vehicleDriver or pickupTime changed /
+   `emailSentAt` is null (re-saving the same row no longer re-spams). Added `resendRouteAssignmentEmail`
+   (awaits the send; returns outcome) for one-off re-dispatch of FAILED rows.
+5. **Shared template** — new `lib/email-templates.ts` `transportArrangedEmail({kind, employeeName, date,
+   driverName, contactNumber, vehicleNumber, pickupTime})` (weekly + adhoc), used by dispatch + resend.
+6. **Day sheet** (`lib/queries/route-planning.ts` + `components/facilities/route-day-sheet.tsx`) — added
+   `emailStatus` per row (from latest `EmailNotificationLog`, else `emailSentAt`, else `NOT_SENT`) and an
+   "Email" column badge: Sent / Sending… / Failed / Dev skip / Not sent. Auto `router.refresh()` after Save all.
+7. **Email Log page** — `app/facilities/email-log/` (nav "Email Log", lucide `Mail` icon added to
+   `nav-sidebar.tsx` + `mobile-nav.tsx` ICONS maps): status filter pills (ALL/SENT/FAILED/PENDING/SKIPPED_DEV),
+   failure banner count, table with time/employee/recipient/subject/status, **Resend** button on FAILED rows
+   (`components/facilities/email-log-table.tsx`; calls the server action directly → `router.refresh()`).
+8. **Role gate**: page + resend use `requireRole([Role.FACILITIES, Role.SUPER_ADMIN])`.
+9. NOTE: email log only records FUTURE sends; the 57 legacy 2026-09-07 assignments show "Sent" in the day
+   sheet via `emailSentAt` but have no log rows. Re-save a changed detail to get a tracked attempt.
+   Vercel prod: SMTP vars already present; new migration must run (`vercel` deploy handles it).
+   `lib/` files are gitignored (`git add -f`).
+10. Refactor opportunity (not done): `route-override.actions.ts` `finalizeRoute` still uses the old
+   `Promise.allSettled(sendMailBackground)` + TripAssignment.emailSentAt pattern — could adopt the log too.
+
+## Latest Session (2026-09-07) — Route analysis: side of road per stop + order comparison
+**Built; TypeScript, ESLint, 10 unit tests, real-data dry run and browser Apply verified.**
+Problem: the route map looped around dividers / U-turned because only the FIRST waypoint had
+an OSRM `bearings` constraint (Zigatola pin on the wrong carriageway for a Dhanmondi 15 next
+stop). Decisions with the user: employee home / pickup point stays the stop, the system picks
+the carriageway; scope = 10 PM preset + 11 PM/late-night; **stay on the public OSRM demo
+server** (so `approaches=curb` is unusable — it assumes right-hand traffic; ~1 req/s ⇒ analysis
+runs on demand per route, ≈4 requests, not inside RUN MAPPING); far→near default kept, optimizer
+may propose a better order shown side by side (see CORE INSTRUCTION point 6).
+1. `lib/routing/side-selection.ts` (pure): two heading candidates per stop (road axis `h` from
+   an unconstrained `/route?steps=true` pass, and `h+180`, range 60°, radius 70 m); ONE
+   `/table` over all candidates; `chooseSides` = Viterbi DP picking the side per stop that
+   minimizes total drive; `searchOrder` = exhaustive permutations (≤ 7 stops) else Or-opt,
+   priced jointly with sides; `scoreRoute` = minutes + 3/U-turn + 2/loop-around + 5/backtracked
+   km (repeated OSM node-id edges from `annotations=nodes,distance`), plus detour ratio and
+   far→near violations. Tests: `npx tsx --test lib/routing/__tests__/side-selection.test.ts`.
+2. `lib/routing/route-analysis.ts` — `loadAnalysisInput` (trips → physical stops, shared
+   coordinates collapse; `inputHash` of order+coords) + `computeRouteAnalysis` → candidates
+   `current` (as drawn today), `current_sided`, `optimized` (omitted when order unchanged);
+   NoSegment → drop that candidate and retry the table; total failure → unconstrained fallback.
+   Types in `route-analysis.types.ts` (client-safe).
+3. `actions/route-analysis.actions.ts` — `analyzeRoutePlan(id,{force})` cached on
+   `RoutePlan.routeAnalysis Json` while `inputHash` matches; `applyRouteCandidate(id, cand,
+   {alsoUpdatePresetSequence})` re-sequences trips, back-calculates pickup times from the shift
+   arrival with the candidate's real leg minutes (`backCalculatePickupMinutes`, 5-min grid,
+   ≥ 5 min gaps), stores `TripAssignment.approachBearing/snappedLat/snappedLng`, sets
+   `RoutePlan.appliedCandidateId` + departureTime (dynamic routes), writes a
+   `RoutePlanOverride ROUTE_OPTIMIZED`; for PRESET_10PM can push the order into
+   `reorderPickupPoints` (remaining active points appended).
+4. Schema/migration `20260907001909_route_analysis`: `RoutePlan.routeAnalysis Json?`,
+   `appliedCandidateId String?`; `TripAssignment.approachBearing Int?`, `snappedLat/Lng Float?`.
+5. `lib/routing/osrm.ts`: `OsrmError` (400 body `{code,message}` + coordinate index),
+   `getTableWithConstraints`, `getRouteDetailed` (steps + node annotations + GeoJSON), and a
+   **unit fix** in `fallbackElement` (duration was minutes, everything else is seconds).
+   `utils.ts`: `bearingsParam`, `radiusesParam`, `normalizeHeading`, `headingDifference`,
+   `parseNoSegmentIndex`. `schedule-math.ts` (pure): grid snap + `backCalculatePickupMinutes`,
+   re-exported by `pickup-schedule.ts`; `algorithms.ts` now calls it (behaviour unchanged).
+   `route-shifts.ts`: `isLateNightArrivalLabel`, `arrivalMinutesForLabel`.
+6. UI: `components/facilities/route-compare-panel.tsx` (classic table: Show radio · Route ·
+   Stop order · Drive · Distance · U-turns · Backtrack · Score · Apply, Recommended/Applied
+   badges, confirm dialog with the preset-sequence checkbox). `route-map.tsx` takes
+   `geometry`, `legMinutesOverride`, `stopHeadings` (cyan chevron = direction the vehicle faces
+   at the stop, at the snapped road-side position, popup "Stop facing NW (316°)"),
+   `ghostGeometry` (dashed grey current route while previewing another); topology now via
+   `isLateNightArrivalLabel`. `auto-route-planner-client.tsx`: opening a route map runs
+   `analyzeRoutePlan` (cached ⇒ instant), radio switches the drawn candidate, Apply → silent
+   `loadDetails` + `runAnalysis(true)`; stale "How mapping executes" copy fixed.
+7. Verified on week 2026-08-24: e.g. Cha-19-9425 10 PM 21.7 → 19.3 min, 4 → 3 U-turns with
+   sides only; 12 AM route 1 → 0 U-turns, backtrack 0.65 → 0.14 km; one loop route got worse
+   with sides and the score correctly kept `current`. Applied `optimized` on Cha-19-9425 11 PM
+   day 0 (test data): order Zuhayer → Yusra → Shamim → Tazruna, times 22:35/22:40/22:45/22:50.
+   Neon latency makes analyze ≈ 12–16 s and apply ≈ 17 s wall-clock from the browser.
+Follow-ups: "Optimize all routes for a day" button; driver day-sheet/email showing the stop
+side from `approachBearing`; `approaches=curb` becomes possible only with a self-hosted OSRM
+(Bangladesh extract + left-hand `driving_side`).
+
+## Latest Session (2026-09-07b) — Route-mapping optimization (user's 3-point brief)
+**Built; tsc + eslint + 10 unit tests verified; real-data dry run on 2 weeks; dev server restarted (fresh .next), planner page 200.**
+User brief: (1) direction at a stop must start toward the NEXT stop regardless of the pin's
+road side (Zigatola case); (2) employee-home selection must avoid zigzag/backtracking;
+(3) when a route is selected, compare candidates and keep the optimized one. Confirmed with
+the user: visiting order stays strictly far → near (CORE INSTRUCTION intact); metrics shown
+on the card for judging; "stateling" = zigzag/backtracking.
+1. **Per-waypoint bearings (map fetch)** — `components/facilities/route-map.tsx`:
+   `waypointBearingsParam()` (local) now constrains EVERY stop's outgoing heading to the
+   bearing toward the NEXT point (±45°), last waypoint free, duplicate consecutive points
+   unconstrained (no fake 0°). `fetchRoadGeometry` = constrained request first, then ONE
+   unconstrained retry when OSRM can't route under the constraints (genuine U-turn is the
+   only option), then straight-line fallback — the map never disappears. Result now carries
+   real OSRM `totalKm/totalMin` (`RoadGeometry`), shown in the footer as "Road: X min · Y km"
+   (new `roadTotals` prop; auto-route-planner passes the analysis candidate's metrics there).
+2. **`lib/routing/utils.ts`**: replaced `initialBearingParam` with `waypointBearingParam(headings[], range)`
+   (array API; `""` when nothing constrained). `osrm.ts` `getRoutePolyline` uses
+   `waypointBearingParam([initialBearing, null], range)`; `optimizeRoute` (/trip TSP) still
+   constrains ONLY waypoint 0 (the trip reorders stops, so per-waypoint headings are
+   unknowable at request time) + duplicate-point guard; added local `bearingDegLocal`.
+3. **Zigzag guard in path growth** (`lib/routing/algorithms.ts` `planCorridorRoutes`):
+   new `dKm` matrix arg; a hop is skipped when road km > `MAX_ROAD_VS_STRAIGHT` (2.5) ×
+   straight-line km (barrier/rail/lake/one-way hop would force a detour-and-backtrack);
+   among the survivors the FASTEST BY ROAD TIME (`dMin`) hop wins (was: straight-line
+   nearest). `GROUPING_RADIUS_KM` 2.0 stays the hard straight-line ceiling. Far-first
+   anchor, office-slack check, capacity, final far→near sort — all untouched.
+4. **Least-detour attach (route judging)**: the corridor sweep now COMPARES every
+   (route, home, position) candidate and applies the one adding the fewest detour MINUTES
+   for the onboard riders (tie-break: nearest road distance). Caps unchanged:
+   `CORRIDOR_ATTACH_KM` 0.8 road-polyline distance, `CORRIDOR_MAX_DETOUR_MIN` 7.
+   `generateCorridorRoutes` passes the already-computed `dKm` to the planner.
+5. Dry-run (temp `_sim-corridor-opt.ts`, deleted; NO DB writes) on weeks 2026-09-06T18:00Z
+   (Sep 7, 15 riders day 0) and 2026-08-24T00:00Z (Aug 24 — NOTE: this week's key is UTC
+   midnight, not the Dhaka offset): every route strictly far → near by `toOfficeKm`
+   (0.05 km tolerance), zero planner errors, sensible groups (e.g. 15 riders → 5 routes,
+   2 full). Day-sheet totals printed per route for before/after judging.
+6. Route card/compare judging comes from the (2026-09-07) analysis panel + the new footer
+   road totals. No schema change this session → only the standard restart was needed.
+   **User should re-run RUN MAPPING** to regenerate stored plans with the new grouping.
+
+## Latest Session (2026-09-06) — Route-setting vehicle selection and shift pinning
+**Built; TypeScript and ESLint verified.**
+1. **Pickup sequence UI** (`components/facilities/route-setting/route-setting-client.tsx`):
+  - Renamed the panel heading to **"Select vehicle and set settings"**.
+  - Removed the instructional description below the heading.
+  - Added vehicle-number search with a search icon and no-match state.
+  - Vehicle numbers use regular black text when unselected; the selected vehicle uses teal text and a teal-soft row highlight.
+  - Added a trash-icon delete button to every pickup-point row. It calls the existing soft-delete action
+    (`deletePickupPoint`), updates local state, marks the sequence dirty, and shows success/error toasts.
+  - Up/down reorder controls remain available beside the delete control.
+2. **Cross-panel vehicle selection**:
+  - `selectedVehicleId` is shared by the pickup sequence and `Vehicle → route pinning` table.
+  - Clicking a vehicle in either panel selects it; the corresponding vehicle row in the other panel is highlighted.
+3. **Route-generation pin behavior** (`lib/routing/algorithms.ts`):
+  - `generateCorridorRoutes` already uses active vehicle pins for 11 PM and late-night dynamic routes.
+  - `generate10PMRoutes` now reads active `"10PM"` pins and only creates preset routes for pinned vehicles when 10 PM pins exist.
+  - A vehicle pinned for both 10 PM and 11 PM is therefore eligible in both planning passes; 10 PM still requires the employee's active pickup point to belong to that vehicle.
+4. Validation command passed:
+  - `npx tsc --noEmit`
+  - `npx eslint components/facilities/route-setting/route-setting-client.tsx lib/routing/algorithms.ts --max-warnings=0`
+
+## Latest Session (2026-09-06b) — Compact vehicle list with driver names
+**Built; TypeScript and ESLint verified.**
+1. Updated `components/facilities/route-setting/route-setting-client.tsx`:
+  - Vehicle rows are more compact (`px-3 py-2`, tighter row spacing).
+  - Removed pickup-point counts from the vehicle list.
+  - Displays `VehicleRow.driverName`, sourced from the Vehicles & Drivers data; shows
+    `Driver not assigned` when no driver is linked.
+  - Added an independently scrollable vehicle list (`max-h-[24rem] overflow-y-auto`) so all vehicles remain accessible.
+2. Validation passed:
+  - `npx tsc --noEmit`
+  - `npx eslint components/facilities/route-setting/route-setting-client.tsx --max-warnings=0`
+
+## Latest Session (2026-09-06c) — Match route-setting drivers from master list
+**Built; TypeScript and ESLint verified.**
+1. Fixed the driver-name source in `app/facilities/route-setting/page.tsx`:
+  - Loads active `vehicleDriver` records from the Vehicles & Drivers master list.
+  - Matches records to route-setting vehicles by normalized vehicle number (trimmed and uppercased).
+  - Passes the matched master-list `driverName` into `RouteSettingClient`; falls back to the vehicle record only when no master-list match exists.
+2. The compact vehicle list now displays the driver associated with the same vehicle number shown in Vehicles & Drivers.
+3. Validation passed:
+  - `npx tsc --noEmit`
+  - `npx eslint app/facilities/route-setting/page.tsx components/facilities/route-setting/route-setting-client.tsx --max-warnings=0`
+
+## Latest Session (2026-09-06d) — Vehicles & Drivers is route-setting source
+**Built; TypeScript and ESLint verified.**
+1. Updated `app/facilities/route-setting/page.tsx` so active `VehicleDriver` master records are the source of the route-setting vehicle list.
+2. Each active master record is automatically upserted into the routing `Vehicle` table by vehicle number:
+  - Existing routing settings, pickup points, and shift assignments are preserved.
+  - New master vehicles receive routing defaults (`STANDARD`, capacity `4`, office `Regnum`) and then appear automatically.
+  - Driver name and contact are synchronized from the master record.
+3. Route Setting now lists only active vehicle numbers present in Vehicles & Drivers; vehicles created only in the routing table are no longer shown.
+4. Removed the additional Add vehicle control and unused create-vehicle form/callbacks from `components/facilities/route-setting/route-setting-client.tsx`.
+5. Validation passed:
+  - `npx tsc --noEmit`
+  - `npx eslint app/facilities/route-setting/page.tsx components/facilities/route-setting/route-setting-client.tsx --max-warnings=0`
+
+## Latest Session (2026-09-06e) — Reuse dual-pinned vehicles from 10 PM into 11 PM
+**Built; TypeScript and ESLint verified.**
+1. Root cause found in `lib/routing/algorithms.ts`: `generate11PMRoutes` was passing `reuse10PM = false` with no completed 10 PM route list, so a vehicle pinned for both shifts could appear only as an independent 11 PM route.
+2. Fixed `generate11PMRoutes` to load that day's completed 10 PM routes and enable ordered reuse.
+3. Updated corridor pooling so when a vehicle is pinned for both 10 PM and 11 PM:
+  - The 10 PM route is generated first.
+  - The same vehicle is selected for 11 PM when eligible.
+  - The 11 PM route stores `previousRoutePlanId`, linking it to the completed 10 PM route.
+  - Existing pin filtering remains in effect when 11 PM pins are configured.
+4. Validation passed:
+  - `npx tsc --noEmit`
+  - `npx eslint lib/routing/algorithms.ts --max-warnings=0`
+
+## Latest Session (2026-09-06f) — Verified Sep 7 dual-pin data for Cha-20-1016
+**Investigated; no code change required.**
+1. Database verification for `Dhaka Metro Cha-20-1016`:
+  - The vehicle is correctly pinned for both `10PM` and `11PM` for the Sep 7 week. The stored week key is `2026-09-06T18:00:00Z` because the application stores Asia/Dhaka midnight in UTC.
+  - The vehicle has five active pickup points.
+  - There are 11 approved 10 PM schedules and 15 approved 11 PM schedules for Monday, Sep 7.
+  - None of the 11 approved 10 PM employees have a pickup address matching this vehicle's five pickup points.
+  - No routes have been generated yet for the Sep 7 week.
+2. Result: the vehicle does not receive a 10 PM route because 10 PM preset routing requires an employee's active pickup point to belong to that vehicle. Since no 10 PM route exists, there is no completed first trip for 11 PM reuse.
+3. To generate both trips, assign at least one approved 10 PM employee to one of this vehicle's pickup points, then run mapping again. The dual-shift reuse code will then link the 11 PM route to the completed 10 PM route.
+
+## Latest Session (2026-09-06g) — First pickup time recalculates visible sequence
+**Built; TypeScript and ESLint verified.**
+1. Fixed `actions/route-setting.actions.ts` so `updateVehicle` returns the recalculated pickup-point ETAs after saving `firstPickupTime` or `baseETA`.
+2. Scheduling failures are no longer silently swallowed during vehicle save; missing coordinates or invalid scheduling conditions return an error to the editor.
+3. Updated `components/facilities/route-setting/route-setting-client.tsx` to merge returned ETAs into the visible pickup sequence immediately after saving, so later pickup points update without a refresh.
+4. Validation passed:
+  - `npx tsc --noEmit`
+  - `npx eslint actions/route-setting.actions.ts components/facilities/route-setting/route-setting-client.tsx --max-warnings=0`
 
 ## Latest Session (2026-09-04b) — Auto Route Planner: auto-learn on RUN MAPPING + sidebar link
 **Built; tsc + eslint verified. Committed locally on main (feat + docs commits; lib/routing/* + office-locations/route-shifts force-added). NOT pushed — push only when the human explicitly says so.**
@@ -125,8 +418,12 @@ work fast without interruption.
 2. **Bulk upload individual emails** — `bulkCreateUsersAction` collects `createdCredentials[]` in the loop, then
    `after(() => Promise.allSettled(createdCredentials.map(sendCredentialsEmail)))` — ONE email per created user.
    Also: Facilities cannot bulk-create SUPER_ADMIN rows (skipped).
-3. **Field validation (both server + client `pattern`/`type`)** for create-user form: employeeCode = exactly 9 digits
-   (`/^\d{9}$/`), contactNumber = exactly 11 digits (`/^\d{11}$/`), email = basic regex; email placeholder `name@commure.com`.
+3. **Field validation (both server + client `pattern`/`type`)** for create-user form: employeeCode = **no format
+   validation** (only "required"; the 9-digit rule was removed 2026-09-09 at user request — any value accepted),
+   contactNumber = exactly 11 digits (`/^\d{11}$/`), email = basic regex; email placeholder `name@commure.com`.
+3b. **Facilities User Info → Edit dialog** (`EditEmployeeProfileDialog` / `updateEmployeeProfileByFacilitiesAction`)
+   now also edits **Full name** (required) and **Employee ID** (optional, any format — blank clears it; duplicate
+   IDs rejected with a friendly error since `User.employeeCode` is UNIQUE). Page passes `employeeCode` prop down.
 4. **Facilities cannot create Super Admin** — `createUserAction` rejects role=SUPER_ADMIN when session.role===FACILITIES;
    UI `AddEmployeeDialog` takes `allowAllRoles?: boolean`: Facilities page passes nothing (SUPER_ADMIN filtered out of
    the role dropdown), Super-Admin page passes `allowAllRoles`.
@@ -225,6 +522,22 @@ work fast without interruption.
    Fits `h-20` band unchanged (`space-y-1`).
 3. Verified: `npx tsc --noEmit` clean; `npx eslint` on 5 changed files clean; fresh SSR chunks contain no stale
    `reviewerNames` (log had one stale dev-overlay line from the pre-restart session — noise only).
+
+## Latest Session (2026-09-08) — Bulk upload performance optimization
+**Both bulk uploads optimized; tsc --noEmit + eslint clean. NOT committed. No schema change / migration needed.**
+1. **`actions/weekly-schedule.actions.ts` — `bulkUploadWeeklySchedules`:**
+   - Employees now pre-fetched in ONE `user.findMany({ email: { in: [...] } })` → Map (was 1 findUnique/row).
+   - `weeklySchedule` handled with a single `upsert` (was findUnique + create + update = 3 round trips).
+   - 5 `weeklyScheduleDay.upsert` calls run via `Promise.all` (was awaited one-by-one).
+   - **`sendScheduleSubmittedNotice` moved out of the loop into `after()` (from next/server) + `Promise.allSettled`** — was one awaited SMTP round trip per row, the #1 slowdown in production. Import `after` added.
+2. **`actions/user-management.actions.ts` — `bulkCreateUsersAction`:**
+   - Existing emails/employee-codes pre-fetched in 2 `findMany` queries → Sets (was 2 findUnique/row).
+   - Passwords pre-hashed in PARALLEL via `Promise.all` into `passwordHashByLine` Map keyed by line number (bcrypt was serial ~100ms/row; fallback `?? await hashPassword` kept in loop for safety).
+   - `address.upsert` cached per UNIQUE address text in `addressIds` Map (was per row even for duplicate addresses); `user.create` uses `homeAddressId`.
+   - Emails already went via `after()` (unchanged).
+3. Net effect: per-row DB round trips dropped from ~5–9 to 1 (profiles) and ~7–10 to 1+5-parallel (weekly); zero SMTP on the request path. Behavior/skip-reasons preserved.
+4. Verification recipe used (run_commands times out on long tsc): run `npx tsc --noEmit` / eslint via `Start-Process cmd -Args '/c npx tsc --noEmit > %TEMP%\out.txt 2>&1 & echo %errorlevel% > %TEMP%\ec.txt' -WindowStyle Hidden`, then poll the ec file (`0` = clean; empty out.txt = no errors).
+
 
 ## Latest Session (2026-09-02) — Accent #70BCCC system, Refined Inter, ad-hoc rules + redesigns
 **All built; tsc + eslint clean; dev server restarted + routes compile 200; CSS verified. NOT committed.**
@@ -409,3 +722,335 @@ User: "use one line for comment box and arrival time box; arrival time box fixed
   regenerate after any rule change for consistency.
 - **UI/positional fn gotcha:** when mapping a 0–1 fraction to a CSS `%`, multiply by 100
   (`${pos*100}%`) — caught this twice now (rail ticks).
+
+## Latest Session (2026-09-06) — Localhost connection refusal
+1. No process was listening on ports 3000, 3001, or 5173, which caused the browser's `ERR_CONNECTION_REFUSED`.
+2. Started the project with `npm run dev`; Next.js 16.2.10 is ready at `http://localhost:3000`.
+3. Verified with `Invoke-WebRequest`: HTTP 200. The dev server remains running in terminal process `8f70e681-951a-47df-8ca5-6533442fe9b1`.
+
+## Latest Session (2026-09-06b) — Combined pickup coordinates input
+1. Pick-up Point Coordinates now uses one visible `Latitude, Longitude` input, for example `23.8103, 90.4125`.
+2. The server action splits and validates the two numbers independently, then stores them in the existing latitude and longitude columns.
+3. `npx tsc --noEmit` and targeted ESLint both pass.
+
+## Latest Session (2026-09-06c) — Pickup coordinate status refresh
+1. Fixed `setPickupPointCoordinatesAction` to revalidate `/facilities/pickup-point-coordinates` after saving.
+2. The page no longer retains stale `Coordinates missing` status after a successful coordinate update.
+3. TypeScript, targeted ESLint, and an HTTP 200 page check pass.
+
+## Latest Session (2026-09-06l) — Fix coordinate draft overwrite on refresh
+1. Fixed the localStorage restore race where initial server values could overwrite entered drafts before restoration completed.
+2. Draft loading is now marked complete before draft persistence runs, so entered values survive refresh reliably.
+3. TypeScript, targeted ESLint, and HTTP 200 checks pass.
+
+## Latest Session (2026-09-06k) — Persist entered coordinate drafts
+1. Pickup-coordinate inputs are now stored in browser localStorage as drafts while typing.
+2. Draft values are restored after refresh; Save and Save all still persist values to the database.
+3. TypeScript, targeted ESLint, and HTTP 200 checks pass.
+
+## Latest Session (2026-09-06j) — Remove bulk-save transaction expiration
+1. Save all exceeded even the 30-second interactive transaction timeout because all address upserts and employee updates were sequential.
+2. Replaced the long interactive transaction with parallel address upserts followed by parallel employee relinks.
+3. TypeScript, targeted ESLint, and HTTP 200 checks pass.
+
+## Latest Session (2026-09-06i) — Restore pickup coordinates after refresh
+1. Pickup-coordinate page now falls back to an `Address` row matched by pickup-point text when `User.pickupAddressId` is missing.
+2. Re-linked the existing `SS Properties` coordinate address (`23.75239887, 90.37966676`) to 6 employees.
+3. TypeScript, targeted ESLint, and HTTP 200 checks pass. Values never persisted before refresh cannot be recovered from the database.
+
+## Latest Session (2026-09-06h) — Save all stale dev bundle/runtime error
+1. The reported 5-second Prisma transaction errors came from the previous dev process before the 30-second timeout change was loaded.
+2. Restarted Next.js cleanly; the corrected server is listening on port 3000 and the pickup-coordinate page returns HTTP 200.
+3. TypeScript passes. Refresh the page once before using Save all to discard the stale browser action bundle.
+
+## Latest Session (2026-09-06g) — Bulk save transaction timeout
+1. Save all failed for larger batches because Prisma's interactive transaction defaulted to a 5-second timeout.
+2. Increased only the bulk pickup-coordinate transaction timeout to 30 seconds while retaining atomic rollback behavior.
+3. TypeScript, targeted ESLint, and HTTP 200 checks pass.
+
+## Latest Session (2026-09-06f) — Save only entered pickup coordinates
+1. Save all now filters out blank coordinate rows and saves every entered pair in one transaction.
+2. If no coordinates are entered, it returns an error instead of reporting a false success.
+3. TypeScript, targeted ESLint, and HTTP 200 checks pass.
+
+## Latest Session (2026-09-06e) — Bulk pickup-coordinate save
+1. Added a `Save all` button beside the search field on the Pick-up Point Coordinates page.
+2. It submits current values for every pickup point, validates all pairs, and saves them in one Prisma transaction.
+3. Individual row Save buttons remain available and independent. TypeScript, targeted ESLint, and HTTP 200 checks pass.
+
+## Latest Session (2026-09-06d) — Independent pickup-coordinate save states
+1. Moved `useActionState` from the parent list into each pickup-point row.
+2. Clicking one Save button now shows `Saving...` only on that row; success and error messages are also row-specific.
+3. TypeScript, targeted ESLint, and an HTTP 200 page check pass.
+
+## Latest Session (2026-09-06m) — Corridor path routing for 11 PM / 12 AM-6 AM
+**Built; TypeScript and ESLint verified; dry-run sim validated on real data (NO DB writes).**
+User brief: farthest employee first → map path to office → search employees near the
+already-created path → attach them instead of spawning vehicles; consolidate vehicles
+(Sep 7 case: overlapping paths across Cha-19-0991 etc.).
+
+1. `lib/routing/algorithms.ts` — replaced density `corridorClusters` with exported
+   `planCorridorRoutes()` (pure, sync, testable):
+   - **Far-first paths**: route anchored at the member FARTHEST from office, extended
+     one nearest hop at a time (hop ≤ `GROUPING_RADIUS_KM` 2.0 km, office-directed within
+     `GROUPING_OFFICE_DIRECTION_SLACK_KM` 1.0 km) until capacity.
+   - **Corridor attach**: after each path exists, remaining homes within
+     `CORRIDOR_ATTACH_KM` = 2.0 km of any leg (office→first pickup, legs, last→office via
+     `distancePointToSegmentKm`, equirectangular projection) AND best-position insertion
+     adding ≤ `CORRIDOR_MAX_DETOUR_MIN` = 10 min are spliced into that route at the
+     detour-optimal position. Order is now the true travel sequence (NOT re-sorted by
+     toOfficeMin anymore).
+   - **Vehicle consolidation**: vehicles fill SEQUENTIALLY to capacity
+     (`min(vehicle.capacity, DYNAMIC_GROUP_CAPACITY=4)`); a second vehicle opens only when
+     no planned route has a spare seat. Replaces the old `pool[gi % pool.length]`
+     round-robin that wasted vehicles on overlapping paths.
+   - Pins / 10 PM reuse / learned legs / 5-min grid back-calc unchanged; unserved
+     employees (pool exhausted) now push a clear error; failure error text uses
+     `route N (vehicle id)` instead of `group gi`.
+2. Dry-run sim (temp `_sim-corridor.ts`, deleted) on Monday 11 PM data:
+   - Week 2026-09-07: 3 riders → 1 route (Cha-56-0179, 3/4).
+   - Week 2026-09-06 (user-flagged): 15 riders → 4 routes, ALL full (4/4 ×3 + 3/4) —
+     the capacity minimum; old code could waste vehicles on half-empty overlapping paths.
+   - Week 2026-08-24: 8 riders → 3 routes (4/4, 3/4, 1/4) — the single rider was >2 km
+     from every planned leg (or >10 min detour), so a third vehicle opened, correctly.
+3. No schema change → no migration/restart. **User still needs to click RUN MAPPING** to
+   regenerate existing plans on the new algorithm (pre-5-min-grid plans still stale).
+
+## Latest Session (2026-09-06n) — Corridor attach can no longer displace the far-first anchor
+**Bug user caught on Sep 7 planning:** Cha-19-0991's 11 PM route picked up
+Kalachandpur (4.60 km, CLOSEST) first, ahead of Ratila Jannat (9.91 km, farthest).
+Root cause: corridor attach allowed insertion at position 0 (detour-optimal) — the
+vehicle exits the Gulshan office past Kalachandpur, so the closest home won position #1.
+
+**Fix in `planCorridorRoutes` (`lib/routing/algorithms.ts`):**
+1. `nearestLegInsertion()` replaces free detour-optimal insertion: positions searched are
+   **1..seq.length only — never before the far-first anchor**, so whoever is picked up
+   first is ALWAYS the farthest home.
+2. Attachment position = the **leg the home is actually nearest** (point-to-segment), not
+   a global optimum — existing stops keep their exact order; the created route is never
+   restructured. If no leg is within `CORRIDOR_ATTACH_KM` (2.0) or the detour exceeds
+   `CORRIDOR_MAX_DETOUR_MIN` (10), the employee is NOT attached (left for another vehicle)
+   — per user rule: "if first created route was changed for new assignment, don't assign".
+3. Dry-run verified: week 2026-09-07 → Ratila Jannat (9.91 km) FIRST → Refatul (7.22) →
+   Partho Sarkar/Kalachandpur (4.60) attached on the final leg. Week 2026-09-06 (15
+   riders) now uses 5 routes (was 4) because 3 riders no longer force-fit — expected
+   under the stricter no-restructure rule. tsc + eslint clean; temp scripts deleted.
+
+## Latest Session (2026-09-06o) — Attach only when it FOLLOWS the created path (road test + detour cap)
+**User ruled:** the 3rd pickup (Partho Sarkar, Kalachandpur) did NOT follow the first-created
+path → skip such assignments and give them ANOTHER vehicle. Implemented + verified:
+1. **Road-geometry corridor test** (`lib/routing/osrm.ts` → new `getRoutePolyline()`:
+   OSRM `/route` full-geometry polyline per leg, in-memory cached). `planCorridorRoutes` is
+   now **async** and takes `legRoadKm(m, from, to)` — the caller (`generateCorridorRoutes`)
+   measures the candidate home's distance to the leg's ACTUAL DRIVING path
+   (`distancePointToPolylineKm`, new export; straight-line fallback on OSRM failure).
+   Straight lines lie in Dhaka (lakes/gated blocks) — Kalachandpur geocodes 0.37 km from
+   the straight Khilkhet→Gulshan line although it is off the road. `CORRIDOR_ATTACH_KM`
+   tightened 2.0 → **0.8** (distance to the road polyline).
+2. **Detour cap tightened 10 → 7 min**, measured with the REAL OSRM matrix. Calibration
+   (measured, week 09-07): inserting Refatul (Khilkhet) into the Ratila→office run adds
+   **6.5 min** (accepted as on-the-way); inserting Partho (Kalachandpur) into the
+   Refatul→office leg adds **7.5 min** (rejected → another vehicle). No distance threshold
+   separates the two (0.69 vs 0.72 km road) — only real detour minutes do. Cap is a
+   business tune-knob; fragile by ±0.5 min if OSRM re-routes.
+3. Dry-run with real OSRM matrix + geometry confirms week 2026-09-07:
+   Route 1 = Ratila → Refatul (created path untouched); Route 2 = Partho alone (new vehicle).
+   tsc + eslint clean; temp scripts (_sim-corridor, _measure-attach, _check-0991) deleted.
+4. **User action: click RUN MAPPING** to regenerate stored plans (still old ordering).
+
+## Latest Session (2026-09-06p) — Far-first ordering now by DISTANCE (km), not minutes
+**User complaint (again): Cha-19-9425's 11 PM route, week 2026-09-07 Mon, picked
+Atia Mumtahina (5.14 km / 8.21 km road) FIRST and Md. Tanjilur Rahman Abid
+(5.91 km / 8.45 km road) SECOND — far home in position #2.**
+
+1. **Root cause (measured with OSRM matrix):** the anchor = max `toOfficeMin`
+   (road MINUTES). Atia: 10.3 min vs Tanjilur: 9.9 min — but Tanjilur is
+   FARTHER (8.45 km road vs 8.21 km). Road minutes invert for near homes
+   (one-way loops / slow roads), so the near home won the anchor and the far
+   home slid in via `GROUPING_OFFICE_DIRECTION_SLACK_KM` (5.91 ≤ 5.14+1.0).
+   In week 2026-08-24 Tanjilur happened to have the max minutes, which is why
+   the same pair ordered correctly there — the metric was luck-dependent.
+2. **Fix in `lib/routing/algorithms.ts` (user rule: "far distance choice first
+   then come one by one based on distance matrix and route"):**
+   - New `matrixDistanceKm()` helper (OSRM matrix road km, haversine fallback)
+     + `ClusterMember.toOfficeKm`, computed in `generateCorridorRoutes` after
+     the matrix build.
+   - `planCorridorRoutes`: `remaining` now sorted by `toOfficeKm` desc
+     (minutes only tie-break) → the ANCHOR is the farthest by km.
+   - **Final guarantee:** before returning, every route's `order` is sorted
+     `toOfficeKm` desc — corridor path + attach decide WHO rides together;
+     the visiting order is always strictly far → near by matrix km, so no
+     slack member / attach can ever precede a farther home.
+3. **Dry-run verified (temp script, deleted) with the REAL planner on real
+   data** (week 2026-09-07 Mon, 10 Regnum 11 PM members): Tanjilur group now
+   `#1 Tanjilur 8.45 km → #2 Atia 8.21 km`; all 6 routes strictly far → near;
+   errors none. NO DB writes.
+4. tsc + eslint clean. No schema change → no migration/restart. **User must
+   click RUN MAPPING again** to regenerate stored 11 PM plans with the fixed
+   ordering.
+
+## Latest Session (2026-09-06q) — Pickup-point coordinates now flow into Route Setting
+**User complaint:** points like "Setara Convention Hall", "Mirpur 11 Metro Rail
+Station", "Mirpur 6 Main Road" have lat/lng on the Pick-up Points (coordinates)
+page but "lat long not come" in Route Setting when setting the sequence.
+
+1. **Root cause — split-brain Address rows:** the coordinates page upserts an
+   Address row keyed by the exact `User.pickupPoint` text and links employees
+   to it. Route Setting's `PickupPoint` rows link to whatever Address was chosen
+   at creation — the route-planner geocoder had created separate rows whose
+   `addressText` is a raw "23.819..., 90.365..." string. Same real-world stop,
+   two Address rows: coordinates saved on the coordinates page never reached
+   Route Setting / generation. ("Setara Convention Hall" & "Mirpur 6 Main Road"
+   additionally had NO PickupPoint rows at all — they must be ADDED per vehicle
+   in Route Setting → "Add pickup point", where the named row with lat/lng now
+   appears in the search.)
+2. **Code fix (`actions/facilities-profile.actions.ts`):** new
+   `linkPickupPointsToAddress(pickupPoint, addressId)` — after saving
+   coordinates (both `setPickupPointCoordinatesAction` and
+   `setAllPickupPointCoordinatesAction`), any ACTIVE PickupPoint whose `name`
+   matches the point text (case-insensitive) is relinked to the canonical named
+   Address row. Both actions now also revalidate `/facilities/route-setting`
+   and `/facilities/vehicles`.
+3. **One-time data repair (temp script, deleted):** relinked 9 stale PickupPoint
+   rows (Kachukhet/Mirpur 10/Kazipara/Shewrapara/Mirpur 1/2/11, Technical,
+   Darussalam) from coords-string / lowercase-text rows to the canonical named
+   rows — coordinates unchanged (same spots), linkage + display now clean
+   (Route Setting shows names, not raw "23.79…, 90.38…" strings).
+   Idempotent re-run = no changes. tsc + eslint clean; no schema change.
+
+## Latest Session (2026-09-06r) — Route Setting now SHOWS pickup-point coordinates
+**User follow-up:** "Pickup sequence pick-up point like Setara Convention Hall
+has no lat long" even though coordinates were set on the Pick-up Points page.
+
+1. **DB audit (read-only):** ALL 26 active PickupPoints have a linked Address
+   WITH lat/lng; "Setara Convention Hall" (23.822664, 90.364146) and
+   "Mirpur 6 Main Road" (23.810220, 90.367500) named Address rows exist WITH
+   coordinates — but NO PickupPoint rows carry those names yet (Facilities must
+   add them per vehicle via "Add pickup point"; the search finds the named rows).
+   "Mirpur 11 Metro Rail Station" (Cha-20-5252) is correctly linked after the
+   06q repair.
+2. **Real gap — the UI never displayed lat/lng:** Route Setting's Pickup
+   sequence rows showed only name + time + address text, so saved coordinates
+   were invisible there ("no lat long" perception). Fixed in
+   `components/facilities/route-setting/route-setting-client.tsx`:
+   - Every sequence row now shows its coordinates (mono, teal,
+     `formatLatLng` = "23.822664, 90.364146") or a destructive
+     "No address linked — coordinates missing" warning.
+   - "Add pickup point" form previews the selected address's coordinates
+     ("Coordinates: …") right under the combobox before saving.
+   - `AddressOption` + route-setting page select now carry
+     latitude/longitude end-to-end.
+3. tsc + eslint clean. `VehiclePickupPointsManager` is dead code (not imported
+   anywhere) — left untouched. No DB writes this session.
+
+## Latest Session (2026-09-06s) — Setara added to Cha-20-5252 + pickup-sequence dropdown now pickup-points ONLY
+**User:** (a) "unable to add to pick-up sequence setara under Dhaka Metro-Cha-20-5252";
+(b) "in pick-up sequence here only have pick-up points, why here have employee
+address? delete these".
+
+1. **Why Setara couldn't be added (Cha-20-5252):** the `(vehicleId, sequence)`
+   pair is DB-UNIQUE, and Cha-20-5252 had a SOFT-DELETED (`isActive=false`)
+   point ("Mirpur 11 Metro Rail Station") still sitting on sequence 2.
+   `createPickupPoint` checked for ANY row at that slot → kept rejecting while
+   the dead row held the unique index.
+   - **Fix** (`actions/pickup-point.actions.ts`): new
+     `clearInactiveRowsFromSequence()` — before create/update, INACTIVE rows
+     squatting on the target slot are bumped far above max(sequence) (active
+     rows never touched). Only an ACTIVE collision is an error.
+   - **Fix** (`actions/route-setting.actions.ts` reorderPickupPoints): all
+     inactive rows are pushed above the working range up-front so the
+     1..n renumbering can never hit the unique index.
+2. **Performed the blocked add** (temp script, deleted): bumped the inactive
+   squatter to seq 1002 and created **"Setara Convention Hall" (#2)** on
+   Dhaka Metro-Cha-20-5252 → linked to the canonical row
+   (23.822664, 90.364146) with coordinates.
+3. **Employee addresses in the Add-pickup dropdown:** the Address table has
+   266 rows, 191 of them EMPLOYEE HOME addresses — the dropdown was listing
+   ALL of them. **Fix** (`app/facilities/route-setting/page.tsx`): the address
+   query now returns ONLY pickup points = distinct `User.pickupPoint` names
+   (case-insensitive) ∪ Address rows linked by ACTIVE PickupPoints. Verified
+   against live DB: dropdown drops 266 → 76, all genuine pickup points
+   (bus stops / metro stations / landmarks); no home addresses. (Only
+   "Mazar Road Bus Stop" still shows a raw-coords string — no canonical named
+   row exists for it; it has coords so it works.)
+4. tsc + eslint clean. No schema change.
+
+## Latest Session (2026-09-06t) — Vehicle → route pinning: scrollable list
+**User:** "build a scroll bar Vehicle → route pinning" (the route-setting right
+column card).
+
+- `components/facilities/route-setting/route-setting-client.tsx` Pinner card:
+  `CardContent` now `p-0`; the vehicle table is wrapped in a
+  `max-h-[28rem] overflow-auto` scroll container (keyboard-focusable, labelled),
+  the `<thead>` is `sticky top-0 z-10 bg-card` so column headers stay visible
+  while scrolling (bg-card works in both light + dark themes), and a footer
+  line shows total active vehicles + "scroll to see all". Padding on
+  header/footer/rows aligned. tsc + eslint clean.
+
+## Latest Session (2026-09-06u) — Week-key normalization (RUN MAPPING vs bulk upload) + email explanation
+**User:** (a) "check Sep 7 route planning — Myen Uddin Khondoker, Tamara Tanzin
+Toha, Sara Tabassum have pickup points matching Cha-19-9425 but provided this
+errors"; (b) "uploaded bulk weekly schedule from Operations but schedule
+details mail are not sent to employees".
+
+1. **ROOT CAUSE (a): dual week-key conventions.** `getSubmissionWindow()`
+   returns a LOCAL-midnight Monday (Asia/Dhaka → serialized `2026-09-06T18:00Z`),
+   while `generateWeeklyRoutes` normalizes via `toUtcMidnight(getMondayOfWeek())`
+   → `2026-09-07T00:00Z`. Bulk-upload rows landed on the 18:00Z key and were
+   INVISIBLE to RUN MAPPING (Myen's Sep-7 schedule was stranded there; Tamara/
+   Sara had rows under BOTH keys). Also: "Myen Uddin Khondoker" exists as TWO
+   accounts (example6@commure.com WY76268 + jamie.rivera08@example.com
+   W3Y15195N) with the same pickup point — the Sep-7 plans contained the
+   jamie.rivera08 one; **flagged to the user for cleanup**.
+2. **Code fix — canonical week keys everywhere:** `toUtcMidnight` moved to
+   `lib/date/week.ts` (exported; route-generation now imports it). Normalized
+   at EVERY schedule-write/read path: `bulkUploadWeeklySchedules`,
+   `submitMySchedule`, `submitCorporateWeeklySchedule`
+   (actions/weekly-schedule.actions.ts), `createWeeklyScheduleOnBehalf`
+   (actions/on-behalf.actions.ts), corporate my-schedule page lookup
+   (app/corporate-employee/my-schedule/page.tsx), and the Operations
+   bulk-upload week-option value (app/operations/weekly-requests/page.tsx).
+   New uploads can no longer land on the local-midnight key.
+3. **Data repair (temp script, deleted):** for the live collision — of 26 rows
+   on `2026-09-06T18:00Z`: 19 duplicates DELETED (canonical 00:00Z row kept,
+   created later Sep 6), 7 rows MOVED to 00:00Z with day dates re-keyed to UTC
+   midnight — including Myen (example6), now visible to RUN MAPPING.
+   Idempotent (re-run = 0 rows). Historical 18:00Z weeks (July/Aug) left
+   untouched deliberately.
+4. **Email (b) — by design in dev:** `lib/mailer.ts` sets
+   `EMAIL_ENABLED = NODE_ENV === "production"`; in `next dev` every email is
+   skipped with a `[MAILER] DEV — email skipped` console log. `.env.local` has
+   NO SMTP_* keys. Production (Vercel) needs SMTP_HOST/SMTP_PORT/SMTP_USER/
+   SMTP_PASS/SMTP_FROM set; failures log `[MAILER] Failed to send email to …`.
+   The bulk-upload notice code itself is correct (`after()` +
+   `sendMailBackground`).
+5. tsc + eslint clean; no schema change. User should re-run RUN MAPPING for
+   week 2026-09-07 so the real Myen (example6) gets planned.
+
+## Latest Session (2026-09-06u) — "has no matching 10 PM pickup point" for Cha-19-9425 fixed
+**User:** Sep 7 route planning errored on Myen Uddin Khondoker, Tamara Tanzin Toha,
+Sara Tabassum even though their pickup points ARE on Dhaka Metro-Cha-19-9425's
+pickup sequence.
+
+1. **Root cause — sibling Address rows (split-brain, again):** the 06q/06s
+   repairs left CASE-VARIANT sibling Address rows for the same stop
+   ("Mirpur 1 shwapno **S**uper shop" vs "…**s**uper shop"), and
+   "Mazar Road Bus Stop" was still linked to an old raw-coordinate-string row
+   (`"23.783137…"`) on the vehicle. `generate10PMRoutes` joins strictly on
+   `pickupPoint.addressId === employee.pickupAddressId`, so the case/master
+   variant row made the join fail even though names matched.
+2. **Code fix (`lib/routing/algorithms.ts`):** `generate10PMRoutes` now has a
+   **case-insensitive NAME fallback** in BOTH the vehicle-grouping step and the
+   per-route entry-resolution step — if the strict addressId join misses, the
+   employee attaches via `employee.pickupPoint` matching an active point's
+   `name` (mode:insensitive). Also added `pickupPoint` to `EmployeeShape`.
+3. **One-time data repair (temp scripts, deleted):** grouped employee pickup
+   names case-insensitively and unified each family to ONE canonical Address
+   row (majority of employee links → exact-case of most-common spelling →
+   with coordinates). Repointed 3 employees + relinked Mazar point. Re-run of
+   the diagnosis: all three employees (and both Myen records) now MATCH via the
+   strict join. Dry-run of the real matching on week 2026-09-07 Mon:
+   Myen->seq4 (Mazar), Tamara+Sara->seq2 (Mirpur 1 shwapno Super shop). The
+   only genuine remaining "no matching" case is "Erin Employee" (profile has
+   no usable point) — unrelated to Cha-19-9425.
+4. tsc + eslint clean. No schema change. User should re-run RUN MAPPING.

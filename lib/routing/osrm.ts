@@ -13,7 +13,14 @@
  */
 
 import { prisma } from "@/lib/prisma";
-import { haversineDistance } from "./utils";
+import {
+  haversineDistance,
+  waypointBearingParam,
+  bearingsParam,
+  radiusesParam,
+  parseNoSegmentIndex,
+  type BearingConstraint,
+} from "./utils";
 
 export interface Location {
   lat: number;
@@ -54,15 +61,56 @@ function fallbackElement(
   destination: Location
 ): DistanceElement {
   const km = haversineDistance(origin.lat, origin.lng, destination.lat, destination.lng);
+  // `duration.value` is SECONDS everywhere else (OSRM + cache rows); 25 km/h.
+  const minutes = (km / 25) * 60;
   return {
     distance: { value: Math.round(km * 1000), text: `${km.toFixed(1)} km` },
-    duration: { value: Math.round((km / 25) * 60), text: `${Math.round(km / 25 * 60)} min` },
+    duration: { value: Math.round(minutes * 60), text: `${Math.round(minutes)} min` },
     status: "NoSegment",
   };
 }
 
+/**
+ * OSRM error surfaced with its machine-readable `code` (e.g. `NoSegment`,
+ * `NoRoute`, `InvalidQuery`). For `NoSegment` the offending input coordinate
+ * index is parsed from the message ("… for coordinate 3") so callers can drop
+ * that candidate and retry.
+ */
+export class OsrmError extends Error {
+  readonly code: string;
+  readonly coordinateIndex: number | null;
+  readonly httpStatus: number;
+
+  constructor(code: string, message: string, httpStatus: number) {
+    super(`OSRM ${code}: ${message}`);
+    this.name = "OsrmError";
+    this.code = code;
+    this.httpStatus = httpStatus;
+    this.coordinateIndex = parseNoSegmentIndex(message);
+  }
+}
+
+export { parseNoSegmentIndex };
+
 const MIN_REQUEST_GAP_MS = 350; // public demo server is rate-limited
 let lastRequestAt = 0;
+
+/** Great-circle bearing (degrees clockwise from north) from a → b. Local copy
+ * used to build per-waypoint heading lists for the OSRM bearings param. */
+function bearingDegLocal(
+  a: { lat: number; lng: number },
+  b: { lat: number; lng: number }
+): number {
+  const toRad = (x: number) => (x * Math.PI) / 180;
+  const toDeg = (x: number) => (x * 180) / Math.PI;
+  const y = Math.sin(toRad(b.lng - a.lng)) * Math.cos(toRad(b.lat));
+  const x =
+    Math.cos(toRad(a.lat)) * Math.sin(toRad(b.lat)) -
+    Math.sin(toRad(a.lat)) *
+      Math.cos(toRad(b.lat)) *
+      Math.cos(toRad(b.lng - a.lng));
+  return (toDeg(Math.atan2(y, x)) + 360) % 360;
+}
 
 async function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -83,6 +131,23 @@ async function osrmFetch(
     if ((response.status === 429 || response.status >= 500) && attempt < 4) {
       await sleep(500 * attempt);
       return osrmFetch(path, attempt + 1);
+    }
+    // OSRM answers 400 with `{ code, message }` (NoSegment / NoRoute /
+    // InvalidQuery…). Surface that so callers can react to the code.
+    if (response.status === 400) {
+      let body: { code?: unknown; message?: unknown } = {};
+      try {
+        body = (await response.json()) as { code?: unknown; message?: unknown };
+      } catch {
+        // fall through to the generic error below
+      }
+      if (typeof body.code === "string") {
+        throw new OsrmError(
+          body.code,
+          typeof body.message === "string" ? body.message : "",
+          response.status
+        );
+      }
     }
     throw new Error(
       `OSRM request failed: ${response.status} ${response.statusText}`
@@ -367,7 +432,8 @@ function nearestNeighborOrder(locations: Location[], startIndex: number): Optimi
  */
 export async function optimizeRoute(
   locations: Location[],
-  startIndex: number = 0
+  startIndex: number = 0,
+  initialBearingDeg?: number | null
 ): Promise<OptimizedRoute> {
   if (locations.length < 2) {
     return {
@@ -380,7 +446,27 @@ export async function optimizeRoute(
 
   try {
     const coords = locations.map((l) => `${l.lng},${l.lat}`).join(";");
-    const url = `/trip/v1/driving/${coords}?roundtrip=true&source=first&destination=last&annotations=distance,duration&overview=simplified`;
+    // NOTE: /trip reorders the stops, so per-waypoint "toward the next stop"
+    // headings cannot be known at request time — only the vehicle's START
+    // heading (toward the caller-provided destination / next point) is
+    // constrained, keeping the wrong-carriageway exclusion at the start.
+    const headings = locations.map((l, i) => {
+      if (i === 0) {
+        if (initialBearingDeg != null) return initialBearingDeg;
+        const next = locations[1];
+        if (
+          !next ||
+          (Math.abs(l.lat - next.lat) < 1e-9 &&
+            Math.abs(l.lng - next.lng) < 1e-9)
+        ) {
+          return null;
+        }
+        return bearingDegLocal(l, next);
+      }
+      return null;
+    });
+    const bearings = waypointBearingParam(headings, INITIAL_BEARING_RANGE);
+    const url = `/trip/v1/driving/${coords}?roundtrip=true&source=first&destination=last&annotations=distance,duration&overview=simplified${bearings ? `&bearings=${bearings}` : ""}`;
     const data = (await osrmFetch(url)) as {
       code?: string;
       trips?: Array<{
@@ -448,6 +534,224 @@ export async function optimizeRoute(
   } catch {
     return nearestNeighborOrder(locations, startIndex);
   }
+}
+
+/** In-memory cache of decoded driving polylines per leg (per process). */
+const polylineCache = new Map<string, Array<{ lat: number; lng: number }>>();
+
+/**
+ * Default allowed deviation (°) around the enforced initial heading. Kept well
+ * under 180 so the opposite carriageway of a divided road is excluded (no
+ * U-turn / loop around the divider), while still tolerating curve / junction
+ * approach changes.
+ */
+const INITIAL_BEARING_RANGE = 45;
+
+/** Options controlling how a leg's road geometry is requested. */
+export interface RoutePolylineOptions {
+  /**
+   * Enforce the vehicle's starting orientation at `from`: the outgoing road
+   * segment must head within `bearingRangeDeg` of this heading (degrees,
+   * clockwise from north). Pass the bearing from `from` toward `to` so OSRM
+   * snaps to the carriageway that faces the destination instead of the
+   * opposite side (avoids map-matching detours/U-turns around dividers).
+   */
+  initialBearingDeg?: number | null;
+  /** Allowed deviation around the initial heading (default
+   * `INITIAL_BEARING_RANGE` = 45°). */
+  bearingRangeDeg?: number;
+}
+
+/**
+ * Actual driving geometry between two points — the OSRM route polyline
+ * (full overview). The corridor planner uses this to test whether a home
+ * really lies along a leg's ROAD path; straight lines cross lakes, gated
+ * blocks and side lanes the vehicle can never drive through.
+ *
+ * When `initialBearingDeg` is supplied the first leg is constrained to leave
+ * `from` heading toward `to` (see `RoutePolylineOptions`).
+ */
+export async function getRoutePolyline(
+  from: Location,
+  to: Location,
+  options?: RoutePolylineOptions
+): Promise<Array<{ lat: number; lng: number }>> {
+  const initialBearing = options?.initialBearingDeg ?? null;
+  const range = options?.bearingRangeDeg ?? INITIAL_BEARING_RANGE;
+  const bearings = waypointBearingParam([initialBearing, null], range);
+  const key = `${from.lat.toFixed(6)},${from.lng.toFixed(6)}|${to.lat.toFixed(6)},${to.lng.toFixed(6)}|${bearings}`;
+  const hit = polylineCache.get(key);
+  if (hit) return hit;
+
+  const coords = `${from.lng},${from.lat};${to.lng},${to.lat}`;
+  const data = await osrmFetch(
+    `/route/v1/driving/${coords}?overview=full&geometries=geojson${bearings ? `&bearings=${bearings}` : ""}`
+  );
+  const routes = data.routes as
+    | Array<{ geometry: { coordinates: Array<[number, number]> } }>
+    | undefined;
+  const line = routes?.[0]?.geometry?.coordinates ?? [];
+  const points = line.map(([lng, lat]) => ({ lat, lng }));
+  polylineCache.set(key, points);
+  return points;
+}
+
+/* ── Constraint-aware requests used by the route analysis ───────────── */
+
+/** Per-waypoint snapping constraints shared by `/table` and `/route`. */
+export interface WaypointConstraints {
+  /** Heading filter per waypoint (`null` = unconstrained). */
+  bearings?: ReadonlyArray<BearingConstraint | null>;
+  /** Snap radius in metres per waypoint (`null` = unlimited). */
+  radiuses?: ReadonlyArray<number | null>;
+}
+
+function constraintQuery(
+  count: number,
+  constraints: WaypointConstraints | undefined
+): string {
+  let q = "";
+  if (constraints?.bearings && constraints.bearings.length === count) {
+    const b = bearingsParam(constraints.bearings);
+    if (b) q += `&bearings=${b}`;
+  }
+  if (constraints?.radiuses && constraints.radiuses.length === count) {
+    const r = radiusesParam(constraints.radiuses);
+    if (r) q += `&radiuses=${r}`;
+  }
+  return q;
+}
+
+function coordsPath(locations: ReadonlyArray<Location>): string {
+  return locations.map((l) => `${l.lng.toFixed(6)},${l.lat.toFixed(6)}`).join(";");
+}
+
+export interface OsrmTable {
+  /** Seconds; `null` where OSRM found no road connection. */
+  durations: (number | null)[][];
+  /** Metres; `null` where OSRM found no road connection. */
+  distances: (number | null)[][];
+  /** Snapped input locations, in input order. */
+  snapped: Array<{ lat: number; lng: number } | null>;
+}
+
+/**
+ * Full all-to-all `/table` for up to 100 locations with optional per-waypoint
+ * bearing / radius filters. Throws `OsrmError` (code `NoSegment`, with the
+ * coordinate index) when a filter leaves a waypoint nothing to snap to — the
+ * caller decides which candidate to drop. Not cached: the bearing filter makes
+ * the result specific to the snap, unlike the plain distance matrix.
+ */
+export async function getTableWithConstraints(
+  locations: ReadonlyArray<Location>,
+  constraints?: WaypointConstraints
+): Promise<OsrmTable> {
+  if (locations.length < 2) {
+    throw new Error("A table needs at least two locations");
+  }
+  if (locations.length > 100) {
+    throw new Error("OSRM table supports at most 100 locations");
+  }
+  const url =
+    `/table/v1/driving/${coordsPath(locations)}?annotations=duration,distance` +
+    constraintQuery(locations.length, constraints);
+  const data = (await osrmFetch(url)) as {
+    code?: string;
+    message?: string;
+    durations?: (number | null)[][];
+    distances?: (number | null)[][];
+    sources?: Array<{ location?: [number, number] } | null>;
+  };
+  if (data.code !== "Ok" || !data.durations || !data.distances) {
+    throw new OsrmError(data.code ?? "Unknown", data.message ?? "table returned no matrix", 200);
+  }
+  return {
+    durations: data.durations,
+    distances: data.distances,
+    snapped: (data.sources ?? []).map((s) =>
+      s?.location ? { lat: s.location[1], lng: s.location[0] } : null
+    ),
+  };
+}
+
+/** One OSRM turn instruction (subset of the fields the analysis reads). */
+export interface OsrmStep {
+  distance: number;
+  duration: number;
+  maneuver: {
+    type: string;
+    modifier?: string;
+    bearing_before: number;
+    bearing_after: number;
+    location: [number, number];
+  };
+}
+
+export interface OsrmLeg {
+  distance: number;
+  duration: number;
+  steps: OsrmStep[];
+  annotation?: {
+    nodes?: number[];
+    distance?: number[];
+    duration?: number[];
+  };
+}
+
+export interface OsrmDetailedRoute {
+  /** Metres. */
+  distance: number;
+  /** Seconds. */
+  duration: number;
+  legs: OsrmLeg[];
+  /** Route geometry as [lat, lng] pairs. */
+  geometry: Array<[number, number]>;
+  /** Snapped waypoints in input order. */
+  waypoints: Array<{ lat: number; lng: number; name: string }>;
+}
+
+/**
+ * `/route` with turn steps, per-vertex OSM node annotations and full GeoJSON
+ * geometry — everything the route analysis needs to judge a candidate
+ * (U-turns, repeated road segments, real leg minutes) and to draw it.
+ */
+export async function getRouteDetailed(
+  locations: ReadonlyArray<Location>,
+  constraints?: WaypointConstraints
+): Promise<OsrmDetailedRoute> {
+  if (locations.length < 2) {
+    throw new Error("A route needs at least two locations");
+  }
+  const url =
+    `/route/v1/driving/${coordsPath(locations)}` +
+    `?overview=full&geometries=geojson&steps=true&annotations=nodes,distance,duration&alternatives=false` +
+    constraintQuery(locations.length, constraints);
+  const data = (await osrmFetch(url)) as {
+    code?: string;
+    message?: string;
+    routes?: Array<{
+      distance: number;
+      duration: number;
+      legs: OsrmLeg[];
+      geometry: { coordinates: Array<[number, number]> };
+    }>;
+    waypoints?: Array<{ location: [number, number]; name?: string }>;
+  };
+  const route = data.routes?.[0];
+  if (data.code !== "Ok" || !route) {
+    throw new OsrmError(data.code ?? "Unknown", data.message ?? "route returned no result", 200);
+  }
+  return {
+    distance: route.distance,
+    duration: route.duration,
+    legs: route.legs ?? [],
+    geometry: (route.geometry?.coordinates ?? []).map(([lng, lat]) => [lat, lng]),
+    waypoints: (data.waypoints ?? []).map((w) => ({
+      lat: w.location[1],
+      lng: w.location[0],
+      name: w.name ?? "",
+    })),
+  };
 }
 
 /**

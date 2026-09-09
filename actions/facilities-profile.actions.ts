@@ -13,18 +13,74 @@ export type UpdateEmployeeProfileState = {
 
 export type PickupPointCoordinatesState = { error?: string; success?: boolean };
 
+type PickupPointCoordinatesInput = { pickupPoint: string; coordinates: string };
+
+export async function setAllPickupPointCoordinatesAction(
+  _prevState: PickupPointCoordinatesState,
+  formData: FormData
+): Promise<PickupPointCoordinatesState> {
+  await requireRole([Role.FACILITIES]);
+  const rawCoordinates = requiredField(formData, "coordinatesJson");
+  if (!rawCoordinates) return { error: "Enter coordinates for at least one pickup point." };
+
+  let entries: PickupPointCoordinatesInput[];
+  try {
+    const parsed: unknown = JSON.parse(rawCoordinates);
+    if (!Array.isArray(parsed)) throw new Error();
+    entries = parsed as PickupPointCoordinatesInput[];
+  } catch {
+    return { error: "Unable to read the pickup-point coordinates." };
+  }
+
+  const values = entries.map((entry) => {
+    const coordinates = entry.coordinates.trim().split(/[\s,]+/).filter(Boolean).map(Number);
+    return { pickupPoint: entry.pickupPoint.trim(), coordinates };
+  });
+  if (values.length === 0) return { error: "Enter coordinates for at least one pickup point." };
+  if (values.some(({ pickupPoint, coordinates }) => !pickupPoint || coordinates.length !== 2 || !coordinates.every(Number.isFinite))) {
+    return { error: "Enter every coordinate in this format: latitude, longitude." };
+  }
+  if (values.some(({ coordinates: [latitude, longitude] }) => Math.abs(latitude) > 90 || Math.abs(longitude) > 180)) {
+    return { error: "Latitude must be between -90 and 90; longitude between -180 and 180." };
+  }
+
+  const addresses = await Promise.all(values.map(async ({ pickupPoint, coordinates: [latitude, longitude] }) => {
+    const address = await prisma.address.upsert({
+      where: { addressText: pickupPoint },
+      update: { latitude, longitude },
+      create: { addressText: pickupPoint, latitude, longitude },
+    });
+    await linkPickupPointsToAddress(pickupPoint, address.id);
+    return { pickupPoint, addressId: address.id };
+  }));
+
+  await Promise.all(addresses.map(({ pickupPoint, addressId }) => prisma.user.updateMany({
+    where: { role: Role.EMPLOYEE, pickupPoint },
+    data: { pickupAddressId: addressId },
+  })));
+
+  revalidatePath("/facilities/pickup-point-coordinates");
+  revalidatePath("/facilities/route-setting");
+  revalidatePath("/facilities/vehicles");
+  revalidatePath("/facilities/user-info");
+  return { success: true };
+}
+
 export async function setPickupPointCoordinatesAction(
   _prevState: PickupPointCoordinatesState,
   formData: FormData
 ): Promise<PickupPointCoordinatesState> {
   await requireRole([Role.FACILITIES]);
   const pickupPoint = requiredField(formData, "pickupPoint");
-  const latitude = Number(formData.get("latitude"));
-  const longitude = Number(formData.get("longitude"));
+  const coordinates = requiredField(formData, "coordinates");
   if (!pickupPoint) return { error: "Pick-up point is required." };
-  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
-    return { error: "Enter valid latitude and longitude values." };
+  if (!coordinates) return { error: "Enter latitude and longitude, separated by a comma." };
+
+  const values = coordinates.split(/[\s,]+/).filter(Boolean).map(Number);
+  if (values.length !== 2 || !values.every(Number.isFinite)) {
+    return { error: "Enter coordinates in this format: latitude, longitude." };
   }
+  const [latitude, longitude] = values;
   if (Math.abs(latitude) > 90 || Math.abs(longitude) > 180) {
     return { error: "Latitude must be between -90 and 90; longitude between -180 and 180." };
   }
@@ -34,10 +90,14 @@ export async function setPickupPointCoordinatesAction(
     update: { latitude, longitude },
     create: { addressText: pickupPoint, latitude, longitude },
   });
+  await linkPickupPointsToAddress(pickupPoint, address.id);
   await prisma.user.updateMany({
     where: { role: Role.EMPLOYEE, pickupPoint },
     data: { pickupAddressId: address.id },
   });
+  revalidatePath("/facilities/pickup-point-coordinates");
+  revalidatePath("/facilities/route-setting");
+  revalidatePath("/facilities/vehicles");
   revalidatePath("/facilities/user-info");
   return { success: true };
 }
@@ -45,6 +105,38 @@ export async function setPickupPointCoordinatesAction(
 function requiredField(formData: FormData, name: string): string | null {
   const value = formData.get(name);
   return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+/**
+ * After saving coordinates for a pick-up point name, relink any vehicle
+ * PickupPoint rows that carry the same name but point at a DIFFERENT Address
+ * row (e.g. an auto-geocoded "23.819..., 90.365..." text row created by the
+ * route planner, or an address without coordinates) to the canonical named
+ * Address row that now holds the saved lat/lng. Without this, coordinates
+ * set on the Pick-up Points page never reach Route Setting / route
+ * generation, because the two pages end up on separate Address rows.
+ */
+async function linkPickupPointsToAddress(
+  pickupPoint: string,
+  addressId: string
+): Promise<number> {
+  const points = await prisma.pickupPoint.findMany({
+    where: {
+      isActive: true,
+      name: { equals: pickupPoint, mode: "insensitive" },
+    },
+    select: { id: true, addressId: true },
+  });
+  const stale = points.filter((p) => p.addressId !== addressId);
+  await Promise.all(
+    stale.map((p) =>
+      prisma.pickupPoint.update({
+        where: { id: p.id },
+        data: { addressId },
+      })
+    )
+  );
+  return stale.length;
 }
 
 /**
@@ -103,7 +195,7 @@ export async function updateEmployeeProfileByFacilitiesAction(
     return { error: "Employee not found." };
   }
 
-  // Employee ID is unique in the database ΓÇö catch collisions with a friendly
+  // Employee ID is unique in the database — catch collisions with a friendly
   // message instead of a raw Prisma unique-constraint error. Any format is
   // accepted; an empty value clears the field (column is nullable).
   if (employeeCode) {
