@@ -63,9 +63,6 @@ export async function createUserAction(
       return { error: "Facilities cannot create Super Admin accounts." };
     }
     if (!employeeCode) return { error: "Employee ID is required." };
-    if (!/^\d{9}$/.test(employeeCode)) {
-      return { error: "Employee ID must be exactly 9 digits." };
-    }
     if (!department) return { error: "Department is required." };
     if (!contactNumber) return { error: "Contact number is required." };
     if (IS_PROD && !/^\d{11}$/.test(contactNumber)) {

@@ -97,8 +97,6 @@ function AddEmployeeDialogBody({ onDone, availableRoles }: { onDone: () => void;
           <Input
             id="employeeCode"
             name="employeeCode"
-            pattern="\d{9}"
-            title="Must be exactly 9 digits"
             placeholder="e.g. 123456789"
             required
             disabled={pending}
