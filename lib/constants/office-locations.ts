@@ -14,8 +14,8 @@ export interface OfficeCoords {
 
 export const OFFICE_COORDINATES: Record<string, OfficeCoords> = {
   [OfficeLocation.REGNUM]: {
-    lat: 23.770419986092747,
-    lng: 90.40848067943449,
+    lat: 23.770169283403114,
+    lng: 90.40850694678669,
     name: "Regnum",
   },
   [OfficeLocation.SPECTRA]: {

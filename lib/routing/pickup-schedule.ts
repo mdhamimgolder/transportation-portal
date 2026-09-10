@@ -226,7 +226,17 @@ export function computePickupSchedule(
   };
 }
 
-/** Load the learned per-leg medians for one shift ("10PM" | "11PM" | "12AM-6AM"). */
+/**
+ * Load the learned per-leg medians for one shift ("10PM" | "11PM" | "12AM-6AM").
+ *
+ * BRIDGED KEYS: the manual-plan teacher binds legs to the employee's pickup
+ * address (`pickupAddressId ?? homeAddressId`), while route generation runs on
+ * the resolved HOME address. When an employee has both, the same physical stop
+ * is two different `addr:<id>` keys — so every learned leg is also indexed
+ * under the employee's other address (both directions), letting a leg taught
+ * as `addr:pickup → addr:X` be found when the planner asks for
+ * `addr:home → addr:X`.
+ */
 export async function loadLearnedLegs(shiftKey: string): Promise<LearnedResolver> {
   const rows = await prisma.routeLegLearning.findMany({ where: { shiftKey } });
   const map: LearnedResolver = new Map();
@@ -238,6 +248,38 @@ export async function loadLearnedLegs(shiftKey: string): Promise<LearnedResolver
       max: row.maxMinutes,
     });
   }
+
+  const pairs = await prisma.user.findMany({
+    where: { homeAddressId: { not: null }, pickupAddressId: { not: null } },
+    select: { homeAddressId: true, pickupAddressId: true },
+  });
+  const alias = new Map<string, string>();
+  for (const pair of pairs) {
+    if (!pair.homeAddressId || !pair.pickupAddressId) continue;
+    if (pair.homeAddressId === pair.pickupAddressId) continue;
+    alias.set(`addr:${pair.pickupAddressId}`, `addr:${pair.homeAddressId}`);
+    alias.set(`addr:${pair.homeAddressId}`, `addr:${pair.pickupAddressId}`);
+  }
+  if (alias.size > 0) {
+    const bridged: Array<[string, LearnedLeg]> = [];
+    for (const [key, leg] of map) {
+      if (!key.startsWith("addr:")) continue;
+      const [from, to] = key.split("->");
+      const fromAlias = alias.get(from);
+      const toAlias = alias.get(to);
+      if (fromAlias && !map.has(`${fromAlias}->${to}`)) {
+        bridged.push([`${fromAlias}->${to}`, leg]);
+      }
+      if (toAlias && !map.has(`${from}->${toAlias}`)) {
+        bridged.push([`${from}->${toAlias}`, leg]);
+      }
+      if (fromAlias && toAlias && !map.has(`${fromAlias}->${toAlias}`)) {
+        bridged.push([`${fromAlias}->${toAlias}`, leg]);
+      }
+    }
+    for (const [key, leg] of bridged) map.set(key, leg);
+  }
+
   return map;
 }
 

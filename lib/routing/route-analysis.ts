@@ -425,8 +425,8 @@ export async function computeRouteAnalysis(input: AnalysisInput): Promise<RouteA
         buildCandidate(
           ctx,
           "optimized",
-          "Optimized order",
-          "Shortest drive found by testing every stop order together with the side of road at each stop.",
+          "Different route",
+          "Alternative stop order tested against the current drawing — renamed by what it improves (backtracking, U-turns, drive time).",
           best.order,
           routeO,
           best.sides.chosen.map((c) => cands[c].headingDeg),

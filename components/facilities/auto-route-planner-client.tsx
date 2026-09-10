@@ -55,6 +55,7 @@ import type {
 } from "@/lib/routing/route-analysis.types";
 import { RouteComparePanel } from "@/components/facilities/route-compare-panel";
 import { ManualPlanUploadDialog } from "@/components/facilities/manual-plan-upload-dialog";
+import { RouteMemoryDiagnostics } from "@/components/facilities/route-memory-diagnostics";
 import type { RouteMapStop, StopHeading } from "@/components/facilities/route-map";
 import { DAY_LABELS, formatShortDate, getMondayOfWeek } from "@/lib/date/week";
 
@@ -300,6 +301,7 @@ export function AutoRoutePlannerClient({ initialWeekStart, initialOverview }: Pr
               </div>
               <div className="flex shrink-0 items-center gap-2">
                 <ManualPlanUploadDialog onImported={refreshLearningStats} />
+                <RouteMemoryDiagnostics />
                 <span className="text-xs text-muted-foreground">
                   Automatic after each mapping
                 </span>
@@ -645,12 +647,9 @@ const STATUS_TONE: Record<string, string> = {
   EXECUTED: "bg-muted text-muted-foreground border-border",
 };
 
-/** Which candidate to draw first: same order with fixed sides when available. */
-function defaultCandidate(analysis: RouteAnalysis | null): CandidateId {
-  if (!analysis) return "current";
-  return analysis.candidates.some((c) => c.id === "current_sided")
-    ? "current_sided"
-    : "current";
+/** Which candidate to draw first: the route as currently drawn. */
+function defaultCandidate(): CandidateId {
+  return "current";
 }
 
 function GeneratedRouteCard({
@@ -665,7 +664,7 @@ function GeneratedRouteCard({
   const [analyzing, setAnalyzing] = useState(false);
   const [analysisError, setAnalysisError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<CandidateId>(() =>
-    defaultCandidate(route.routeAnalysis)
+    defaultCandidate()
   );
   const [applying, setApplying] = useState(false);
   const [applyMessage, setApplyMessage] = useState<{ tone: "ok" | "error"; text: string } | null>(null);
@@ -679,7 +678,7 @@ function GeneratedRouteCard({
     // in-flight result authoritative over the plan's cached copy.
     if (!analyzing) {
       setAnalysis(route.routeAnalysis);
-      setSelectedId(defaultCandidate(route.routeAnalysis));
+      setSelectedId(defaultCandidate());
     }
   }
 
@@ -690,7 +689,7 @@ function GeneratedRouteCard({
       const res = await analyzeRoutePlan(route.id, { force });
       if (res.success) {
         setAnalysis(res.analysis);
-        setSelectedId(defaultCandidate(res.analysis));
+        setSelectedId(defaultCandidate());
       } else {
         setAnalysisError(res.error);
       }

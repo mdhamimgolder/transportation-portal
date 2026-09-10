@@ -8,9 +8,10 @@ import {
 } from "@/lib/constants/arrival-times";
 import { MAX_UNFILTERED_ROWS } from "@/lib/constants/limits";
 import { excelSafeText } from "@/lib/csv";
-import { getDaySheet, compareArrivalTimes } from "@/lib/queries/route-planning";
+import { getDaySheet, getScheduleSheet, compareArrivalTimes } from "@/lib/queries/route-planning";
 import { RoutePlanningControls } from "@/components/facilities/route-planning-controls";
 import { RouteDaySheet } from "@/components/facilities/route-day-sheet";
+import { ScheduleSheet } from "@/components/facilities/schedule-sheet";
 import { WeekFilter, type WeekOption } from "@/components/facilities/week-filter";
 import { ExportCsvButton } from "@/components/facilities/export-csv-button";
 
@@ -110,6 +111,7 @@ export default async function RoutePlanningPage({
   );
 
   const sheet = await getDaySheet(dayOfWeek, ARRIVAL_TIME_LABELS);
+  const routeSheet = await getScheduleSheet(dayOfWeek, ARRIVAL_TIME_LABELS);
   const vehicleLookup = Object.fromEntries(
     vehicleDrivers.map((v) => [
       v.vehicleNumber.trim().toUpperCase(),
@@ -132,6 +134,23 @@ export default async function RoutePlanningPage({
         {exportToolbar}
       </div>
       <RouteDaySheet key={dayOfWeek} rows={sheet.rows} vehicleLookup={vehicleLookup} />
+      {routeSheet.weekLabel ? (
+        <div className="space-y-3">
+          <div>
+            <h2 className="text-lg font-semibold">Route sheet — drag rows</h2>
+            <p className="text-sm text-muted-foreground">
+              The same day as a spreadsheet: one card per vehicle, one editable row per
+              employee. Drops save instantly and email the rider like any assignment
+              change.
+            </p>
+          </div>
+          <ScheduleSheet
+            key={`${dayOfWeek}|${routeSheet.weekLabel}`}
+            vehicles={routeSheet.vehicles}
+            unassigned={routeSheet.unassigned}
+          />
+        </div>
+      ) : null}
     </div>
   );
 }

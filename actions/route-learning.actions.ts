@@ -310,3 +310,88 @@ export async function getRouteLearningStats(): Promise<RouteLearningStats> {
     })),
   };
 }
+
+export type RouteLegDiagnostic = {
+  shiftKey: string;
+  from: string | null;
+  to: string | null;
+  avgMinutes: number;
+  minMinutes: number;
+  maxMinutes: number;
+  sampleCount: number;
+  trusted: boolean;
+};
+
+export type RouteMemoryDiagnostic =
+  | {
+      success: true;
+      trusted: number;
+      untrusted: number;
+      totalObservations: number;
+      manualEntryCount: number;
+      minSamplesRequired: number;
+      /** Employees whose pickup and home address share learned legs (bridged keys). */
+      bridgedEmployees: number;
+      legs: RouteLegDiagnostic[];
+      notes: string[];
+    }
+  | { success: false; error: string };
+
+/**
+ * "Why these pick-up times?" — the full route-memory table: every learned leg,
+ * trusted or not, with its observations and the rules the planner applies.
+ */
+export async function getRouteMemoryDiagnostic(): Promise<RouteMemoryDiagnostic> {
+  try {
+    await requireRole([Role.FACILITIES, Role.SUPER_ADMIN]);
+    const [legs, manualEntryCount] = await Promise.all([
+      prisma.routeLegLearning.findMany({
+        orderBy: [
+          { shiftKey: "asc" },
+          { sampleCount: "desc" },
+          { avgMinutes: "asc" },
+        ],
+      }),
+      prisma.manualRoutePlanEntry.count(),
+    ]);
+    const pairs = await prisma.user.findMany({
+      where: { homeAddressId: { not: null }, pickupAddressId: { not: null } },
+      select: { homeAddressId: true, pickupAddressId: true },
+    });
+    const bridgedEmployees = pairs.filter(
+      (p) => p.homeAddressId && p.pickupAddressId && p.homeAddressId !== p.pickupAddressId
+    ).length;
+    const trusted = legs.filter((r) => r.sampleCount >= LEARN_MIN_SAMPLES).length;
+    return {
+      success: true,
+      trusted,
+      untrusted: legs.length - trusted,
+      totalObservations: legs.reduce((sum, r) => sum + r.sampleCount, 0),
+      manualEntryCount,
+      minSamplesRequired: LEARN_MIN_SAMPLES,
+      bridgedEmployees,
+      legs: legs.map((r) => ({
+        shiftKey: r.shiftKey,
+        from: r.fromLabel,
+        to: r.toLabel,
+        avgMinutes: r.avgMinutes,
+        minMinutes: r.minMinutes,
+        maxMinutes: r.maxMinutes,
+        sampleCount: r.sampleCount,
+        trusted: r.sampleCount >= LEARN_MIN_SAMPLES,
+      })),
+      notes: [
+        `A leg is TRUSTED once it has ≥ ${LEARN_MIN_SAMPLES} observations — trusted legs replace the 5 min/km estimate when planning pick-up times.`,
+        "Pick-up times are back-calculated from the shift arrival along each leg: trusted gap first, otherwise straight-line distance × 5 min/km, snapped to the 5-minute grid with ≥ 5 minutes between stops.",
+        "Teach from manual plan stores your hand-made gaps; every RUN MAPPING re-merges them, so they survive automatic retrains.",
+        "Employees with both a pickup and a home address share the same learned leg across both address keys (bridged), so a leg taught from your plan is found whichever address the route uses.",
+        `One full week (5–6 days) of the same repeating run per vehicle brings every leg in it to trusted — that is the recommended amount of reference data.`,
+      ],
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}

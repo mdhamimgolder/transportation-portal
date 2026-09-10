@@ -65,6 +65,31 @@ function shorten(s: string, max = 18): string {
   return t.length > max ? `${t.slice(0, max - 1)}…` : t;
 }
 
+/**
+ * Rename the optimized row from what it actually improves over the current
+ * drawing — traffic-style words (backtracking, U-turns, drive time) instead of
+ * a bare "Optimized" label.
+ */
+export function optimizedLabel(
+  base: RouteCandidate | undefined,
+  candidate: RouteCandidate
+): string {
+  if (!base || base.id === candidate.id) return "Different route";
+  if (candidate.metrics.backtrackKm < base.metrics.backtrackKm - 0.05) {
+    return "Different route — avoids backtracking";
+  }
+  if (candidate.metrics.uturns < base.metrics.uturns) {
+    return "Different route — fewer U-turns";
+  }
+  if (candidate.metrics.durationMin < base.metrics.durationMin - 0.05) {
+    return "Different route — shorter drive";
+  }
+  if (candidate.metrics.distanceKm < base.metrics.distanceKm - 0.05) {
+    return "Different route — less distance";
+  }
+  return "Different route — no clear gain over Current";
+}
+
 function fmt(n: number, digits = 0): string {
   return n.toLocaleString(undefined, {
     minimumFractionDigits: digits,
@@ -88,6 +113,8 @@ export function RouteComparePanel({
 
   const base = analysis.candidates.find((c) => c.id === "current");
   const confirm = confirmId ? analysis.candidates.find((c) => c.id === confirmId) : null;
+  const displayLabel = (c: RouteCandidate) =>
+    c.id === "optimized" ? optimizedLabel(base, c) : c.label;
 
   return (
     <div className="space-y-2">
@@ -123,13 +150,13 @@ export function RouteComparePanel({
               <th className="px-3 py-2 text-right font-medium">Drive</th>
               <th className="px-3 py-2 text-right font-medium">Distance</th>
               <th className="px-3 py-2 text-right font-medium">U-turns</th>
-              <th className="px-3 py-2 text-right font-medium">Backtrack</th>
-              <th className="px-3 py-2 text-right font-medium">Score</th>
               <th className="px-3 py-2 text-right font-medium" />
             </tr>
           </thead>
           <tbody className="divide-y divide-border">
-            {analysis.candidates.map((c) => {
+            {analysis.candidates
+              .filter((c) => c.id === "current" || c.id === "optimized")
+              .map((c) => {
               const selected = c.id === selectedId;
               const recommended = c.id === analysis.recommendedId;
               // Once applied, the chosen order IS the stored order, so the
@@ -148,7 +175,7 @@ export function RouteComparePanel({
                     <input
                       type="radio"
                       name={`route-candidate-${analysis.inputHash}`}
-                      aria-label={`Show ${c.label} on the map`}
+                      aria-label={`Show ${displayLabel(c)} on the map`}
                       checked={selected}
                       onChange={() => onSelect(c.id)}
                       className="mt-0.5 accent-[#22D3EE]"
@@ -156,7 +183,7 @@ export function RouteComparePanel({
                   </td>
                   <td className="px-3 py-2.5 align-top">
                     <p className="flex flex-wrap items-center gap-1.5 font-medium">
-                      {c.label}
+                      {displayLabel(c)}
                       {recommended && analysis.candidates.length > 1 ? (
                         <span className="inline-flex items-center gap-1 rounded-full border border-teal/40 bg-teal/10 px-2 py-0.5 text-[11px] font-medium text-teal">
                           <Sparkles className="size-3" />
@@ -208,12 +235,6 @@ export function RouteComparePanel({
                       </span>
                     ) : null}
                   </td>
-                  <td className="px-3 py-2.5 text-right align-top tabular-nums">
-                    {fmt(c.metrics.backtrackKm, 2)} km
-                  </td>
-                  <td className="px-3 py-2.5 text-right align-top font-medium tabular-nums">
-                    {fmt(c.score, 1)}
-                  </td>
                   <td className="px-3 py-2.5 text-right align-top">
                     {c.id !== "current" ? (
                       <Button
@@ -246,14 +267,13 @@ export function RouteComparePanel({
         </ul>
       ) : null}
       <p className="text-xs text-muted-foreground">
-        Score = drive minutes + 3 per U-turn + 2 per loop-around + 5 per backtracked km.
         Analyzed {new Date(analysis.computedAt).toLocaleString()}.
       </p>
 
       <Dialog open={confirm != null} onOpenChange={(open) => !open && setConfirmId(null)}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Apply “{confirm?.label}”?</DialogTitle>
+            <DialogTitle>Apply “{confirm ? displayLabel(confirm) : ""}”?</DialogTitle>
             <DialogDescription>
               Stops are re-sequenced and pickup times are recalculated back from the shift
               arrival using this route&apos;s real drive minutes (5-minute grid, at least 5

@@ -275,7 +275,6 @@ export function RouteMapView({
   vehicleNumber,
   arrivalTime = null,
   pickupDriveMinutes = null,
-  departureToFirstMinutes = null,
   routeKey = null,
   geometry = null,
   legMinutesOverride = null,
@@ -288,10 +287,10 @@ export function RouteMapView({
     [stops]
   );
 
-  /** Late-night shifts ("12 AM" – "6 AM") run the full loop office → pickups
-   * → office. 10 PM / 11 PM corridor routes instead drive straight through:
-   * first pickup → last pickup → office. Shared helper so the server-side
-   * analysis and this map never disagree on the topology. */
+  /** Late-night shifts ("12 AM" – "6 AM") draw pickups → office only: the
+   * office → first-pickup empty-run leg is not required on the map (it still
+   * exists in the schedule math). Shared helper so the server-side analysis
+   * and this map never disagree on the topology. */
   const isLateNight = isLateNightArrivalLabel(arrivalTime);
 
   const providedGeometry =
@@ -300,35 +299,29 @@ export function RouteMapView({
   /** Ordered endpoints the vehicle actually drives, expressed as [lat, lng]. */
   const reqPts = useMemo<[number, number][]>(() => {
     const stopPts = ordered.map((s) => [s.lat, s.lng] as [number, number]);
-    if (isLateNight && destination) {
-      return [
-        [destination.lat, destination.lng],
-        ...stopPts,
-        [destination.lat, destination.lng],
-      ];
-    }
-    if (destination) return [...stopPts, [destination.lat, destination.lng]];
-    return stopPts;
-  }, [ordered, destination, isLateNight]);
+    if (!destination) return stopPts;
+    return [...stopPts, [destination.lat, destination.lng]];
+  }, [ordered, destination]);
 
   /** Drive minutes per leg (leg k = reqPts[k] → reqPts[k+1]). */
   const legTimes = useMemo<number[]>(() => {
     const n = ordered.length;
     const t: number[] = [];
     if (n === 0) return t;
-    if (legMinutesOverride && legMinutesOverride.length === reqPts.length - 1) {
-      return [...legMinutesOverride];
+    if (legMinutesOverride) {
+      // Analysis candidates for late-night loops carry the office → first
+      // pickup leg at index 0 — drop it so the chips match the drawn path.
+      if (legMinutesOverride.length === reqPts.length) {
+        return [...legMinutesOverride.slice(1)];
+      }
+      if (legMinutesOverride.length === reqPts.length - 1) {
+        return [...legMinutesOverride];
+      }
     }
-    if (isLateNight && destination) {
-      t.push(departureToFirstMinutes ?? 0);
-      for (let i = 0; i < n; i++) t.push(ordered[i].travelFromPreviousMin ?? 0);
-      t.push(ordered[n - 1].travelToOfficeMin ?? 0);
-    } else {
-      for (let i = 1; i < n; i++) t.push(ordered[i].travelFromPreviousMin ?? 0);
-      t.push(ordered[n - 1].travelToOfficeMin ?? 0);
-    }
+    for (let i = 1; i < n; i++) t.push(ordered[i].travelFromPreviousMin ?? 0);
+    t.push(ordered[n - 1].travelToOfficeMin ?? 0);
     return t;
-  }, [ordered, destination, isLateNight, departureToFirstMinutes, legMinutesOverride, reqPts.length]);
+  }, [ordered, legMinutesOverride, reqPts.length]);
 
   const reqPtsKey = useMemo(
     () => `${isLateNight}|${reqPts.map((p) => p.join(",")).join(";")}`,
@@ -356,12 +349,22 @@ export function RouteMapView({
         : null;
 
   /** Polyline to draw: server-provided geometry wins (it matches the
-   * applied candidate's sides/order), else the client OSRM fetch. */
-  const drawn: [number, number][] = providedGeometry
-    ? providedGeometry
-    : fetchedGeo && fetchedGeo.line.length >= 2
-      ? fetchedGeo.line
-      : reqPts;
+   * applied candidate's sides/order), else the client OSRM fetch. Late-night
+   * provided geometry starts at the office — cut the empty-run leg so the
+   * drawn path begins at the first pickup. */
+  const firstStopPt: [number, number] | null =
+    isLateNight && ordered.length > 0 ? [ordered[0].lat, ordered[0].lng] : null;
+  const trimOfficeStart = (g: [number, number][]): [number, number][] => {
+    if (!firstStopPt || g.length < 2) return g;
+    const cut = nearestIndex(g, firstStopPt);
+    return cut > 0 ? g.slice(cut) : g;
+  };
+  const drawn = useMemo<[number, number][]>(() => {
+    if (providedGeometry) return trimOfficeStart(providedGeometry);
+    if (fetchedGeo && fetchedGeo.line.length >= 2) return fetchedGeo.line;
+    return reqPts;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [providedGeometry, fetchedGeo, reqPts, firstStopPt]);
   const routing = !providedGeometry && fetchedGeo === undefined;
 
   /** Real driving totals for the footer: caller-supplied totals (route
@@ -440,7 +443,7 @@ export function RouteMapView({
             />
             {ghostGeometry && ghostGeometry.length >= 2 ? (
               <Polyline
-                positions={ghostGeometry}
+                positions={trimOfficeStart(ghostGeometry)}
                 pathOptions={{
                   color: GHOST_COLOR,
                   weight: 3,
@@ -576,18 +579,10 @@ export function RouteMapView({
           <span className="h-1.5 w-5 rounded-full" style={{ background: ROUTE_COLOR }} />
           {ordered.length === 0
             ? "Pickup order —"
-            : isLateNight
-              ? "Office → pickups → office"
-              : "Pickups → office"}
+            : "Pickups → office"}
         </span>
         <span className="flex items-center gap-1.5">
           <RouteIcon className="size-3.5" />
-          {isLateNight && departureToFirstMinutes != null
-            ? `Office → first pickup +${Math.round(departureToFirstMinutes)} min`
-            : null}
-          {isLateNight && departureToFirstMinutes != null
-            ? " · "
-            : null}
           {pickupDriveMinutes != null
             ? `Pickup drive ≈ ${Math.round(pickupDriveMinutes)} min`
             : null}
