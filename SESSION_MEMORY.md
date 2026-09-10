@@ -122,11 +122,27 @@ route-learning pipeline. Built; 8/8 unit tests, tsc + eslint clean, migration ap
    stats line shows "· N manual-plan rows" when > 0).
 6. NOTE: the planner's 11 PM far→near CORE rule untouched — this feature only feeds better leg
    TIMES into `RouteLegLearning` (used by pickup-schedule + corridor back-calc).
-7. **Bulk profile upload: home lat/long now OPTIONAL** (`actions/user-management.actions.ts`,
-   user request). CSV format unchanged (columns may still be present); values optional:
-   provided+valid → address upsert updates lat/lng; absent → existing address linked untouched,
-   brand-new address text → profile created without homeAddressId link (Address.lat/lng NOT NULL).
-   Header check + per-row validation + range check (only when provided) updated; dialog untouched.
+7. **Bulk profile upload: all fields optional except fullName + email** (`actions/user-management.actions.ts`
+   + dialog text, user request). CSV columns unchanged; blank cells = leave empty (fill later from
+   User Info). role blank → EMPLOYEE; password blank → generated 16-char temp (`randomBytes(8).hex`)
+   emailed via credentials mail (`passwordPlainByLine`); provided password still needs ≥8 chars.
+   home lat/long: provided+valid → address upsert updates lat/lng; absent → existing address linked
+   untouched, brand-new address text → no homeAddressId link (Address.lat/lng NOT NULL).
+   employeeCode/department/contactNumber/address/pickupPoint stored as null when blank; dup/existing
+   checks only run for non-blank employeeCode. Header check now requires only fullName+email columns.
+   **UPDATE-existing mode** (2026-09-09 follow-up): rows whose email already exists are UPDATED with
+   non-blank CSV values (blank cells keep current value); report shows "updated N existing";
+   role/employeeCode conflicts & Facilities-can't-touch-SUPER_ADMIN guards added; `resolveHomeAddressId`
+   helper (address-cache incl. no-coords variant).
+8. **Manual-plan CSV import hardening** (user's 653-row file): `parseClockTime` now accepts
+   `h:mm:ss AM/PM` and `HH:mm:ss` (Excel time-with-seconds); shift column accepts an arrival clock
+   time (`10:30 PM` → shiftKey via new `shiftKeyFromClockTime` + fills officeArrival when blank);
+   date accepts Excel formats via `toDateUtcMidnight` (YYYY-MM-DD, DD/MM/YYYY day-first, DD Mon YYYY);
+   blank vehicleNumber → row still teaches last-pickup→office gap as single-stop `__row_<line>` run;
+   result shows `read: N data rows` + "Read N data row(s) from the file". 9/9 unit tests.
+   Remaining skip causes in the real file: ~60 accounts without pickup/home address,
+   ~160 `jamie.rivera*@example.com` sample emails + `#n/a`/`#ref!` (no account),
+   4 × `6:00 PM` (no 6 PM evening shift yet — user to confirm desire).
 
 ## Latest Session (2026-09-08) — Email delivery monitor: per-row status, Email log page, resend
 **User:** after Facilities fills driver + pick-up time and "Save all" on Pick Schedule,

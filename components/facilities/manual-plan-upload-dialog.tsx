@@ -63,11 +63,13 @@ function DialogBody({ onImported }: { onImported: () => void }) {
   }, [state.results]);
 
   if (state.results) {
-    const { stored, updated, skipped, learning } = state.results;
+    const { read, stored, updated, skipped, learning } = state.results;
     return (
       <div className="space-y-4">
         <p className="text-sm text-foreground">
-          Learned from <span className="font-medium">{stored}</span> new row(s)
+          Read <span className="font-medium">{read}</span> data row(s) from the
+          file — learned from <span className="font-medium">{stored}</span> new
+          row(s)
           {updated > 0 ? (
             <>
               , refreshed <span className="font-medium">{updated}</span>
@@ -127,9 +129,16 @@ function DialogBody({ onImported }: { onImported: () => void }) {
           <code className="font-mono">
             employeeName, pickupPoint, visitOrder, office
           </code>
-          . Times accept <code className="font-mono">20:35</code> or{" "}
-          <code className="font-mono">8:35 PM</code>; late-night arrivals past
-          midnight (<code className="font-mono">1:00 AM</code>) are handled.
+          . The shift column accepts a shift label (<code className="font-mono">10 PM</code>,{" "}
+          <code className="font-mono">12 AM</code>) or the office arrival time itself (
+          <code className="font-mono">10:30 PM</code>) — when it is an arrival time, it also
+          fills in officeArrival if that column is blank. Times accept{" "}
+          <code className="font-mono">20:35</code> or <code className="font-mono">8:35 PM</code>;
+          late-night arrivals past midnight (<code className="font-mono">1:00 AM</code>) are
+          handled. Dates accept <code className="font-mono">2026-09-07</code>,{" "}
+          <code className="font-mono">07/09/2026</code>,{" "}
+          <code className="font-mono">07-09-2026</code> (day first) or{" "}
+          <code className="font-mono">07 Sep 2026</code> — whatever Excel saves.
         </p>
         <ExportCsvButton
           filename="manual-route-plan-template.csv"

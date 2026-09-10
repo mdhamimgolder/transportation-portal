@@ -13,11 +13,11 @@
  * unit-testable with `node:test`.
  */
 
-/** Parse "HH:mm" (24h) or "h:mm AM/PM" into minutes-from-midnight (0..1440). */
+/** Parse "HH:mm" or "HH:mm:ss" (24h) or "h:mm[:ss] AM/PM" into minutes-from-midnight (0..1440). */
 export function parseClockTime(raw: string | null | undefined): number | null {
   const value = (raw ?? "").trim();
   if (!value) return null;
-  const match = value.match(/^(\d{1,2})[:.](\d{2})\s*([AaPp][Mm])?$/);
+  const match = value.match(/^(\d{1,2})[:.](\d{2})(?::\d{2})?\s*([AaPp][Mm])?$/);
   if (!match) return null;
   let hours = Number(match[1]);
   const minutes = Number(match[2]);
@@ -44,6 +44,22 @@ export function shiftKeyForShiftLabel(raw: string | null | undefined): string | 
   if (normalized === "11PM") return "11PM";
   if (normalized === "12AM6AM" || normalized === "LATENIGHT") return "12AM-6AM";
   if (/^(12|[1-6])AM$/.test(normalized)) return "12AM-6AM";
+  return null;
+}
+
+/**
+ * Map a clock time (minutes-from-midnight) to its shift bucket. Manual plans
+ * often write the office arrival into the shift column ("10:30 PM"), which is
+ * the same thing: 22:00–22:59 → 10PM, 23:00–23:59 → 11PM,
+ * 00:00–06:59 → 12AM-6AM. Returns null for times outside the three shifts
+ * (e.g. 6:00 PM).
+ */
+export function shiftKeyFromClockTime(minutes: number): string | null {
+  if (!Number.isFinite(minutes)) return null;
+  const hour = Math.floor((minutes % 1440) / 60);
+  if (hour === 22) return "10PM";
+  if (hour === 23) return "11PM";
+  if (hour <= 6) return "12AM-6AM";
   return null;
 }
 

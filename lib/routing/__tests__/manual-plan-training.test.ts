@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import {
   parseClockTime,
   shiftKeyForShiftLabel,
+  shiftKeyFromClockTime,
   legObservationsFromManualEntries,
   type ManualEntryLike,
 } from "../manual-plan-training";
@@ -27,6 +28,10 @@ function entry(overrides: Partial<ManualEntryLike>): ManualEntryLike {
 test("parseClockTime: 24h, 12h, and rejects garbage", () => {
   assert.equal(parseClockTime("20:35"), 1235);
   assert.equal(parseClockTime("8:35 PM"), 1235);
+  assert.equal(parseClockTime("9:00:00 PM"), 1260);
+  assert.equal(parseClockTime("11:05:00 PM"), 1385);
+  assert.equal(parseClockTime("8:50:00 PM"), 1250);
+  assert.equal(parseClockTime("20:35:00"), 1235);
   assert.equal(parseClockTime("12:05 AM"), 5);
   assert.equal(parseClockTime("12:05 PM"), 725);
   assert.equal(parseClockTime("00:05"), 5);
@@ -48,6 +53,21 @@ test("shiftKeyForShiftLabel: accepts spaced, compact, and late-night labels", ()
   assert.equal(shiftKeyForShiftLabel("late night"), "12AM-6AM");
   assert.equal(shiftKeyForShiftLabel("9 PM"), null);
   assert.equal(shiftKeyForShiftLabel(""), null);
+});
+
+test("shiftKeyFromClockTime: arrival-style times map to shift buckets", () => {
+  assert.equal(shiftKeyFromClockTime(parseClockTime("10:00 PM")!), "10PM");
+  assert.equal(shiftKeyFromClockTime(parseClockTime("10:30 PM")!), "10PM");
+  assert.equal(shiftKeyFromClockTime(parseClockTime("11:15 PM")!), "11PM");
+  assert.equal(shiftKeyFromClockTime(parseClockTime("11:30 PM")!), "11PM");
+  assert.equal(shiftKeyFromClockTime(parseClockTime("12:00 AM")!), "12AM-6AM");
+  assert.equal(shiftKeyFromClockTime(parseClockTime("1:00 AM")!), "12AM-6AM");
+  assert.equal(shiftKeyFromClockTime(parseClockTime("5:00 AM")!), "12AM-6AM");
+  assert.equal(shiftKeyFromClockTime(parseClockTime("6:00 AM")!), "12AM-6AM");
+  assert.equal(shiftKeyFromClockTime(parseClockTime("6:59 AM")!), "12AM-6AM");
+  assert.equal(shiftKeyFromClockTime(parseClockTime("6:00 PM")!), null);
+  assert.equal(shiftKeyFromClockTime(parseClockTime("9:00 PM")!), null);
+  assert.equal(shiftKeyFromClockTime(NaN), null);
 });
 
 test("legObservations: consecutive gaps + last pickup to office", () => {

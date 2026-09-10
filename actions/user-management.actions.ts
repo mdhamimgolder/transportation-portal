@@ -138,7 +138,12 @@ export type BulkCreateResultRow = { email: string; fullName: string };
 export type BulkCreateSkipRow = { line: number; reason: string };
 export type BulkCreateUsersState = {
   error?: string;
-  results?: { created: BulkCreateResultRow[]; skipped: BulkCreateSkipRow[] };
+  results?: {
+    created: BulkCreateResultRow[];
+    /** Existing accounts refreshed with non-blank CSV values. */
+    updatedAccounts: number;
+    skipped: BulkCreateSkipRow[];
+  };
 };
 
 export async function bulkCreateUsersAction(
@@ -174,20 +179,13 @@ export async function bulkCreateUsersAction(
     pickupPoint: colIndex("pickuppoint"),
     password: colIndex("password"),
   };
-  if (
-    idx.fullName === -1 ||
-    idx.email === -1 ||
-    idx.role === -1 ||
-    idx.employeeCode === -1 ||
-    idx.department === -1 ||
-    idx.contactNumber === -1 ||
-    idx.address === -1 ||
-    idx.pickupPoint === -1 ||
-    idx.password === -1
-  ) {
+  // Only fullName + email are truly required — an account cannot exist
+  // without them. Every other column is optional: blank cells simply leave
+  // the profile field empty for Facilities to fill in later.
+  if (idx.fullName === -1 || idx.email === -1) {
     return {
       error:
-        "CSV must include fullName, email, role, employeeCode, department, contactNumber, address, pickupPoint, and password columns. homeLatitude and homeLongitude are optional.",
+        "CSV must include at least a fullName and email column. role, employeeCode, department, contactNumber, address, pickupPoint, homeLatitude, homeLongitude, and password are all optional (blank = fill in later).",
     };
   }
 
@@ -216,21 +214,42 @@ export async function bulkCreateUsersAction(
           .filter(Boolean)
       ),
     ];
-    const [existingEmailRows, existingCodeRows] = await Promise.all([
-      prisma.user.findMany({ where: { email: { in: allEmails } }, select: { email: true } }),
+    const [existingUsers, existingCodeRows] = await Promise.all([
+      prisma.user.findMany({
+        where: { email: { in: allEmails } },
+        select: {
+          id: true,
+          email: true,
+          role: true,
+          employeeCode: true,
+          fullName: true,
+        },
+      }),
       prisma.user.findMany({
         where: { employeeCode: { in: allCodes } },
-        select: { employeeCode: true },
+        select: { employeeCode: true, email: true },
       }),
     ]);
-    const existingEmailSet = new Set(existingEmailRows.map((r) => r.email));
-    const existingCodeSet = new Set(existingCodeRows.map((r) => r.employeeCode));
+    const existingUsersByEmail = new Map(
+      existingUsers.map((u) => [u.email.toLowerCase(), u])
+    );
+    // employeeCode → the email that currently owns it (for conflict checks
+    // when a CSV row re-assigns a code).
+    const codeOwnerByEmail = new Map(
+      existingCodeRows.map((r) => [r.employeeCode, r.email.toLowerCase()])
+    );
 
     const passwordHashByLine = new Map<number, string>();
+    const passwordPlainByLine = new Map<number, string>();
     await Promise.all(
       rows.slice(1).map(async (cols, j) => {
+        const line = j + 2;
         const pw = (cols[idx.password] ?? "").trim();
-        if (pw) passwordHashByLine.set(j + 2, await hashPassword(pw));
+        // Blank password → a random temporary one is generated and emailed;
+        // the user can change it after logging in.
+        const effective = pw || randomBytes(8).toString("hex");
+        passwordPlainByLine.set(line, effective);
+        passwordHashByLine.set(line, await hashPassword(effective));
       })
     );
 
@@ -238,38 +257,62 @@ export async function bulkCreateUsersAction(
     // per row). Coordinates optional — see the hasCoords comment above.
     const addressIds = new Map<string, string | null>();
 
+    // Resolve (and optionally update) the Address row for a CSV address text.
+    // Coordinates provided → the upsert writes them; absent → the existing
+    // address is linked untouched, or null for a brand-new text.
+    const resolveHomeAddressId = async (
+      addressText: string,
+      withCoords: boolean,
+      lat: number,
+      lng: number
+    ): Promise<string | null> => {
+      const coordKey = withCoords ? `${lat},${lng}` : "keep-as-is";
+      const cacheKey = `${addressText}::${coordKey}`;
+      if (addressIds.has(cacheKey)) return addressIds.get(cacheKey) ?? null;
+      let resolvedId: string | null = null;
+      if (withCoords) {
+        const row = await prisma.address.upsert({
+          where: { addressText },
+          update: { latitude: lat, longitude: lng },
+          create: { addressText, latitude: lat, longitude: lng },
+        });
+        resolvedId = row.id;
+      } else {
+        resolvedId =
+          (await prisma.address.findUnique({ where: { addressText } }))?.id ?? null;
+      }
+      addressIds.set(cacheKey, resolvedId);
+      return resolvedId;
+    };
+
+    let updatedAccounts = 0;
+
   for (let i = 1; i < rows.length; i++) {
     const line = i + 1;
     const cols = rows[i];
     const fullName = cols[idx.fullName]?.trim();
     const email = cols[idx.email]?.trim().toLowerCase();
-    const role = cols[idx.role]?.trim().toUpperCase();
-    const employeeCode = cols[idx.employeeCode]?.trim();
-    const department = cols[idx.department]?.trim();
-    const contactNumber = cols[idx.contactNumber]?.trim();
-    const address = cols[idx.address]?.trim();
+    const employeeCode = cols[idx.employeeCode]?.trim() || null;
+    const department = cols[idx.department]?.trim() || null;
+    const contactNumber = cols[idx.contactNumber]?.trim() || null;
+    const address = cols[idx.address]?.trim() || null;
     const homeLatitude = Number(cols[idx.homeLatitude]?.trim());
     const homeLongitude = Number(cols[idx.homeLongitude]?.trim());
-    const pickupPoint = cols[idx.pickupPoint]?.trim();
+    const pickupPoint = cols[idx.pickupPoint]?.trim() || null;
     const password = cols[idx.password]?.trim();
 
-    if (
-      !fullName ||
-      !email ||
-      !role ||
-      !employeeCode ||
-      !department ||
-      !contactNumber ||
-      !address ||
-      !pickupPoint ||
-      !password
-    ) {
+    // Only fullName + email can never be blank — an account cannot exist
+    // without them. Every other field is optional: blank = leave empty,
+    // Facilities fills it in later.
+    if (!fullName || !email) {
       skipped.push({
         line,
-        reason: "Missing required fields.",
+        reason: "fullName and email are required to create an account.",
       });
       continue;
     }
+    const rawRole = cols[idx.role]?.trim();
+    const role = (rawRole || Role.EMPLOYEE).toUpperCase();
 
     // homeLatitude / homeLongitude are OPTIONAL. When both are provided and
     // valid they update the address's coordinates; when absent the address
@@ -279,15 +322,19 @@ export async function bulkCreateUsersAction(
       Number.isFinite(homeLatitude) && Number.isFinite(homeLongitude);
 
     if (!isValidRole(role)) {
-      skipped.push({ line, reason: `Unknown role "${role}".` });
+      skipped.push({ line, reason: `Unknown role "${cols[idx.role]?.trim()}".` });
       continue;
     }
     if (session.role === Role.FACILITIES && role === Role.SUPER_ADMIN) {
       skipped.push({ line, reason: "Facilities cannot create Super Admin accounts." });
       continue;
     }
-    if (password.length < 8) {
-      skipped.push({ line, reason: "Password must be at least 8 characters." });
+    if (password && password.length < 8) {
+      skipped.push({
+        line,
+        reason:
+          "Password must be at least 8 characters (or leave it blank for a generated temporary password).",
+      });
       continue;
     }
     if (hasCoords && (Math.abs(homeLatitude) > 90 || Math.abs(homeLongitude) > 180)) {
@@ -299,42 +346,70 @@ export async function bulkCreateUsersAction(
       skipped.push({ line, reason: `Email ${email} is duplicated in this CSV file.` });
       continue;
     }
-    if (employeeCodesInFile.has(employeeCode)) {
+    if (employeeCode && employeeCodesInFile.has(employeeCode)) {
       skipped.push({ line, reason: `Employee ID ${employeeCode} is duplicated in this CSV file.` });
       continue;
     }
 
-    if (existingEmailSet.has(email)) {
-      skipped.push({ line, reason: `Email ${email} already exists.` });
-      continue;
-    }
-    if (existingCodeSet.has(employeeCode)) {
-      skipped.push({ line, reason: `Employee ID ${employeeCode} already exists.` });
+    const passwordHash =
+      passwordHashByLine.get(line) ?? (await hashPassword(password || randomBytes(8).toString("hex")));
+
+    // ── UPDATE path: the account already exists ─────────────────────────
+    // Non-blank CSV cells refresh the profile; blank cells keep the current
+    // value as it is. Blank lat/long never overwrites coordinates.
+    const existingUser = existingUsersByEmail.get(email);
+    if (existingUser) {
+      if (
+        session.role === Role.FACILITIES &&
+        (role === Role.SUPER_ADMIN || existingUser.role === Role.SUPER_ADMIN)
+      ) {
+        skipped.push({ line, reason: "Facilities cannot change Super Admin accounts." });
+        continue;
+      }
+      const updates: {
+        fullName?: string;
+        role?: string;
+        department?: string;
+        contactNumber?: string;
+        pickupPoint?: string;
+        employeeCode?: string;
+        passwordHash?: string;
+        address?: string;
+        homeAddressId?: string;
+      } = {};
+      if (fullName && fullName !== existingUser.fullName) updates.fullName = fullName;
+      if (rawRole && role !== existingUser.role) updates.role = role;
+      if (department) updates.department = department;
+      if (contactNumber) updates.contactNumber = contactNumber;
+      if (pickupPoint) updates.pickupPoint = pickupPoint;
+      if (employeeCode && employeeCode !== existingUser.employeeCode) {
+        const owner = codeOwnerByEmail.get(employeeCode);
+        if (owner && owner !== email) {
+          skipped.push({
+            line,
+            reason: `Employee ID ${employeeCode} already belongs to another account.`,
+          });
+          continue;
+        }
+        updates.employeeCode = employeeCode;
+      }
+      if (password) updates.passwordHash = passwordHash;
+      if (address) {
+        updates.address = address;
+        const linked = await resolveHomeAddressId(address, hasCoords, homeLatitude, homeLongitude);
+        if (linked) updates.homeAddressId = linked;
+      }
+      if (Object.keys(updates).length > 0) {
+        await prisma.user.update({ where: { id: existingUser.id }, data: updates });
+        updatedAccounts += 1;
+      }
+      emailsInFile.add(email);
       continue;
     }
 
-    const passwordHash = passwordHashByLine.get(line) ?? (await hashPassword(password));
-    const coordKey = hasCoords ? `${homeLatitude},${homeLongitude}` : "keep-as-is";
-    const cacheKey = `${address}::${coordKey}`;
-    let homeAddressId: string | null;
-    if (addressIds.has(cacheKey)) {
-      homeAddressId = addressIds.get(cacheKey) ?? null;
-    } else if (hasCoords) {
-      const homeAddress = await prisma.address.upsert({
-        where: { addressText: address },
-        update: { latitude: homeLatitude, longitude: homeLongitude },
-        create: { addressText: address, latitude: homeLatitude, longitude: homeLongitude },
-      });
-      homeAddressId = homeAddress.id;
-      addressIds.set(cacheKey, homeAddressId);
-    } else {
-      // No coordinates provided: link the existing address untouched, or
-      // skip linking entirely for a brand-new address text (the profile is
-      // still created with the address text).
-      homeAddressId =
-        (await prisma.address.findUnique({ where: { addressText: address } }))?.id ?? null;
-      addressIds.set(cacheKey, homeAddressId);
-    }
+    const homeAddressId = address
+      ? await resolveHomeAddressId(address, hasCoords, homeLatitude, homeLongitude)
+      : null;
 
     let user;
     try {
@@ -363,9 +438,15 @@ export async function bulkCreateUsersAction(
     }
 
     created.push({ email: user.email, fullName: user.fullName });
-    createdCredentials.push({ email: user.email, fullName: user.fullName, password });
+    createdCredentials.push({
+      email: user.email,
+      fullName: user.fullName,
+      // The plain password that was actually hashed — a provided one, or the
+      // generated temporary one when the CSV cell was blank.
+      password: passwordPlainByLine.get(line) ?? password ?? "",
+    });
     emailsInFile.add(email);
-    employeeCodesInFile.add(employeeCode);
+    if (employeeCode) employeeCodesInFile.add(employeeCode);
   }
 
   after(async () => {
@@ -378,7 +459,7 @@ export async function bulkCreateUsersAction(
 
   revalidatePath("/super-admin/users");
   revalidatePath("/facilities/user-info");
-  return { results: { created, skipped } };
+  return { results: { created, updatedAccounts, skipped } };
   } catch (err) {
     console.error("[bulkCreateUsersAction]", err);
     const message =

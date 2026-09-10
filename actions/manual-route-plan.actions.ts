@@ -8,6 +8,7 @@ import { parseCsv } from "@/lib/csv";
 import {
   parseClockTime,
   shiftKeyForShiftLabel,
+  shiftKeyFromClockTime,
 } from "@/lib/routing/manual-plan-training";
 import {
   trainRoutePlannerFromHistory,
@@ -32,6 +33,8 @@ export type ManualPlanImportSkip = { line: number; reason: string };
 export type ManualPlanImportState = {
   error?: string;
   results?: {
+    /** Data rows the uploaded file actually contained (before any validation). */
+    read: number;
     stored: number;
     updated: number;
     skipped: ManualPlanImportSkip[];
@@ -53,11 +56,42 @@ const REQUIRED_HEADERS = [
   "officearrival",
 ] as const;
 
+const MONTH_INDEX: Record<string, number> = {
+  jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5,
+  jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11,
+};
+
+function makeUtcMidnight(year: number, monthIndex: number, day: number): Date | null {
+  if (monthIndex < 0 || monthIndex > 11 || day < 1 || day > 31) return null;
+  const iso = `${year}-${String(monthIndex + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}T00:00:00.000Z`;
+  const date = new Date(iso);
+  // Rejects day-of-month overflow (e.g. 31/02 → rolls into March).
+  return Number.isNaN(date.getTime()) || date.getUTCDate() !== day ? null : date;
+}
+
+/**
+ * Accepts the date formats Excel actually produces when saving CSV:
+ * 2026-09-07, 2026/09/07, 07-09-2026, 07/09/2026, 07.09.2026 (day-first,
+ * the Bangladesh/Excel convention), and "07 Sep 2026" / "07-Sep-2026".
+ */
 function toDateUtcMidnight(raw: string): Date | null {
   const value = raw.trim();
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
-  const date = new Date(`${value}T00:00:00.000Z`);
-  return Number.isNaN(date.getTime()) ? null : date;
+  if (!value) return null;
+
+  let m = value.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})$/);
+  if (m) return makeUtcMidnight(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+
+  m = value.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})$/);
+  if (m) return makeUtcMidnight(Number(m[3]), Number(m[2]) - 1, Number(m[1]));
+
+  m = value.match(/^(\d{1,2})[-\s]([A-Za-z]{3,9})[-\s](\d{4})$/);
+  if (m) {
+    const monthIndex = MONTH_INDEX[m[2].slice(0, 3).toLowerCase()];
+    if (monthIndex !== undefined) {
+      return makeUtcMidnight(Number(m[3]), monthIndex, Number(m[1]));
+    }
+  }
+  return null;
 }
 
 function normalizeOffice(raw: string | null | undefined): string {
@@ -119,16 +153,27 @@ export async function importManualRoutePlanCsv(
       skipped.push({ line, reason: "date must be YYYY-MM-DD" });
       continue;
     }
-    const shiftKey = shiftKeyForShiftLabel(cell("shift"));
+    // The shift column accepts a shift label ("10 PM", "12 AM") OR the office
+    // arrival time itself ("10:30 PM") — manual plans write both as the same
+    // thing. When a clock time is given, it also fills in the office arrival
+    // if the officeArrival column is blank.
+    const shiftRaw = cell("shift");
+    const shiftMinutes = parseClockTime(shiftRaw);
+    let shiftKey = shiftKeyForShiftLabel(shiftRaw);
+    const arrivalFromShift = shiftKey === null && shiftMinutes !== null;
+    if (arrivalFromShift) {
+      shiftKey = shiftKeyFromClockTime(shiftMinutes);
+    }
     if (!shiftKey) {
-      skipped.push({ line, reason: `unknown shift "${cell("shift")}" (use 10 PM, 11 PM, 12 AM…6 AM)` });
+      skipped.push({
+        line,
+        reason: `unknown shift "${shiftRaw}" (use 10 PM, 11 PM, 12 AM…6 AM — or the arrival time like 10:30 PM)`,
+      });
       continue;
     }
-    const vehicleNumber = cell("vehicleNumber");
-    if (!vehicleNumber) {
-      skipped.push({ line, reason: "vehicleNumber is required (groups the rows into one vehicle run)" });
-      continue;
-    }
+    // Blank vehicleNumber: the row still teaches its last-pickup→office gap
+    // as a single-stop run (pickup→pickup gaps need a known vehicle run).
+    const vehicleNumber = cell("vehicleNumber") || `__row_${line}`;
     const email = cell("employeeemail").toLowerCase();
     const name = cell("employeename");
     if (!email && !name) {
@@ -141,9 +186,15 @@ export async function importManualRoutePlanCsv(
       continue;
     }
     const arrivalRaw = cell("officearrival");
-    const arrivalMinutes = parseClockTime(arrivalRaw);
+    // officeArrival column wins; when it is blank/invalid and the shift column
+    // held an arrival time ("10:30 PM"), that time is the arrival.
+    const arrivalMinutes =
+      parseClockTime(arrivalRaw) ?? (arrivalFromShift ? shiftMinutes : null);
     if (arrivalMinutes === null) {
-      skipped.push({ line, reason: `invalid officeArrival "${arrivalRaw}" (use HH:mm or h:mm AM/PM)` });
+      skipped.push({
+        line,
+        reason: `invalid or missing officeArrival "${arrivalRaw}" — or write the arrival time in the shift column (e.g. 10:30 PM)`,
+      });
       continue;
     }
     const orderRaw = cell("visitorder");
@@ -264,6 +315,7 @@ export async function importManualRoutePlanCsv(
 
   return {
     results: {
+      read: rows.length - 1,
       stored,
       updated,
       skipped,

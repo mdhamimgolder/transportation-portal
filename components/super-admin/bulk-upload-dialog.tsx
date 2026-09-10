@@ -66,6 +66,12 @@ function BulkUploadDialogBody({ onDone }: { onDone: () => void }) {
         <p className="text-sm text-foreground">
           Created <span className="font-medium">{state.results.created.length}</span>{" "}
           account(s)
+          {state.results.updatedAccounts > 0 ? (
+            <>
+              , updated{" "}
+              <span className="font-medium">{state.results.updatedAccounts}</span> existing
+            </>
+          ) : null}
           {state.results.skipped.length > 0 ? (
             <>
               , skipped{" "}
@@ -114,13 +120,19 @@ function BulkUploadDialogBody({ onDone }: { onDone: () => void }) {
     <form action={formAction} className="space-y-4">
       <div className="space-y-2 text-sm text-muted-foreground">
         <p>
-          Required CSV columns:{" "}
+          Required columns:{" "}
+          <code className="font-mono">fullName, email</code>. Everything else is
+          optional —{" "}
           <code className="font-mono">
-            fullName, email, role, employeeCode, department, contactNumber,
-            address, homeLatitude, homeLongitude, pickupPoint, password
-          </code>
-          . Role must be one of EMPLOYEE, OPERATIONS, FACILITIES, SUPER_ADMIN.
-          Password must be at least 8 characters.
+            role, employeeCode, department, contactNumber, address, pickupPoint,
+            homeLatitude, homeLongitude, password
+          </code>{" "}
+          — leave any cell blank and fill it in later from User Info. Rows
+          whose email already exists are UPDATED with the non-blank values
+          (blank cells keep the current value). Role must be one of EMPLOYEE,
+          OPERATIONS, FACILITIES, SUPER_ADMIN (blank = EMPLOYEE). A blank
+          password gets a generated temporary one emailed to the user; a
+          provided password must be at least 8 characters.
         </p>
         <ExportCsvButton
           filename="bulk-upload-template.csv"
