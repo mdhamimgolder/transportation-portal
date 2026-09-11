@@ -3,13 +3,14 @@
 import "leaflet/dist/leaflet.css";
 
 import { useEffect, useMemo, useState } from "react";
-import { divIcon } from "leaflet";
+import { divIcon, type Marker as LeafletMarker } from "leaflet";
 import {
   MapContainer,
   TileLayer,
   Polyline,
   Marker,
   Popup,
+  useMapEvents,
 } from "react-leaflet";
 import { MapPin, Route as RouteIcon } from "lucide-react";
 import { isLateNightArrivalLabel } from "@/lib/constants/route-shifts";
@@ -53,6 +54,20 @@ interface RouteMapViewProps {
    * caller when it provides the geometry (route analysis candidate). Shown
    * in the map footer so routes can be judged at a glance. */
   roadTotals?: { minutes: number; km: number } | null;
+  /** Interactive route-adjust mode (Google-Maps style): clicking the map
+   * inserts a draggable via point and the path re-routes through it. */
+  adjustMode?: boolean;
+  /** Via points currently dropped on the route (driven stops → office). */
+  viaPoints?: Array<{ lat: number; lng: number }>;
+  onMapClickAdjust?: (point: { lat: number; lng: number }) => void;
+  onViaPointMove?: (index: number, point: { lat: number; lng: number }) => void;
+  onViaPointRemove?: (index: number) => void;
+  /** Called with the adjusted road geometry + totals once the via-point route
+   * has been re-routed, so the caller can offer a "Save" that persists it. */
+  onAdjustReady?: (
+    geometry: [number, number][],
+    totals: { minutes: number; km: number }
+  ) => void;
 }
 
 /** Which way the vehicle faces when stopped at a pickup, and where on the road. */
@@ -269,6 +284,32 @@ function timeChipIcon(minutes: number) {
   });
 }
 
+/** Draggable via point that bends the route through it (adjust mode). */
+function viaPointIcon() {
+  return divIcon({
+    className: "",
+    html: `<div style="width:30px;height:30px;border-radius:50%;background:#0A0A0B;border:3px solid #F59E0B;box-shadow:0 0 0 3px rgba(245,158,11,.25),0 2px 8px rgba(0,0,0,.55);"><div style="width:12px;height:12px;margin:6px auto;border-radius:50%;background:#F59E0B;"></div></div>`,
+    iconSize: [30, 30],
+    iconAnchor: [15, 15],
+    popupAnchor: [0, -18],
+  });
+}
+
+/** Map click capture used only in adjust mode (clicking a point on the route
+ *  adds a draggable via point there). */
+function RouteMapClickCapture({
+  onMapClick,
+}: {
+  onMapClick?: (point: { lat: number; lng: number }) => void;
+}) {
+  useMapEvents({
+    click(e) {
+      onMapClick?.({ lat: e.latlng.lat, lng: e.latlng.lng });
+    },
+  });
+  return null;
+}
+
 export function RouteMapView({
   stops,
   destination,
@@ -281,6 +322,12 @@ export function RouteMapView({
   stopHeadings = null,
   ghostGeometry = null,
   roadTotals = null,
+  adjustMode = false,
+  viaPoints = [],
+  onMapClickAdjust,
+  onViaPointMove,
+  onViaPointRemove,
+  onAdjustReady,
 }: RouteMapViewProps) {
   const ordered = useMemo(
     () => [...stops].sort((a, b) => a.sequence - b.sequence),
@@ -395,6 +442,64 @@ export function RouteMapView({
     };
   }, [cacheKey, reqPts, providedGeometry]);
 
+  /** Adjusted path while in adjust mode: the stored stops plus the dropped via
+   *  points routed through the public OSRM server (cached per stop+via set). */
+  const [adjustDrawn, setAdjustDrawn] = useState<[number, number][] | null>(null);
+  const [adjustDrawnKey, setAdjustDrawnKey] = useState("");
+  const [adjustTotals, setAdjustTotals] = useState<{
+    minutes: number;
+    km: number;
+  } | null>(null);
+
+  const adjustKey = useMemo(
+    () =>
+      adjustMode
+        ? `${reqPtsKey}|via=${viaPoints.map((v) => v.lat.toFixed(5) + "," + v.lng.toFixed(5)).join(";")}`
+        : "",
+    [adjustMode, reqPtsKey, viaPoints]
+  );
+
+  useEffect(() => {
+    if (!adjustMode) return;
+    const stops = ordered.map((s) => [s.lat, s.lng] as [number, number]);
+    const office = destination
+      ? [[destination.lat, destination.lng] as [number, number]]
+      : [];
+    const vias = viaPoints.map((v) => [v.lat, v.lng] as [number, number]);
+    const allPts = [...stops, ...vias, ...office];
+    if (allPts.length < 2) return;
+    let cancelled = false;
+    const promise =
+      geometryCache.get(adjustKey) ?? fetchRoadGeometry(allPts);
+    geometryCache.set(adjustKey, promise);
+    promise.then((res) => {
+      if (cancelled) return;
+      const line: [number, number][] =
+        res && res.line.length >= 2 ? res.line : allPts;
+      const totals = {
+        minutes: Math.round(res?.totalMin ?? 0),
+        km: Number((res?.totalKm ?? 0).toFixed(2)),
+      };
+      setAdjustDrawn(line);
+      setAdjustDrawnKey(adjustKey);
+      setAdjustTotals(totals);
+      onAdjustReady?.(line, totals);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [adjustMode, adjustKey, ordered, destination, viaPoints, onAdjustReady]);
+
+  /** While dropping/dragging adjust via points, draw the adjusted path
+   *  exclusively (the stored candidate geometry is bypassed). Until the
+   *  re-route resolves the old path is stale. */
+  const adjusting = adjustMode;
+  const adjustStale = adjustMode && adjustDrawnKey !== adjustKey;
+  const shownLine: [number, number][] =
+    adjustMode && !adjustStale && adjustDrawn && adjustDrawn.length >= 2
+      ? adjustDrawn
+      : drawn;
+
   const headingBySequence = useMemo(() => {
     const m = new Map<number, StopHeading>();
     for (const h of stopHeadings ?? []) {
@@ -428,7 +533,7 @@ export function RouteMapView({
   return (
     <div className="space-y-2">
       {bounds ? (
-        <div className="h-72 w-full overflow-hidden rounded-lg border bg-[#0A0A0B]">
+        <div className="h-96 w-full overflow-hidden rounded-lg border bg-[#0A0A0B]">
           <MapContainer
             center={bounds[0]}
             zoom={13}
@@ -441,7 +546,10 @@ export function RouteMapView({
               attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
               url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png"
             />
-            {ghostGeometry && ghostGeometry.length >= 2 ? (
+            {adjustMode ? (
+              <RouteMapClickCapture onMapClick={onMapClickAdjust} />
+            ) : null}
+            {ghostGeometry && ghostGeometry.length >= 2 && !adjusting ? (
               <Polyline
                 positions={trimOfficeStart(ghostGeometry)}
                 pathOptions={{
@@ -455,57 +563,104 @@ export function RouteMapView({
               />
             ) : null}
 
-            {legs.length > 0 ? (
+            {shownLine.length >= 2 ? (
               <Polyline
-                positions={drawn}
+                positions={shownLine}
                 pathOptions={{
-                  color: ROUTE_COLOR,
-                  weight: 4,
-                  opacity: 0.9,
+                  color: adjusting ? "#F59E0B" : ROUTE_COLOR,
+                  weight: adjusting ? 5 : 4,
+                  opacity: 0.95,
                   lineCap: "round",
                   lineJoin: "round",
                 }}
               />
             ) : null}
 
-            {legs.map((sub, k) => {
-              if (sub.length < 2) return null;
-              const arrow = pointAt(sub, 0.42);
-              return (
-                <Marker
-                  key={`arrow-${k}`}
-                  position={arrow.pos}
-                  icon={arrowIcon(arrow.bearing)}
-                />
-              );
-            })}
+            {adjusting
+              ? null
+              : legs.map((sub, k) => {
+                  if (sub.length < 2) return null;
+                  const arrow = pointAt(sub, 0.42);
+                  return (
+                    <Marker
+                      key={`arrow-${k}`}
+                      position={arrow.pos}
+                      icon={arrowIcon(arrow.bearing)}
+                    />
+                  );
+                })}
 
-            {legs.map((sub, k) => {
-              const minutes = legTimes[k];
-              if (sub.length < 2 || minutes == null || minutes <= 0) return null;
-              const mid = pointAt(sub, 0.5);
-              return (
-                <Marker
-                  key={`chip-${k}`}
-                  position={mid.pos}
-                  icon={timeChipIcon(Math.round(minutes))}
-                  interactive={false}
-                />
-              );
-            })}
+            {adjusting
+              ? null
+              : legs.map((sub, k) => {
+                  const minutes = legTimes[k];
+                  if (sub.length < 2 || minutes == null || minutes <= 0)
+                    return null;
+                  const mid = pointAt(sub, 0.5);
+                  return (
+                    <Marker
+                      key={`chip-${k}`}
+                      position={mid.pos}
+                      icon={timeChipIcon(Math.round(minutes))}
+                      interactive={false}
+                    />
+                  );
+                })}
 
-            {routing && reqPts.length >= 2 && (
+            {(routing && !adjusting) || (adjusting && adjustStale) ? (
               <Marker
                 position={segStart(reqPts)}
                 icon={divIcon({
                   className: "",
-                  html: `<div style="padding:3px 8px;border-radius:9999px;background:#0A0A0B;border:1px solid #22D3EE66;color:#22D3EE;font:600 10px/14px system-ui;white-space:nowrap;box-shadow:0 1px 4px rgba(0,0,0,.55);">Routing…</div>`,
-                  iconSize: [76, 20],
-                  iconAnchor: [38, 10],
+                  html: `<div style="padding:3px 8px;border-radius:9999px;background:#0A0A0B;border:1px solid #22D3EE66;color:#22D3EE;font:600 10px/14px system-ui;white-space:nowrap;box-shadow:0 1px 4px rgba(0,0,0,.55);">Re-routing…</div>`,
+                  iconSize: [84, 20],
+                  iconAnchor: [42, 10],
                 })}
                 interactive={false}
               />
-            )}
+            ) : null}
+
+            {adjusting
+              ? viaPoints.map((v, idx) => (
+                  <Marker
+                    key={`via-${idx}`}
+                    position={[v.lat, v.lng]}
+                    icon={viaPointIcon()}
+                    draggable
+                    zIndexOffset={500}
+                    eventHandlers={{
+                      dragend: (e) => {
+                        const pos = (e.target as LeafletMarker).getLatLng();
+                        onViaPointMove?.(idx, { lat: pos.lat, lng: pos.lng });
+                      },
+                    }}
+                  >
+                    <Popup>
+                      <span style={{ display: "block", fontWeight: 600 }}>
+                        Via point {idx + 1}
+                      </span>
+                      <span style={{ display: "block", color: "#A1A1AA" }}>
+                        Drag it to bend the route.
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => onViaPointRemove?.(idx)}
+                        style={{
+                          marginTop: 8,
+                          padding: "4px 10px",
+                          borderRadius: 6,
+                          border: "1px solid #A1A1AA55",
+                          background: "#0A0A0B",
+                          color: "#F87171",
+                          cursor: "pointer",
+                        }}
+                      >
+                        Remove via point
+                      </button>
+                    </Popup>
+                  </Marker>
+                ))
+              : null}
 
             {ordered.map((s) => {
               const h = headingBySequence.get(s.sequence);
@@ -575,11 +730,22 @@ export function RouteMapView({
       )}
 
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
+        {adjusting ? (
+          <span className="flex items-center gap-1.5 rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 font-medium text-amber-600">
+            Adjust mode — click the route to add a via point, drag it to bend
+            the path
+          </span>
+        ) : null}
         <span className="flex items-center gap-1.5">
-          <span className="h-1.5 w-5 rounded-full" style={{ background: ROUTE_COLOR }} />
+          <span
+            className="h-1.5 w-5 rounded-full"
+            style={{ background: adjusting ? "#F59E0B" : ROUTE_COLOR }}
+          />
           {ordered.length === 0
             ? "Pickup order —"
-            : "Pickups → office"}
+            : adjusting
+              ? "Adjusted path"
+              : "Pickups → office"}
         </span>
         <span className="flex items-center gap-1.5">
           <RouteIcon className="size-3.5" />
@@ -587,7 +753,13 @@ export function RouteMapView({
             ? `Pickup drive ≈ ${Math.round(pickupDriveMinutes)} min`
             : null}
         </span>
-        {displayTotals ? (
+        {adjusting && adjustTotals && !adjustStale ? (
+          <span className="flex items-center gap-1.5 tabular-nums">
+            <RouteIcon className="size-3.5" />
+            Adjusted road: {Math.round(adjustTotals.minutes)} min ·{" "}
+            {adjustTotals.km.toFixed(1)} km
+          </span>
+        ) : displayTotals ? (
           <span className="flex items-center gap-1.5 tabular-nums">
             <RouteIcon className="size-3.5" />
             {displayTotals.km != null && displayTotals.min != null
@@ -604,6 +776,15 @@ export function RouteMapView({
           />
           {destination?.name ?? "Office"}
         </span>
+        {adjusting ? (
+          <span className="flex items-center gap-1.5">
+            <span
+              className="inline-block size-2.5 rounded-full border-2"
+              style={{ borderColor: "#F59E0B" }}
+            />
+            Via points
+          </span>
+        ) : null}
         {headingBySequence.size > 0 ? (
           <span className="flex items-center gap-1.5">
             <svg width="12" height="12" viewBox="0 0 24 24" aria-hidden>

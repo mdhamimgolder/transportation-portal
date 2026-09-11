@@ -33,20 +33,32 @@ task is touched, and overrides any "optimization" that would reorder stops other
    road distance in **KM** (`toOfficeKm` / `matrixDistanceKm`), never by minutes. Road
    MINUTES invert for near homes (one-way loops, slow roads — the Cha-19-9425 bug:
    Atia 8.21 km won the anchor over Tanjilur 8.45 km because of minutes).
-2. **Then come one by one, far → near**, following the distance matrix and the actual
-   route path back to the office. The saved visiting order must be strictly
-   non-increasing in `toOfficeKm`.
-3. `planCorridorRoutes` enforces this with a **final sort of every route's `order` by
-   `toOfficeKm` desc before returning** — grouping (corridor path + attach) decides WHO
-   rides together; the sort decides the visiting order. If touching allocation code,
-   PRESERVE this sort and the km-based anchor; never revert to minutes or drop the sort.
+2. **Then follow the DRAWN DIRECTION: each next stop is the employee NEAREST (by road
+   time) to the previous stop**, walking back toward the office. The saved visiting order
+   IS the nearest-hop chain that `planCorridorRoutes` grows — it must NEVER be re-sorted.
+3. **Amendment (user decision 2026-09-11) — DO NOT RE-ADD THE far→near SORT.** Previously
+   `planCorridorRoutes` enforced "strictly non-increasing `toOfficeKm`" with a final
+   `route.order.sort(desc by toOfficeKm)` — Facilities reported that makes the drawn map
+   zigzag ("unusual routing direction") and the 2nd/3rd picks jump to the 2nd/3rd-farthest
+   house instead of the house NEAREST to the farthest one (Dhaka-Metro-Cha-19-3742 on
+   8/3/26), and that re-sorting a route when a 4th rider attaches "totally changes" the
+   route that was first drawn. The sort is DELETED. Guard rails that REMAIN in
+   `planCorridorRoutes`: office-directed hops in ROAD KM (`toOfficeKm` ≤ anchor + slack
+   AND ≤ current-end + `GROUPING_OFFICE_DIRECTION_SLACK_KM`), `GROUPING_RADIUS_KM`,
+   `MAX_ROAD_VS_STRAIGHT` zigzag guard, and the growth detour guard
+   `GROWTH_MAX_DETOUR_KM = 2` (skip a candidate whose end→home→office road is > 2 km
+   longer than end→office — it waits for corridor attach or another vehicle).
 4. Corridor attach can never insert before the far-first anchor (`nearestLegInsertion`
-   searches positions 1..seq.length only) — keep that too.
-5. After any change here: dry-run the real planner on real week data and assert every
-   route's order is strictly far → near by km; then `npx tsc --noEmit` + eslint, and tell
-   the user to re-run route generation so stored plans pick up the fix.
-6. **Amendment (user decision 2026-09-07):** far → near stays the GENERATOR default and is
-   never changed by code. Facilities may, per route, apply a shorter order proposed by the
+   searches positions 1..seq.length only) — keep that too. **A same-arrival employee
+   whose home is genuinely ON the drawn route still joins this vehicle via the attach
+   pass** (`CORRIDOR_ATTACH_KM = 0.8`, ≤ `CORRIDOR_MAX_DETOUR_MIN = 7` min) — the growth
+   detour guard never blocks an on-path pickup.
+5. After any change here: re-run generation on the real week and eyeball the drawn routes
+   (constantly follow the corridor, farthest first, no zigzag, stops 1–n stable when a
+   rider attaches); then `npx tsc --noEmit` + eslint, and tell the user to re-run route
+   generation so stored plans pick up the fix.
+6. **Amendment (user decision 2026-09-07):** the generator default above is never changed
+   by code. Facilities may, per route, apply a shorter order proposed by the
    **route analysis** (Auto Route Planner → Route map → Compare routes → Apply). That is an
    explicit human choice recorded as `RoutePlanOverride.changeType = "ROUTE_OPTIMIZED"`;
    the panel shows the far→near breaks of every candidate so the trade-off is visible.
@@ -68,12 +80,13 @@ task is touched, and overrides any "optimization" that would reorder stops other
   sequences; employees attach to the vehicle owning their active pickup point
   (`User.pickupAddressId`). Missing point ⇒ per-employee error, never a silent empty route.
 - **11 PM / 12 AM–6 AM** (`generateCorridorRoutes`): density clustering, cap 4,
-  `GROUPING_RADIUS_KM = 2.0`, `GROUPING_OFFICE_DIRECTION_SLACK_KM = 1.0`;
+  `GROUPING_RADIUS_KM = 2.0`, `GROUPING_OFFICE_DIRECTION_SLACK_KM = 1.0`,
+  `GROWTH_MAX_DETOUR_KM = 2` (growth detour guard, added 2026-09-11);
   farthest-from-office picked up first **by distance-matrix road km**
   (`member.toOfficeKm` — NOT minutes: road minutes invert for near homes,
-  one-way loops), route walks back to office, every route's final order
-  strictly far → near (final sort in `planCorridorRoutes`). Back-calc pickup
-  times anchored on arrival,
+  one-way loops), then the visit order IS the nearest-hop chain (nearest to the
+  previous stop, walking back to the office) — **no final far→near sort**
+  (removed 2026-09-11 per user decision). Back-calc pickup times anchored on arrival,
   then snapped to 5-min grid with ≥5 min gaps (wraps past midnight for late shifts).
 - `RoutePlan.arrivalTime` stores labels (`"10 PM"`, `"11 PM"`, `"12 AM"`, …, `"6 AM"`);
   `weeklyScheduleDay.arrivalTime` stores `"HH:mm"` (`"22:00"`, `"23:00"`, …).
@@ -87,6 +100,110 @@ task is touched, and overrides any "optimization" that would reorder stops other
   `C:\Users\HAMIM~1.GOL\AppData\Local\Temp\opencode\next-dev.log`.
 - **tsx scripts** need `import "dotenv/config"` at top; no top-level await (use `async main()`);
   temp scripts live in repo root (`_name.ts`) and are deleted after verifying.
+
+## Latest Session (2026-09-11e) — Fixed Arrival Employee: creation flow confirmed + Facilities can change arrival + breakdown badge
+**User asked "how to create a fixed-arrival employee profile"** and pasted the FIXED_ARRIVAL
+requirements. Audit result: role/enum/home/prefix, `/fixed-arrival/*` pages + layout, one-time
+picker (`saveFixedArrivalTime` locks once), `ensureFixedArrivalSchedules` (UTC week, APPROVED +
+Mon–Fri), `employeeRole` on generated trips, day-sheet amber badge, and role-accent amber —
+ALL already built (previous 2026-09-11 sessions; migration `20260911102412_fixed_arrival_employee_role`).
+**How to create:** Super Admin / Facilities → Add employee → pick "Fixed Arrival Employee" role
+(`createUserAction`/`bulkCreateUsersAction` accept any `ALL_ROLES`); employee signs in →
+`/fixed-arrival/dashboard` → My Schedule → one-time picker locks the arrival. Mapping then
+auto-includes them.
+**Two gaps found + built:**
+1. Generated-routes breakdown had no amber pill — added `Fixed arrival` badge in BOTH rows of
+   `components/facilities/auto-route-planner-client.tsx` (mobile `<li>` + desktop `<tr>`),
+   keyed on `trip.employeeRole === "FIXED_ARRIVAL"` (string, already in `GeneratedRouteTrip`).
+2. "Only Facilities can change it" had no path — `getEmployeeDirectory` was `role: EMPLOYEE` only
+   (fixed-arrival never appeared in User Info). Now: directory includes EMPLOYEE+`FIXED_ARRIVAL`
+   and returns `role`/`fixedArrivalTime`; `updateEmployeeProfileByFacilitiesAction` widens guard
+   to those roles and validates/clears `fixedArrivalTime` (normalized via arrival-times,
+   `NO_TRANSPORT_VALUE` → clears to null); `edit-employee-profile-dialog.tsx` shows a "Fixed
+   arrival time" select (options + "Not set") when role is FIXED_ARRIVAL — refactored to the
+   add-employee-dialog success-panel + resetKey pattern to fix a pre-existing react-hooks
+   `set-state-in-effect` lint error; user-info page passes the props + shows an amber tag.
+## Latest Session (2026-09-11f) — Planner maps: live reorder preview while dragging + Google-Maps-style route adjustment + taller maps
+**User 3-point request on the Generated routes breakdown map:** (1) maps must adjust the routing as rows are dragged,
+(2) Google-Maps-style drag-route-direction (click to add via points), (3) increase map height.
+**Built — no schema change** (all in `components/facilities/route-map.tsx`, `components/facilities/auto-route-planner-client.tsx`,
+`actions/route-analysis.actions.ts`, `lib/routing/route-analysis.types.ts`):
+- **Height:** map container `h-72` → `h-96` in `route-map.tsx` + the dynamic-import loading skeleton.
+- **Live drag preview:** module-level `activeDrag` (`{tripId,routeId}`) pinned at `dragStart`
+  (`dataTransfer.getData` is unreliable mid-drag); row `onDragOver` computes the prospective order via
+  `previewOrderOnRow` and only `setPreviewTripIds` when it actually changes; drag start also auto-opens the
+  map + kicks a first analysis if none loaded. While `isPreviewing`, `mapStops` are built from
+  `previewTripIds` (with `Object.fromEntries` — `Map` is a lucide icon in this file!), all candidate
+  geometry/headings/totals are suppressed so the map falls back to its own OSRM fetch
+  (`routeKey = route.id|preview-<ids>`), and an amber "Previewing the reordered route" banner shows.
+  Drop clears preview + persists via existing `reorderRouteTrips`. Cross-route drop keeps `moveTripHere`.
+- **Adjust mode:** "Adjust route" button (route editable only). `RouteMapClickCapture` (react-leaflet
+  `useMapEvents`) inserts a draggable `ViaPoint` on map click; via markers have a Popup "Remove via point".
+  The map re-routes `[...stops, ...viaPoints, office]` through OSRM (cached by `adjustKey` incl. vias),
+  draws it **amber** (`#F59E0B`, weight 5), hides arrows/chips/ghost/candidate geometry while adjusting,
+  shows "Re-routing…" while stale (`adjustStale = adjustDrawnKey !== adjustKey`), and reports results via
+  `onAdjustReady(geometry, totals)`. Save → `saveManualGeometryAdjustment` persists a new **"manual"**
+  candidate (copy of the applied/current candidate: same `order`/`stops`, updated `metrics.durationMin|distanceKm`,
+  `score + 1`), sets `appliedCandidateId = "manual"`, writes `RoutePlanOverride changeType
+  "ROUTE_GEOMETRY_ADJUST"` (before/after JSON incl. viaPoints+totals), revalidates planner pages.
+  Cancel clears via points. Compare panel hidden while adjusting.
+- **Refactor learnings:** spread `{...analysis}` off a narrowed Prisma JsonValue throws TS2698 →
+  rebuild the JSON object field-by-field. `new Map()` collides with the `Map` lucide icon (file-wide).
+  The project's eslint treats `react-hooks/set-state-in-effect` as an **error** → setState only inside
+  promise callbacks / event handlers (no synchronous setState in effects). Child effect deps must be
+  stable `useCallback` handlers (or the onAdjustReady feedback loop spins forever).
+- **Candidate defaults:** `preferredCandidate(route)` now honors `appliedCandidateId` ("current" |
+  "current_sided" | "optimized" | "manual") instead of always "current"; fresh `runAnalysis` resets to "current".
+Verified: `npx tsc --noEmit` clean, eslint `--max-warnings=0` clean, `/facilities/automated-route-planner`
++ `/facilities/route-planning` → 200, no Prisma migration. Uncommitted.
+
+## Latest Session (2026-09-11d) — Corridor ORDER rewrite: nearest-hop chain, no far→near sort, 2 km growth detour guard
+Facilities reported the drawn 11 PM routes zigzag / don't pick nearest-next, and a 4th rider
+"force-assigned" scrambled a route that was first drawn (vehicle Dhaka-Metro-Cha-19-3742,
+8/3/26: stop 2 was the 2nd-farthest, but the house NEAREST to stop 1 should have been stop 2).
+Root cause + fix (all in `lib/routing/algorithms.ts` → `planCorridorRoutes`):
+1. **Deleted the final `route.order.sort(... by toOfficeKm desc)`** — the visit order is now
+   exactly the nearest-hop chain the planner grows: farthest anchor first, then each stop
+   NEAREST (by road minutes) to the previous one. Drawn direction now follows the corridor.
+2. **Office-direction check now uses ROAD KM and compares to the CURRENT END stop too**
+   (`m.toOfficeKm ≤ end.toOfficeKm + SLACK` AND ≤ `anchor.toOfficeKm + SLACK`) — kills the
+   per-hop zigzag; anchor distance now `anchor.toOfficeKm` (was haversine).
+3. **New `GROWTH_MAX_DETOUR_KM = 2` guard**: a candidate whose end→home→office road is more
+   than 2 km longer than end→office is SKIPPED (break) and left for corridor attach (judged
+   on real OSRM geometry, ≤ CORRIDOR_ATTACH_KM 0.8 / CORRIDOR_MAX_DETOUR_MIN 7) or a later
+   vehicle. On-path same-arrival homes always pass (tiny detour) and still join via attach.
+Verified: `npx tsc --noEmit` clean, `npx eslint lib/routing/algorithms.ts --max-warnings=0`
+clean, 19/19 unit tests pass, `/facilities/automated-route-planner` 200. Re-check the
+8/3/26 + 2026-08-24 drawn routes after the user re-runs mapping. CORE INSTRUCTION updated
+to match (previously mandated re-adding the sort — do NOT bring it back).
+
+## Latest Session (2026-09-11c) — Checklist completed: drag rows + editable pick-up times + per-vehicle Finalize in Generated routes, old route-sheet deleted
+**User asked "how much of this is fulfilled, build the remaining":** (1) vehicles-wise employee row dragging in the
+"Generated routes — Day & vehicle breakdown" breakdown (after mapping), deleting the previous route-sheet drag on
+Pick Schedule; (2) generated pick-up times must be editable; (3) a **Finalize** button per vehicle so the schedule
+goes draft → finalized. Assessment: the planner client (`auto-route-planner-client.tsx`) already had the handler
+FUNCTIONS but they were NOT wired into the rows (dead code), and the old `schedule-sheet.tsx` drag was removed.
+Built the rest; tsc + eslint clean; `/facilities/automated-route-planner` + `/facilities/route-planning` both 200.
+1. **Wired the sheet interactions** into `GeneratedRouteCard` (desktop table `<tr>` + mobile `<li>`):
+   - **Drag a row** → `rowDragProps` (draggable, grip icon, `cursor-grab`): drop on another row of the SAME
+     vehicle = `reorderRouteTrips` (sequence + pickup-time recalc from the arrival window); drop on a row of a
+     DIFFERENT vehicle (or its header, `cardDropProps` highlight) = `moveTripToRoute` (validates same day +
+     same arrival window + capacity, re-times source & target). Drag source travels in the HTML5 `dataTransfer`
+     JSON payload (`readDragPayload`) — NO shared React state/ref (avoids `react-hooks/refs`/`immutability` lint).
+   - **Editable pick-up time** → `timeEditor` (inline `<Input>`, blur/Enter saves via `adjustPickupTime`, resets
+     `emailSentAt` so re-finalize re-sends). Client + server normalize "9:05" → "09:05"; server regex now accepts
+     1–2 digit hours (was `HH:mm`-only, "9:30" would error).
+   - **Finalize button** per vehicle card (DRAFT/UNDER_REVIEW only) → `finalizeRoute` (status → FINALIZED,
+     emails riders in `after()`). New in-line `sheetMessage` banner shows ok/error for all sheet actions.
+2. **Draft = the working sheet, Finalize = the commit/lock:** `editable = status is DRAFT|UNDER_REVIEW`. Client
+   disables drag grips + time inputs when locked; server `adjustPickupTime`/`reorderRouteTrips`/`moveTripToRoute`
+   reject non-draft routes with a clear message (draft → finalize → locked). Header `title` reflects the lock.
+3. **"Delete previous one" completed:** `components/facilities/schedule-sheet.tsx` deleted; Pick Schedule page +
+   `getScheduleSheet` removed from `lib/queries/route-planning.ts` (leftover type exports deleted); the 3 old
+   sheet actions (`updateSheetPickupTime`/`moveSheetAssignment`/`swapSheetAssignments` + `SheetMutationState`/
+   `normalizeSheetPickupTime`/`assignmentForDay` helpers) deleted from `actions/route-assignment.actions.ts`.
+4. Note: this session's diff rides ON TOP of uncommitted work from an earlier same-day session (fixed-arrival role
+   + planner drag handlers). Re-run RUN MAPPING to get fresh DRAFT plans, then edit/drag/finalize per vehicle.
 
 ## Latest Session (2026-09-11) — Route sheet drag-drop, analyzer rename, one-way late-night map, teaching bridge + diagnostics
 **User (4 items, confirmed via questions):** (A) spreadsheet-style schedule: rows editable pick-up time, drag full row between vehicles; (B) analyzer shows only "Current (as drawn)" + optimized renamed by what it improves, remove Backtrack/Score columns; (C) 12 AM–6 AM map draws employee→office ONLY (hide office→first leg AND the departure chip); (D) fix pick-up times not following taught data + full "why this time" diagnostics.

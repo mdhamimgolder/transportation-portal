@@ -5,6 +5,11 @@ import { prisma } from "@/lib/prisma";
 import { requireRole } from "@/lib/rbac/guards";
 import { Role, OFFICE_LOCATIONS } from "@/lib/constants/enums";
 import type { OfficeLocation } from "@/lib/constants/enums";
+import {
+  ARRIVAL_TIME_OPTIONS,
+  NO_TRANSPORT_VALUE,
+  normalizeArrivalTimeInput,
+} from "@/lib/constants/arrival-times";
 
 export type UpdateEmployeeProfileState = {
   error?: string;
@@ -191,8 +196,30 @@ export async function updateEmployeeProfileByFacilitiesAction(
   }
 
   const employee = await prisma.user.findUnique({ where: { id: userId } });
-  if (!employee || employee.role !== Role.EMPLOYEE) {
+  if (
+    !employee ||
+    (employee.role !== Role.EMPLOYEE && employee.role !== Role.FIXED_ARRIVAL)
+  ) {
     return { error: "Employee not found." };
+  }
+
+  // Fixed-arrival employees lock their arrival time once; only Facilities can
+  // change it afterwards. The select always carries a value: a valid arrival
+  // time, or the "Not required / not set" sentinel which clears the field.
+  const fixedArrivalRaw = formData.get("fixedArrivalTime");
+  const fixedArrivalNormalized = normalizeArrivalTimeInput(
+    typeof fixedArrivalRaw === "string" ? fixedArrivalRaw : ""
+  );
+  if (employee.role === Role.FIXED_ARRIVAL) {
+    if (!fixedArrivalNormalized) {
+      return { error: "Please pick a valid fixed arrival time (10 PM through 6 AM)." };
+    }
+    if (
+      fixedArrivalNormalized !== NO_TRANSPORT_VALUE &&
+      !ARRIVAL_TIME_OPTIONS.some((o) => o.value === fixedArrivalNormalized)
+    ) {
+      return { error: "Invalid fixed arrival time." };
+    }
   }
 
   // Employee ID is unique in the database — catch collisions with a friendly
@@ -229,10 +256,18 @@ export async function updateEmployeeProfileByFacilitiesAction(
       officeLocation,
       homeAddressId: homeAddress.id,
       pickupAddressId: pickupAddress.id,
+      ...(employee.role === Role.FIXED_ARRIVAL
+        ? {
+            fixedArrivalTime:
+              fixedArrivalNormalized === NO_TRANSPORT_VALUE ? null : fixedArrivalNormalized,
+          }
+        : {}),
     },
   });
 
   revalidatePath("/facilities/user-info");
   revalidatePath("/employee/profile");
+  revalidatePath("/fixed-arrival/my-schedule");
+  revalidatePath("/fixed-arrival/dashboard");
   return { success: true };
 }

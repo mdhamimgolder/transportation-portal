@@ -3,7 +3,8 @@
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { requireRole } from "@/lib/rbac/guards";
-import { Role } from "@/lib/constants/enums";
+import { Role, WeeklyScheduleStatus } from "@/lib/constants/enums";
+import { ARRIVAL_TIME_OPTIONS } from "@/lib/constants/arrival-times";
 import {
   getMondayOfWeek,
   getWeekDays,
@@ -54,6 +55,72 @@ function parseDayString(value: string): Date {
  * UTC (`weekStartDate`, `weeklyScheduleDay.date`), so week-boundary lookups
  * must compare against UTC-midnight values regardless of the server's timezone.
  * (Shared implementation: lib/date/week.ts.) */
+
+const ARRIVAL_VALUE_LABELS = Object.fromEntries(
+  ARRIVAL_TIME_OPTIONS.map((o) => [o.value, o.label])
+);
+
+/**
+ * Fixed-arrival employees (role FIXED_ARRIVAL) do not submit weekly
+ * schedules — their one-time arrival choice on the User row is their standing
+ * request. Before any mapping run, upsert an APPROVED weekly schedule plus
+ * needs-transport days (Mon-Fri) for each of them, so the regular generators
+ * pick them up by pickup point / home address automatically. Idempotent —
+ * safe to call on every RUN MAPPING re-run.
+ */
+async function ensureFixedArrivalSchedules(weekStartDate: Date): Promise<number> {
+  const fixedUsers = await prisma.user.findMany({
+    where: {
+      role: Role.FIXED_ARRIVAL,
+      fixedArrivalTime: { not: null },
+      isActive: true,
+    },
+    select: { id: true, fixedArrivalTime: true },
+  });
+  if (fixedUsers.length === 0) return 0;
+
+  const weekDates = getWeekDays(weekStartDate);
+  let ensured = 0;
+  for (const user of fixedUsers) {
+    const arrivalTime = user.fixedArrivalTime;
+    if (!arrivalTime) continue;
+    const schedule = await prisma.weeklySchedule.upsert({
+      where: {
+        employeeId_weekStartDate: { employeeId: user.id, weekStartDate },
+      },
+      update: {},
+      create: {
+        employeeId: user.id,
+        weekStartDate,
+        status: WeeklyScheduleStatus.APPROVED,
+      },
+    });
+    for (let dayOfWeek = 1; dayOfWeek <= 5; dayOfWeek++) {
+      await prisma.weeklyScheduleDay.upsert({
+        where: {
+          weeklyScheduleId_dayOfWeek: {
+            weeklyScheduleId: schedule.id,
+            dayOfWeek,
+          },
+        },
+        update: {
+          arrivalTime,
+          needsTransport: true,
+          date: weekDates[dayOfWeek - 1],
+        },
+        create: {
+          weeklyScheduleId: schedule.id,
+          dayOfWeek,
+          date: weekDates[dayOfWeek - 1],
+          arrivalTime,
+          needsTransport: true,
+        },
+      });
+      ensured++;
+    }
+  }
+  return ensured;
+}
 
 /** Minutes-from-midnight reference for each arrival label (same day for 10/11
  * PM; late-night labels fall on the following calendar day, so 1440 + shift). */
@@ -115,6 +182,10 @@ export async function generateWeeklyRoutes(
     }
 
     const weekStartDate = toUtcMidnight(getMondayOfWeek(parsed));
+
+    // Fixed-arrival employees ride every mapped week at their locked arrival
+    // time — upsert their standing schedule days before generating.
+    await ensureFixedArrivalSchedules(weekStartDate);
 
     // Auto-"Learn from history": every mapping run first rebuilds the learned
     // pickup-gap set from all historical route plans, so the fresh plan uses
@@ -400,6 +471,8 @@ export interface GeneratedRouteTrip {
   pickupTime: string | null;
   employeeName: string;
   employeeCode: string | null;
+  /** Role of the employee ("FIXED_ARRIVAL" rows highlight amber in the sheet). */
+  employeeRole: string;
   pickupType: string;
   pickupLocationLabel: string | null;
   pickupLat: number | null;
@@ -574,6 +647,7 @@ export async function getGeneratedRouteDetails(
           pickupTime: t.pickupTime,
           employeeName: t.employee.fullName,
           employeeCode: t.employee.employeeCode,
+          employeeRole: t.employee.role,
           pickupType: t.pickupType,
           pickupLocationLabel,
           pickupLat:

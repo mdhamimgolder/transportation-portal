@@ -5,7 +5,15 @@
 
 import type { RouteMetrics } from "./side-selection";
 
-export type CandidateId = "current" | "current_sided" | "optimized";
+export type CandidateId = "current" | "current_sided" | "optimized" | "manual";
+
+/** A user-dropped via point on the map that bends the driven path through it
+ * (Google-Maps-style route adjustment). `sequence` groups drag gestures;
+ * persisted inside RoutePlanOverride.afterState and the analysis candidates. */
+export interface ViaPoint {
+  lat: number;
+  lng: number;
+}
 
 /** One physical stop on the route (several employees may share it). */
 export interface AnalysisWaypoint {

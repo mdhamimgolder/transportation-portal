@@ -1,4 +1,4 @@
-import "server-only";
+﻿import "server-only";
 import { prisma } from "@/lib/prisma";
 import { formatShortDate } from "@/lib/date/week";
 import { WeeklyScheduleStatus } from "@/lib/constants/enums";
@@ -46,6 +46,8 @@ export type DaySheetRow = {
   pickupTime: string;
   vehicleNumber: string;
   emailStatus: DaySheetEmailStatus | null;
+  /** FIXED_ARRIVAL employees ride every week — highlighted amber in the sheet. */
+  isFixedArrival: boolean;
 };
 
 export type DaySheetData = {
@@ -59,130 +61,6 @@ export type DaySheetData = {
  * profile fields come straight from the employee record; pickupTime/
  * vehicleNumber reflect any assignment already saved.
  */
-export type ScheduleSheetRow = {
-  weeklyScheduleDayId: string;
-  employeeName: string;
-  employeeCode: string | null;
-  address: string | null;
-  pickupPoint: string | null;
-  requestedArrivalLabel: string | null;
-  pickupTime: string;
-  emailStatus: DaySheetEmailStatus | null;
-};
-
-export type ScheduleSheetVehicle = {
-  vehicleDriverId: string;
-  vehicleNumber: string;
-  driverName: string;
-  contactNumber: string;
-  rows: ScheduleSheetRow[];
-};
-
-export type ScheduleSheetData = {
-  weekLabel: string | null;
-  /** One card per active vehicle (empty cards are drag-drop targets too). */
-  vehicles: ScheduleSheetVehicle[];
-  unassigned: ScheduleSheetRow[];
-};
-
-/**
- * The same day-first planning data as `getDaySheet`, grouped under vehicle
- * cards for the drag-and-drop route sheet: every employee row sits in its
- * vehicle's list (or the unassigned list), ordered by pick-up time.
- */
-export async function getScheduleSheet(
-  dayOfWeek: number,
-  arrivalTimeLabels: Record<string, string>
-): Promise<ScheduleSheetData> {
-  const latest = await prisma.weeklySchedule.findFirst({
-    where: { status: WeeklyScheduleStatus.APPROVED },
-    orderBy: { weekStartDate: "desc" },
-    select: { weekStartDate: true },
-  });
-  if (!latest) {
-    return { weekLabel: null, vehicles: [], unassigned: [] };
-  }
-
-  const [vehicles, days] = await Promise.all([
-    prisma.vehicleDriver.findMany({
-      where: { isActive: true },
-      orderBy: { vehicleNumber: "asc" },
-    }),
-    prisma.weeklyScheduleDay.findMany({
-      where: {
-        dayOfWeek,
-        needsTransport: true,
-        weeklySchedule: {
-          status: WeeklyScheduleStatus.APPROVED,
-          weekStartDate: latest.weekStartDate,
-        },
-      },
-      include: {
-        weeklySchedule: { include: { employee: true } },
-        routeAssignment: {
-          include: {
-            vehicleDriver: true,
-            emailLogs: { orderBy: { createdAt: "desc" }, take: 1 },
-          },
-        },
-      },
-    }),
-  ]);
-
-  const byVehicle = new Map<string, ScheduleSheetRow[]>();
-  for (const v of vehicles) byVehicle.set(v.id, []);
-  const unassigned: ScheduleSheetRow[] = [];
-
-  const toRow = (d: (typeof days)[number]): ScheduleSheetRow => {
-    const log = d.routeAssignment?.emailLogs[0];
-    let emailStatus: DaySheetEmailStatus | null = null;
-    if (d.routeAssignment) {
-      emailStatus = log
-        ? (log.status as DaySheetEmailStatus)
-        : d.routeAssignment.emailSentAt
-          ? "SENT"
-          : "NOT_SENT";
-    }
-    return {
-      weeklyScheduleDayId: d.id,
-      employeeName: d.weeklySchedule.employee.fullName,
-      employeeCode: d.weeklySchedule.employee.employeeCode,
-      address: d.weeklySchedule.employee.address,
-      pickupPoint: d.weeklySchedule.employee.pickupPoint,
-      requestedArrivalLabel: d.arrivalTime
-        ? arrivalTimeLabels[d.arrivalTime] ?? d.arrivalTime
-        : null,
-      pickupTime: d.routeAssignment?.pickupTime ?? "",
-      emailStatus,
-    };
-  };
-
-  for (const d of days) {
-    const row = toRow(d);
-    const vid = d.routeAssignment?.vehicleDriverId;
-    if (vid && byVehicle.has(vid)) byVehicle.get(vid)!.push(row);
-    else unassigned.push(row);
-  }
-
-  const time = (r: ScheduleSheetRow) => (r.pickupTime ? r.pickupTime : "99:99");
-  const byPickupTime = (a: ScheduleSheetRow, b: ScheduleSheetRow) =>
-    time(a).localeCompare(time(b));
-
-  const vehiclesOut: ScheduleSheetVehicle[] = vehicles.map((v) => ({
-    vehicleDriverId: v.id,
-    vehicleNumber: v.vehicleNumber,
-    driverName: v.driverName,
-    contactNumber: v.contactNumber,
-    rows: (byVehicle.get(v.id) ?? []).sort(byPickupTime),
-  }));
-
-  return {
-    weekLabel: `Week of ${formatShortDate(latest.weekStartDate)}`,
-    vehicles: vehiclesOut,
-    unassigned: unassigned.sort(byPickupTime),
-  };
-}
-
 export async function getDaySheet(
   dayOfWeek: number,
   arrivalTimeLabels: Record<string, string>
@@ -242,6 +120,7 @@ export async function getDaySheet(
       pickupTime: d.routeAssignment?.pickupTime ?? "",
       vehicleNumber: d.routeAssignment?.vehicleDriver.vehicleNumber ?? "",
       emailStatus,
+      isFixedArrival: d.weeklySchedule.employee.role === "FIXED_ARRIVAL",
     };
   });
 

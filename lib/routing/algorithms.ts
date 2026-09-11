@@ -5,8 +5,8 @@
  *           their pickup point is one of that vehicle's points.
  *  - 11 PM: Corridor path routing — each route is anchored at the passenger
  *           FARTHEST from the office (distance-matrix road km — minutes can
- *           invert near homes) and walks back toward it, one stop at a time
- *           far → near; remaining homes near the already-planned path are
+ *           invert near homes) and walks back toward it one nearest hop at a
+ *           time; remaining homes near the already-planned path are
  *           attached to it (bounded detour), and a second vehicle only opens
  *           when no planned route has a spare seat. Pickup times
  *           back-calculated so the vehicle reaches the office by 11 PM.
@@ -57,9 +57,10 @@ const DYNAMIC_GROUP_CAPACITY = 4;
  * vehicle — nearby addresses ride together. Anyone farther is left for a
  * later vehicle. */
 const GROUPING_RADIUS_KM = 2.0;
-/** A member may sit up to this far (km) beyond the group's anchor in
- * straight-line distance-from-office and still join — the far-first ordering
- * then walks the route back toward the office. */
+/** A member may sit up to this far (km) beyond the group's anchor in road
+ * distance-from-office and still join — the nearest-hop ordering then walks
+ * the route back toward the office, never farther than the anchor (nor more
+ * than this beyond the current end stop). */
 const GROUPING_OFFICE_DIRECTION_SLACK_KM = 1.0;
 /** After a route's path exists, a remaining employee whose home sits within
  * this distance of one of the route's legs' ACTUAL DRIVING geometry (OSRM
@@ -75,6 +76,14 @@ const CORRIDOR_ATTACH_KM = 0.8;
  * off the created path (Kalachandpur side trip) adds ~7.5 min and must be
  * skipped — it rides another vehicle instead. */
 const CORRIDOR_MAX_DETOUR_MIN = 7;
+/** When growing a path, the next pickup may not add more than this much ROAD
+ * distance over driving straight to the office (end → home → office vs end →
+ * office). A home that truly sits on the created path's way detours far less
+ * than this and always passes; a house on a dead-end street / side trip (or a
+ * barrier reroute) stretches the drawn route instead, so it is skipped here
+ * and left for the corridor-attach pass (judged against the real driving
+ * geometry) or a later vehicle. */
+const GROWTH_MAX_DETOUR_KM = 2;
 /** Zigzag guard for path growth: a hop whose ROAD distance exceeds this
  * factor of the straight-line distance crosses a barrier (highway, rail
  * line, lake, one-way loop) — grouping such homes would force the vehicle to
@@ -247,9 +256,11 @@ type ClusterMember = {
   matrixIndex: number; // index within the [office, ...homes] matrix
   toOfficeMin: number;
   /** Road distance (km) from the home to the office via the distance
-   * matrix — the far-first ordering metric. Road MINUTES can invert for
-   * near homes (one-way loops, slow roads), so ordering is distance-based:
-   * farthest home first, then one by one far → near. */
+   * matrix — the anchor/ordering metric for corridor growth. Road MINUTES can
+   * invert for near homes (one-way loops, slow roads), so office-directness is
+   * judged by km: the farthest home opens its route, and every further hop may
+   * only move toward the office (never farther than the anchor or the current
+   * end stop, within the slack). */
   toOfficeKm: number;
 };
 
@@ -303,21 +314,29 @@ export type PlannedCorridorRoute = {
 /**
  * Path-based corridor planner for the dynamic shifts (11 PM / 12 AM-6 AM).
  *
- * 1. **Far-first paths.** Every route is anchored at the member FARTHEST
- *    from the office by distance-matrix road km, then extended one nearest
- *    hop at a time (each hop within `GROUPING_RADIUS_KM` of the current end,
- *    office-directed within `GROUPING_OFFICE_DIRECTION_SLACK_KM` of the
- *    anchor) until capacity. The final visiting order is strictly far →
- *    near by road km — the farthest home is always picked up first.
- * 2. **Corridor attach.** After each path exists, the remaining employees are
- *    swept: anyone whose home lies within `CORRIDOR_ATTACH_KM` of one of the
- *    route's legs — and whose insertion there adds at most
- *    `CORRIDOR_MAX_DETOUR_MIN` minutes — is attached AT THAT LEG. Existing
- *    stops keep their exact order (the created route is never restructured)
- *    and the far-first anchor can never be displaced: attachments start at
- *    the leg AFTER the anchor, so whoever is picked up first is always the
- *    farthest home. Anything that does not fit cleanly is left unassigned
- *    rather than changing the created route.
+ * 1. **Nearest-hop paths.** Every route is anchored at the member FARTHEST
+ *    from the office by distance-matrix road km — the farthest home is always
+ *    picked up first. The path then walks back toward the office one hop at a
+ *    time: each stop is the remaining member NEAREST (by road minutes) to the
+ *    current end, within `GROUPING_RADIUS_KM`, office-directed within
+ *    `GROUPING_OFFICE_DIRECTION_SLACK_KM` of BOTH the anchor and the current
+ *    end, and bounded by the zigzag guard (`MAX_ROAD_VS_STRAIGHT`). A
+ *    candidate whose pickup would extend the end → office drive by more than
+ *    `GROWTH_MAX_DETOUR_KM` of road is SKIPPED instead of lengthening the
+ *    drawn route — it waits for the corridor attach or a later vehicle. The
+ *    visiting order IS the grown chain and is never re-sorted, so the drawn
+ *    direction follows the road corridor.
+ * 2. **Corridor attach.** After each path exists, the remaining same-arrival
+ *    employees are swept: anyone whose home lies within `CORRIDOR_ATTACH_KM`
+ *    of one of the route's driving-geometry legs — and whose insertion there
+ *    adds at most `CORRIDOR_MAX_DETOUR_MIN` minutes — is attached AT THAT
+ *    LEG. Existing stops keep their exact order (the created route is never
+ *    restructured) and the far-first anchor can never be displaced:
+ *    attachments start at the leg AFTER the anchor. A home genuinely ON the
+ *    drawn route therefore rides this vehicle despite the growth detour
+ *    guard — it sits on the way, which is exactly the case that must join.
+ *    Anything that does not fit cleanly is left unassigned rather than
+ *    changing the created route.
  * 3. **Vehicle consolidation.** Vehicles fill to capacity SEQUENTIALLY: a
  *    second vehicle opens only when no planned route can take another
  *    passenger, so overlapping paths share one vehicle instead of running in
@@ -348,7 +367,6 @@ export async function planCorridorRoutes(args: {
     pool,
     allVehicles,
     officeKey,
-    office,
     arrivalLabel,
     dMin,
     dKm,
@@ -356,11 +374,12 @@ export async function planCorridorRoutes(args: {
   } = args;
   const errors: string[] = [];
 
-  // Far-first ordering by the DISTANCE MATRIX road km to the office (not
-  // minutes): the farthest home anchors the route and is picked up first,
-  // then the remaining homes come one by one, far → near. Minutes are only
-  // a tie-breaker — road minutes can invert for near homes (one-way loops,
-  // slow roads), which put a far home in the second stop (Cha-19-9425 bug).
+  // Anchor candidates by DISTANCE MATRIX road km to the office (not minutes):
+  // this only decides WHO OPENS each route — the farthest home takes the first
+  // seat. The visiting order below is NOT this list, it is grown hop-by-hop
+  // (farthest first, then each stop NEAREST to the previous one, walking back
+  // toward the office), so the drawn direction follows the road corridor
+  // instead of hopping far → near by office km.
   const remaining = [...members].sort(
     (a, b) => b.toOfficeKm - a.toOfficeKm || b.toOfficeMin - a.toOfficeMin
   );
@@ -483,12 +502,7 @@ export async function planCorridorRoutes(args: {
     // is picked up first; the path then walks back toward the office one
     // nearest hop at a time.
     const anchor = remaining.shift()!;
-    const anchorToOfficeKm = haversineDistance(
-      anchor.home.latitude,
-      anchor.home.longitude,
-      office.lat,
-      office.lng
-    );
+    const anchorToOfficeKm = anchor.toOfficeKm;
     const order: ClusterMember[] = [anchor];
     const capacity = capacityFor(vehicle);
 
@@ -500,14 +514,19 @@ export async function planCorridorRoutes(args: {
 
       for (let i = 0; i < remaining.length; i++) {
         const m = remaining[i];
-        const mToOfficeKm = haversineDistance(
-          m.home.latitude,
-          m.home.longitude,
-          office.lat,
-          office.lng
-        );
+        // Office-directed chain, in ROAD km (the ordering metric — road
+        // MINUTES can invert for near homes): a hop may not move farther from
+        // the office than the current end stop, nor farther than the anchor.
+        // Both keep the "farthest first, then nearest, walking back toward
+        // the office" rule exact at every step.
         if (
-          mToOfficeKm >
+          m.toOfficeKm >
+          end.toOfficeKm + GROUPING_OFFICE_DIRECTION_SLACK_KM
+        ) {
+          continue;
+        }
+        if (
+          m.toOfficeKm >
           anchorToOfficeKm + GROUPING_OFFICE_DIRECTION_SLACK_KM
         ) {
           continue;
@@ -546,23 +565,25 @@ export async function planCorridorRoutes(args: {
         best.home.longitude
       );
       if (bestStraightKm > GROUPING_RADIUS_KM) break;
+
+      // Detour guard for the growth hop: taking this employee must not
+      // lengthen the end → office drive by more than GROWTH_MAX_DETOUR_KM of
+      // road. A home that genuinely sits on the route's own way detours far
+      // less than that and always passes; a side-street / dead-end home (or a
+      // barrier reroute) stretches the drawn route instead — skip it here. It
+      // is still offered to the corridor-attach pass (judged on the REAL
+      // driving geometry, with its own 7-minute cap) and to later vehicles.
+      const growDetourKm =
+        dKm(end.matrixIndex, best.matrixIndex) +
+        best.toOfficeKm -
+        end.toOfficeKm;
+      if (growDetourKm > GROWTH_MAX_DETOUR_KM) break;
+
       order.push(best);
       remaining.splice(bestIdx, 1);
     }
 
     routes.push({ order, vehicle, capacity });
-  }
-
-  // Final guarantee of the far-first rule: within EVERY route the pickup
-  // sequence runs strictly far → near by distance-matrix road km. Grouping
-  // (corridor path + attach) decides WHO rides together; this sort decides
-  // the visiting order, so a nearer home can never be picked up ahead of a
-  // farther one — no matter how the path was grown or where an attach
-  // landed.
-  for (const route of routes) {
-    route.order.sort(
-      (a, b) => b.toOfficeKm - a.toOfficeKm || b.toOfficeMin - a.toOfficeMin
-    );
   }
 
   return { routes, errors };

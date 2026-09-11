@@ -75,6 +75,14 @@ export default async function FacilitiesUserInfoPage({
                 <TableRow key={employee.id}>
                   <TableCell className="sticky left-0 z-10 bg-card font-medium">
                     {employee.fullName}
+                    {employee.role === "FIXED_ARRIVAL" ? (
+                      <span
+                        className="ml-1.5 inline-flex rounded-full bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium text-amber-600"
+                        title="Fixed-arrival employee"
+                      >
+                        Fixed arrival
+                      </span>
+                    ) : null}
                   </TableCell>
                   <TableCell>{employee.employeeCode ?? "—"}</TableCell>
                   <TableCell>{employee.department ?? "—"}</TableCell>
@@ -115,6 +123,8 @@ export default async function FacilitiesUserInfoPage({
                         homeLongitude={employee.homeLongitude}
                         pickupLatitude={employee.pickupLatitude}
                         pickupLongitude={employee.pickupLongitude}
+                        role={employee.role}
+                        fixedArrivalTime={employee.fixedArrivalTime}
                       />
                       <SetPasswordDialog userId={employee.id} fullName={employee.fullName} />
                       <ResendCredentialsDialog userId={employee.id} fullName={employee.fullName} />

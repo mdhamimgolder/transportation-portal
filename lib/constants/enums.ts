@@ -4,6 +4,7 @@ export const Role = {
   OPERATIONS: "OPERATIONS",
   FACILITIES: "FACILITIES",
   CORPORATE_EMPLOYEE: "CORPORATE_EMPLOYEE",
+  FIXED_ARRIVAL: "FIXED_ARRIVAL",
 } as const;
 export type Role = (typeof Role)[keyof typeof Role];
 
@@ -13,6 +14,7 @@ export const ALL_ROLES: Role[] = [
   Role.OPERATIONS,
   Role.FACILITIES,
   Role.CORPORATE_EMPLOYEE,
+  Role.FIXED_ARRIVAL,
 ];
 
 export const OfficeLocation = {
@@ -34,6 +36,7 @@ export const ROLE_LABELS: Record<Role, string> = {
   OPERATIONS: "Operation-Admin",
   FACILITIES: "Facilities",
   CORPORATE_EMPLOYEE: "Operation-Corporate Employee",
+  FIXED_ARRIVAL: "Fixed Arrival Employee",
 };
 
 export const WeeklyScheduleStatus = {
@@ -84,6 +87,7 @@ export const ROLE_HOME: Record<Role, string> = {
   OPERATIONS: "/operations/dashboard",
   FACILITIES: "/facilities/dashboard",
   CORPORATE_EMPLOYEE: "/corporate-employee/dashboard",
+  FIXED_ARRIVAL: "/fixed-arrival/dashboard",
 };
 
 export const ROLE_PATH_PREFIX: Record<Role, string> = {
@@ -92,4 +96,5 @@ export const ROLE_PATH_PREFIX: Record<Role, string> = {
   OPERATIONS: "/operations",
   FACILITIES: "/facilities",
   CORPORATE_EMPLOYEE: "/corporate-employee",
+  FIXED_ARRIVAL: "/fixed-arrival",
 };

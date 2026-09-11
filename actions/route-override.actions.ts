@@ -6,6 +6,11 @@ import { prisma } from "@/lib/prisma";
 import { requireRole } from "@/lib/rbac/guards";
 import { Role } from "@/lib/constants/enums";
 import { sendMailBackground } from "@/lib/mailer";
+import { arrivalMinutesForLabel } from "@/lib/constants/route-shifts";
+import { officeCoordinatesFor } from "@/lib/constants/office-locations";
+import { loadLearnedLegs, LEARN_MIN_SAMPLES } from "@/lib/routing/pickup-schedule";
+import { backCalculatePickupMinutes } from "@/lib/routing/schedule-math";
+import { haversineDistance, minutesToTimeString } from "@/lib/routing/utils";
 
 /**
  * Reassign an employee to a different vehicle
@@ -126,17 +131,37 @@ export async function adjustPickupTime(
       },
     });
 
-    // Validate time format
-    if (!/^\d{2}:\d{2}$/.test(newPickupTime)) {
-      throw new Error("Invalid time format. Use HH:mm");
+    // Only draft routes are the editable "working copy" — finalized schedules
+    // are locked once Facilities commits them (finalize sends the emails).
+    if (
+      currentAssignment.routePlan.status !== "DRAFT" &&
+      currentAssignment.routePlan.status !== "UNDER_REVIEW"
+    ) {
+      throw new Error(
+        `This route is ${currentAssignment.routePlan.status}. Only draft routes can have pick-up times edited.`
+      );
     }
+
+    // Validate time format ("9:05" and "21:05" both accepted; stored "HH:mm").
+    const timeMatch = /^(\d{1,2}):(\d{2})$/.exec(newPickupTime.trim());
+    if (!timeMatch) {
+      throw new Error("Invalid time format. Use HH:mm (e.g. 21:05)");
+    }
+    const hours = Number(timeMatch[1]);
+    const minutes = Number(timeMatch[2]);
+    if (hours > 23 || minutes > 59) {
+      throw new Error("Invalid time format. Use HH:mm (e.g. 21:05)");
+    }
+    const pickupTime = `${String(hours).padStart(2, "0")}:${String(
+      minutes
+    ).padStart(2, "0")}`;
 
     const beforeState = {
       pickupTime: currentAssignment.pickupTime,
     };
 
     const afterState = {
-      pickupTime: newPickupTime,
+      pickupTime,
     };
 
     await prisma.routePlanOverride.create({
@@ -154,7 +179,7 @@ export async function adjustPickupTime(
     const updated = await prisma.tripAssignment.update({
       where: { id: tripAssignmentId },
       data: {
-        pickupTime: newPickupTime,
+        pickupTime,
         manuallyOverridden: true,
         emailSentAt: null, // Need to resend email with new time
       },
@@ -166,10 +191,11 @@ export async function adjustPickupTime(
     });
 
     revalidatePath("/facilities/route-planning");
+    revalidatePath("/facilities/automated-route-planner");
 
     return {
       success: true,
-      message: `Pickup time updated for ${updated.employee.fullName} to ${newPickupTime}`,
+      message: `Pickup time updated for ${updated.employee.fullName} to ${pickupTime}`,
       assignment: updated,
     };
   } catch (error) {
@@ -475,5 +501,329 @@ export async function getRouteDetails(routePlanId: string) {
         error instanceof Error ? error.message : String(error)
       }`
     );
+  }
+}
+
+// ── Route-sheet interactions (Generated routes breakdown) ───────────────────
+// Drag rows to reorder within a vehicle, drag onto another vehicle card to
+// move an employee between routes, and edit pickup times inline. Every change
+// re-times the affected route(s) from the learned pickup-gap set (with the
+// 5 min/km fallback) so the arrival window still holds.
+
+type LearnedLegRow = {
+  avgMinutes: number;
+  sampleCount: number;
+  min: number;
+  max: number;
+};
+
+type TimingPoint = {
+  tripId: string;
+  lat: number | null;
+  lng: number | null;
+  key: string | null;
+};
+
+/** "10 PM" → "10PM", "11 PM" → "11PM", anything else → "12AM-6AM". */
+function shiftKeyForLabel(label: string): string {
+  const norm = (label ?? "").toUpperCase().replace(/\s+/g, "");
+  if (norm === "10PM") return "10PM";
+  if (norm === "11PM") return "11PM";
+  return "12AM-6AM";
+}
+
+/** Drive minutes for one leg: learned median once it has >= 3 observations,
+ * otherwise straight-line km × 5 (the city-speed rule). */
+function legDriveMinutes(
+  a: TimingPoint,
+  b: TimingPoint,
+  learned: Map<string, LearnedLegRow>
+): number {
+  if (a.key && b.key) {
+    const entry = learned.get(`${a.key}->${b.key}`);
+    if (
+      entry &&
+      entry.sampleCount >= LEARN_MIN_SAMPLES &&
+      Number.isFinite(entry.avgMinutes) &&
+      entry.avgMinutes > 0
+    ) {
+      return Math.max(1, Math.round(entry.avgMinutes));
+    }
+  }
+  if (a.lat != null && a.lng != null && b.lat != null && b.lng != null) {
+    return Math.max(
+      1,
+      Math.ceil(haversineDistance(a.lat, a.lng, b.lat, b.lng) * 5)
+    );
+  }
+  return 5;
+}
+
+/**
+ * Recompute sequence + pickup times for a route from its current trip order.
+ * Legs: learned average if trusted, else distance × 5; times back-calculated
+ * from the route's arrival window on the 5-minute grid. Emails are invalidated
+ * (a re-finalize re-sends). Returns an error message, or null on success.
+ */
+async function retimeRoute(routePlanId: string): Promise<string | null> {
+  const plan = await prisma.routePlan.findUniqueOrThrow({
+    where: { id: routePlanId },
+    include: {
+      tripAssignments: {
+        include: {
+          pickupAddress: true,
+          pickupPoint: { include: { address: true } },
+        },
+      },
+    },
+  });
+  const trips = [...plan.tripAssignments].sort(
+    (a, b) => a.sequenceInTrip - b.sequenceInTrip
+  );
+  if (trips.length === 0) return null;
+
+  const arrivalMinutes = arrivalMinutesForLabel(plan.arrivalTime);
+  if (arrivalMinutes == null) {
+    return `Unknown arrival label "${plan.arrivalTime}".`;
+  }
+  const learned = await loadLearnedLegs(shiftKeyForLabel(plan.arrivalTime));
+
+  const points = trips.map((t) => {
+    const address =
+      t.pickupType === "PRESET_POINT"
+        ? t.pickupPoint?.address
+        : t.pickupAddress;
+    return {
+      tripId: t.id,
+      lat: address?.latitude ?? null,
+      lng: address?.longitude ?? null,
+      key: address ? `addr:${address.id}` : null,
+    } satisfies TimingPoint;
+  });
+  const officeName = plan.officeLocation ?? "Regnum";
+  const office = officeCoordinatesFor(officeName);
+
+  // Leg i = stop i -> stop i+1; the last leg = last stop -> office.
+  const legs: number[] = [];
+  for (let i = 0; i < points.length; i++) {
+    const next =
+      i < points.length - 1
+        ? points[i + 1]
+        : {
+            tripId: "__office__",
+            lat: office.lat,
+            lng: office.lng,
+            key: `office:${officeName}`,
+          };
+    legs.push(legDriveMinutes(points[i], next, learned));
+  }
+
+  let pickupMinutes: number[];
+  try {
+    pickupMinutes = backCalculatePickupMinutes(arrivalMinutes, legs);
+  } catch {
+    const total = legs.reduce((a, b) => a + b, 0);
+    return `This order takes ${total} min — longer than the ${plan.arrivalTime} window allows.`;
+  }
+
+  await prisma.$transaction(
+    trips.map((t, i) =>
+      prisma.tripAssignment.update({
+        where: { id: t.id },
+        data: {
+          sequenceInTrip: i + 1,
+          pickupTime: minutesToTimeString(pickupMinutes[i]),
+          emailSentAt: null,
+        },
+      })
+    )
+  );
+  return null;
+}
+
+/**
+ * Reorder the trips of one route (spreadsheet row drag within a vehicle).
+ * `orderedTripIds` must be a permutation of the route's current trip ids.
+ * Audited as a ROUTE_REORDERED override and re-timed from the arrival.
+ */
+export async function reorderRouteTrips(
+  routePlanId: string,
+  orderedTripIds: string[]
+): Promise<{ success: boolean; message?: string; error?: string }> {
+  try {
+    const session = await requireRole([Role.FACILITIES, Role.SUPER_ADMIN]);
+    const plan = await prisma.routePlan.findUnique({
+      where: { id: routePlanId },
+      include: { tripAssignments: { select: { id: true } } },
+    });
+    if (!plan) return { success: false, error: "Route not found." };
+    if (plan.status !== "DRAFT" && plan.status !== "UNDER_REVIEW") {
+      return {
+        success: false,
+        error: `This route is ${plan.status}. Only draft routes can be reordered.`,
+      };
+    }
+    const currentIds = plan.tripAssignments.map((t) => t.id);
+    const sameSet =
+      currentIds.length === orderedTripIds.length &&
+      new Set(orderedTripIds).size === orderedTripIds.length &&
+      currentIds.every((id) => orderedTripIds.includes(id));
+    if (!sameSet) {
+      return {
+        success: false,
+        error: "The row list does not match this route's employees.",
+      };
+    }
+
+    const before = currentIds.map((id) => ({ tripId: id }));
+    await prisma.$transaction(
+      orderedTripIds.map((id, i) =>
+        prisma.tripAssignment.update({
+          where: { id },
+          data: { sequenceInTrip: i + 1, manuallyOverridden: true },
+        })
+      )
+    );
+
+    await prisma.routePlanOverride.create({
+      data: {
+        routePlanId,
+        changedById: session.id,
+        changeType: "ROUTE_REORDERED",
+        beforeState: JSON.stringify({ order: before }),
+        afterState: JSON.stringify({ order: orderedTripIds }),
+        reason: "Reordered from the generated-routes breakdown.",
+      },
+    });
+
+    const retimeError = await retimeRoute(routePlanId);
+    if (retimeError) return { success: false, error: retimeError };
+
+    revalidatePath("/facilities/automated-route-planner");
+    revalidatePath("/facilities/route-planning");
+    return {
+      success: true,
+      message: "Row order updated and pickup times recalculated.",
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error:
+        error instanceof Error ? error.message : "Failed to reorder the route rows.",
+    };
+  }
+}
+
+/**
+ * Move an employee from one generated route to another (drag onto another
+ * vehicle's card). Only routes of the same day and same arrival window can be
+ * targets, so the employee's arrival time never silently changes. Both the
+ * source and the target are re-timed and their riders re-sequenced.
+ */
+export async function moveTripToRoute(
+  tripAssignmentId: string,
+  targetRoutePlanId: string
+): Promise<{ success: boolean; message?: string; error?: string }> {
+  try {
+    const session = await requireRole([Role.FACILITIES, Role.SUPER_ADMIN]);
+
+    const trip = await prisma.tripAssignment.findUniqueOrThrow({
+      where: { id: tripAssignmentId },
+      include: { routePlan: { include: { vehicle: true } }, employee: true },
+    });
+    const target = await prisma.routePlan.findUniqueOrThrow({
+      where: { id: targetRoutePlanId },
+      include: { vehicle: true, tripAssignments: { select: { id: true } } },
+    });
+
+    if (trip.routePlanId === targetRoutePlanId) {
+      return { success: false, error: "That row already rides this vehicle." };
+    }
+    if (
+      (trip.routePlan.status !== "DRAFT" &&
+        trip.routePlan.status !== "UNDER_REVIEW") ||
+      (target.status !== "DRAFT" && target.status !== "UNDER_REVIEW")
+    ) {
+      return {
+        success: false,
+        error:
+          "Only draft routes can be changed. Finalize commits the schedule — re-run mapping to start a fresh draft.",
+      };
+    }
+    if (trip.routePlan.dayDate.getTime() !== target.dayDate.getTime()) {
+      return { success: false, error: "Rows can only be moved within the same day." };
+    }
+    if (trip.routePlan.arrivalTime !== target.arrivalTime) {
+      return {
+        success: false,
+        error: `This vehicle runs the ${trip.routePlan.arrivalTime} shift — drop it on a ${trip.routePlan.arrivalTime} vehicle.`,
+      };
+    }
+
+    const isPreset = target.routeType === "PRESET_10PM";
+    const capacityLimit = isPreset
+      ? target.vehicle.capacity ?? 999
+      : Math.min(4, target.vehicle.capacity ?? 4);
+    if (target.tripAssignments.length >= capacityLimit) {
+      return {
+        success: false,
+        error: `Vehicle ${target.vehicle.vehicleNumber} is full (${target.tripAssignments.length}/${capacityLimit}).`,
+      };
+    }
+
+    const beforeState = {
+      routePlanId: trip.routePlanId,
+      vehicleId: trip.routePlan.vehicleId,
+      pickupTime: trip.pickupTime,
+      sequenceInTrip: trip.sequenceInTrip,
+    };
+    const afterState = {
+      routePlanId: targetRoutePlanId,
+      vehicleId: target.vehicleId,
+    };
+
+    await prisma.routePlanOverride.create({
+      data: {
+        routePlanId: trip.routePlanId,
+        changedById: session.id,
+        changeType: "VEHICLE_REASSIGN",
+        affectedEmployeeId: trip.employeeId,
+        beforeState: JSON.stringify(beforeState),
+        afterState: JSON.stringify(afterState),
+        reason: "Moved between vehicles from the generated-routes breakdown.",
+      },
+    });
+
+    await prisma.tripAssignment.update({
+      where: { id: tripAssignmentId },
+      data: {
+        routePlanId: targetRoutePlanId,
+        vehicleId: target.vehicleId,
+        manuallyOverridden: true,
+        emailSentAt: null,
+      },
+    });
+
+    const sourceError = await retimeRoute(trip.routePlanId);
+    const targetError = await retimeRoute(targetRoutePlanId);
+    const errors = [sourceError, targetError].filter(
+      (e) => e != null
+    ) as string[];
+    if (errors.length > 0) {
+      return { success: false, error: errors.join(" ") };
+    }
+
+    revalidatePath("/facilities/automated-route-planner");
+    revalidatePath("/facilities/route-planning");
+    return {
+      success: true,
+      message: `${trip.employee.fullName} moved to ${target.vehicle.vehicleNumber} — both routes re-timed.`,
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error:
+        error instanceof Error ? error.message : "Failed to move the employee.",
+    };
   }
 }

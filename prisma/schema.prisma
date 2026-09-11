@@ -28,6 +28,7 @@ model User {
   address       String? // free-text "live" value; changes flow through AddressChangeRequest
   pickupPoint   String? // designated pickup location for transport, editable directly by the employee
   officeLocation String? // Office location: "Regnum" or "Spectra" - set by Facilities when creating employee
+  fixedArrivalTime String? // FIXED_ARRIVAL role: the single standing arrival time ("22:00" .. "06:00"), locked until Facilities changes it
   homeAddressId String?
   pickupAddressId String?
   homeAddress Address? @relation("UserHomeAddress", fields: [homeAddressId], references: [id])

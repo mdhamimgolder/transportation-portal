@@ -48,4 +48,11 @@ export const ROLE_ACCENT: Record<
     hero: "from-[#0f3038]",
     rim: "border-[#70bccc]/40",
   },
+  FIXED_ARRIVAL: {
+    text: "text-[#f59e0b]",
+    dot: "bg-[#f59e0b]",
+    avatarBg: "bg-[#78350f]",
+    hero: "from-[#78350f]",
+    rim: "border-[#f59e0b]/40",
+  },
 };

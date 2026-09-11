@@ -149,14 +149,28 @@ export function RouteDaySheet({
 
               return (
                 <TableRow key={row.weeklyScheduleDayId}>
-                  <TableCell className="sticky left-0 z-10 bg-card font-medium whitespace-nowrap">
+                  <TableCell className="sticky left-0 z-10 font-medium whitespace-nowrap">
                     <input
                       type="hidden"
                       name="weeklyScheduleDayId"
                       value={row.weeklyScheduleDayId}
                     />
                     <input type="hidden" name="employeeName" value={row.employeeName} />
-                    {row.employeeName}
+                    <span
+                      className={
+                        row.isFixedArrival
+                          ? "inline-block rounded-md bg-amber-100 px-2 py-0.5 text-amber-900"
+                          : undefined
+                      }
+                      title={row.isFixedArrival ? "Fixed-arrival employee" : undefined}
+                    >
+                      {row.employeeName}
+                    </span>
+                    {row.isFixedArrival ? (
+                      <span className="ml-1.5 inline-flex rounded-full bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium text-amber-600">
+                        Fixed arrival
+                      </span>
+                    ) : null}
                   </TableCell>
                   <TableCell className="max-w-56 truncate text-muted-foreground">
                     {row.address ?? "—"}

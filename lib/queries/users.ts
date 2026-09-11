@@ -60,12 +60,14 @@ export type EmployeeDirectoryRow = {
   pickupLatitude: number | null;
   pickupLongitude: number | null;
   isActive: boolean;
+  role: Role;
+  fixedArrivalTime: string | null;
 };
 
 /** Read-only employee directory, used by Facilities' "User Info" page. */
 export async function getEmployeeDirectory(q?: string): Promise<EmployeeDirectoryRow[]> {
   const users = await prisma.user.findMany({
-    where: { role: "EMPLOYEE" },
+    where: { role: { in: ["EMPLOYEE", "FIXED_ARRIVAL" as Role] } },
     orderBy: { fullName: "asc" },
     include: { homeAddress: true, pickupAddress: true },
   });
@@ -85,6 +87,8 @@ export async function getEmployeeDirectory(q?: string): Promise<EmployeeDirector
     pickupLatitude: u.pickupAddress?.latitude ?? null,
     pickupLongitude: u.pickupAddress?.longitude ?? null,
     isActive: u.isActive,
+    role: u.role as Role,
+    fixedArrivalTime: u.fixedArrivalTime,
   }));
 
   const needle = q?.trim().toLowerCase();
