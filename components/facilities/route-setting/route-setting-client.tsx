@@ -7,7 +7,6 @@ import {
   Check,
   ChevronLeft,
   ChevronRight,
-  Clock,
   Pencil,
   Pin,
   Plus,
@@ -42,12 +41,9 @@ import { useToast } from "@/hooks/use-toast";
 import {
   SHIFT_KEYS,
   SHIFT_LABELS,
-  ARRIVAL_TIMES_BY_SHIFT,
-  LABEL_FOR_ARRIVAL_VALUE,
 } from "@/lib/constants/route-shifts";
 import type { PinState, ShiftKey } from "@/lib/constants/route-shifts";
 import {
-  autoCalcPickupTimes,
   getVehicleShiftPins,
   reorderPickupPoints,
   toggleVehicleShiftPin,
@@ -63,10 +59,19 @@ function toISODate(d: Date): string {
   ).padStart(2, "0")}`;
 }
 
-/** BASE ETA options — only the 10 PM / 11 PM default office arrivals. */
-const BASE_ETA_OPTIONS = (["10PM", "11PM"] as const)
-  .flatMap((key) => ARRIVAL_TIMES_BY_SHIFT[key])
-  .map((value) => ({ value, label: LABEL_FOR_ARRIVAL_VALUE[value] }));
+/** A saved address whose text is raw "lat, lng" coordinates carries its
+ * human-readable name in `label`. Real address rows keep the location in
+ * `addressText` — and their `label` is the RESIDENT's name (home addresses
+ * are labeled by employee), which must never surface as a pickup point. */
+function isCoordinateText(text: string): boolean {
+  return /^\s*-?\d+(\.\d+)?\s*,\s*-?\d+(\.\d+)?\s*$/.test(text);
+}
+
+/** The pickup-point name for a saved address: the label for coordinate-only
+ * rows, otherwise the address text itself. */
+function pickupPointNameFor(a: { label?: string | null; addressText: string }): string {
+  return isCoordinateText(a.addressText) ? (a.label ?? a.addressText) : a.addressText;
+}
 
 type PickupPointRow = {
   id: string;
@@ -213,7 +218,6 @@ function VehicleDetailEditor({
 }) {
   const { toast } = useToast();
   const [editingVehicle, setEditingVehicle] = useState(false);
-  const [calcBusy, setCalcBusy] = useState(false);
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
 
@@ -246,22 +250,6 @@ function VehicleDetailEditor({
     const updated = [...points, point];
     onPointsChange(vehicle.id, updated);
     setDirty(true);
-    // Auto-recompute pickup times
-    try {
-      const res = await autoCalcPickupTimes(vehicle.id);
-      if (res.success && res.updates) {
-        const updates = res.updates;
-        onPointsChange(
-          vehicle.id,
-          updated.map((p) => {
-            const match = updates.find((u) => u.id === p.id);
-            return match ? { ...p, baseETA: match.baseETA } : p;
-          })
-        );
-      }
-    } catch {
-      // best effort
-    }
   }
 
   async function saveOrder() {
@@ -276,38 +264,6 @@ function VehicleDetailEditor({
       toast({ title: "Sequence saved", description: "Pickup order updated." });
     } finally {
       setSaving(false);
-    }
-  }
-
-  async function autoCalc() {
-    setCalcBusy(true);
-    try {
-      const res = await autoCalcPickupTimes(vehicle.id);
-      if (!res.success) {
-        toast({
-          title: "Pickup times not set",
-          description: res.error,
-          variant: "destructive",
-        });
-        return;
-      }
-      const updates = res.updates ?? [];
-      onPointsChange(
-        vehicle.id,
-        points.map((p) => {
-          const match = updates.find((u) => u.id === p.id);
-          return match ? { ...p, baseETA: match.baseETA } : p;
-        })
-      );
-      toast({
-        title: "Pickup times set",
-        description:
-          res.method === "first_pickup"
-            ? `Anchored from first pickup; office arrival ≈ ${res.computedOfficeArrival ?? "—"}`
-            : "Calculated from BASE ETA at ~5 min/km.",
-      });
-    } finally {
-      setCalcBusy(false);
     }
   }
 
@@ -375,16 +331,6 @@ function VehicleDetailEditor({
           <div className="flex items-center justify-between">
             <h4 className="font-semibold">Pickup sequence</h4>
             <div className="flex gap-2">
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                disabled={points.length === 0 || calcBusy}
-                onClick={() => void autoCalc()}
-              >
-                <Clock className="mr-1 size-3.5" />
-                {calcBusy ? "Calculating…" : "Set times"}
-              </Button>
               <Button
                 type="button"
                 size="sm"
@@ -705,7 +651,11 @@ function AddPointForm({
       onError("Select a pickup location.");
       return;
     }
-    const name = (selectedAddress?.label ?? selectedAddress?.addressText ?? "").trim();
+    if (!selectedAddress) {
+      onError("Selected location could not be found. Pick it again.");
+      return;
+    }
+    const name = pickupPointNameFor(selectedAddress).trim();
     if (!name) {
       onError("Selected location has no name.");
       return;
@@ -756,12 +706,10 @@ function AddPointForm({
               (a): ComboboxOption => ({
                 value: a.id,
                 searchText: `${a.label ?? ""} ${a.addressText}`,
-                label: a.label ? (
+                label: isCoordinateText(a.addressText) ? (
                   <span className="flex flex-col items-start">
-                    <span>{a.label}</span>
-                    <span className="text-xs text-muted-foreground">
-                      {a.addressText}
-                    </span>
+                    <span>{a.label ?? a.addressText}</span>
+                    <span className="text-xs text-muted-foreground">{a.addressText}</span>
                   </span>
                 ) : (
                   a.addressText
@@ -810,10 +758,6 @@ function EditVehicleForm({ vehicle, onSaved, onCancel }: EditVehicleFormProps) {
   const [driverName, setDriverName] = useState(vehicle.driverName ?? "");
   const [driverContact, setDriverContact] = useState(vehicle.driverContact ?? "");
   const [officeLocation, setOfficeLocation] = useState(vehicle.officeLocation);
-  const [baseETA, setBaseETA] = useState(vehicle.baseETA ?? "22:00");
-  const [firstPickupTime, setFirstPickupTime] = useState(
-    vehicle.firstPickupTime ?? "20:00"
-  );
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -829,8 +773,6 @@ function EditVehicleForm({ vehicle, onSaved, onCancel }: EditVehicleFormProps) {
         driverName,
         driverContact,
         officeLocation,
-        baseETA,
-        firstPickupTime,
       });
       if (!res.success) {
         setError(res.error ?? "Failed to save vehicle.");
@@ -843,8 +785,6 @@ function EditVehicleForm({ vehicle, onSaved, onCancel }: EditVehicleFormProps) {
         driverName: driverName.trim() || null,
         driverContact: driverContact.trim() || null,
         officeLocation,
-        baseETA,
-        firstPickupTime,
       }, res.pickupUpdates);
       toast({
         title: "Vehicle updated",
@@ -913,30 +853,6 @@ function EditVehicleForm({ vehicle, onSaved, onCancel }: EditVehicleFormProps) {
               ))}
             </SelectContent>
           </Select>
-        </div>
-        <div className="space-y-1">
-          <Label htmlFor={`ev-base-eta-${vehicle.id}`}>BASE ETA</Label>
-          <Select value={baseETA} onValueChange={setBaseETA}>
-            <SelectTrigger id={`ev-base-eta-${vehicle.id}`} className="w-full">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {BASE_ETA_OPTIONS.map((option) => (
-                <SelectItem key={option.value} value={option.value}>
-                  {option.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-        <div className="space-y-1">
-          <Label htmlFor={`ev-first-pickup-${vehicle.id}`}>First pickup</Label>
-          <Input
-            id={`ev-first-pickup-${vehicle.id}`}
-            type="time"
-            value={firstPickupTime}
-            onChange={(e) => setFirstPickupTime(e.target.value)}
-          />
         </div>
         <div className="space-y-1 sm:col-span-2">
           <Label htmlFor={`ev-contact-${vehicle.id}`}>Driver contact</Label>

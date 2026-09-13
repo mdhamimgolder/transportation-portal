@@ -19,6 +19,7 @@ import type {
 import { backCalculatePickupMinutes } from "@/lib/routing/schedule-math";
 import { minutesToTimeString } from "@/lib/routing/utils";
 import { reorderPickupPoints } from "@/actions/route-setting.actions";
+import { mirrorRouteEditsAcrossWeek } from "@/lib/routing/route-pattern";
 
 export type AnalyzeRouteResult =
   | { success: true; analysis: RouteAnalysis; cached: boolean }
@@ -380,6 +381,10 @@ export async function applyRouteCandidate(
         };
       }
     }
+
+    // Applied candidate changed the order + times → the other draft days of the
+    // week follow this vehicle's new pattern.
+    await mirrorRouteEditsAcrossWeek(routePlanId);
 
     revalidatePath("/facilities/automated-route-planner");
     revalidatePath("/facilities/route-planning");

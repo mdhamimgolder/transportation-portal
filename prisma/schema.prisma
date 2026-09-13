@@ -29,6 +29,7 @@ model User {
   pickupPoint   String? // designated pickup location for transport, editable directly by the employee
   officeLocation String? // Office location: "Regnum" or "Spectra" - set by Facilities when creating employee
   fixedArrivalTime String? // FIXED_ARRIVAL role: the single standing arrival time ("22:00" .. "06:00"), locked until Facilities changes it
+  fixedArrivalActive Boolean @default(true) // FIXED_ARRIVAL service switch: OFF pauses mapping but keeps the arrival time
   homeAddressId String?
   pickupAddressId String?
   homeAddress Address? @relation("UserHomeAddress", fields: [homeAddressId], references: [id])
@@ -65,6 +66,7 @@ model User {
   // New: Route planning relations
   tripAssignments       TripAssignment[] @relation("TripAssignmentEmployee")
   manualRoutePlanEntries ManualRoutePlanEntry[] @relation("ManualRoutePlanEntryEmployee")
+  routeTemplateStops    RouteTemplateStop[] @relation("RouteTemplateStopEmployee")
 
   @@index([role])
   @@index([isActive])
@@ -420,6 +422,7 @@ model Vehicle {
   pickupSequence  PickupPoint[]
   routePlans      RoutePlan[]
   tripAssignments TripAssignment[]
+  routeTemplates  RouteTemplate[] @relation("RouteTemplateVehicle")
   
   shiftAssignments VehicleShiftAssignment[]
   
@@ -591,6 +594,28 @@ model DistanceMatrixCache {
   @@index([expiresAt])
 }
 
+// Persisted OSRM road geometries (driving polylines) per leg — the polyline
+// counterpart of DistanceMatrixCache. Corridor-attach judges every candidate
+// home against each leg's actual driving geometry; caching those geometries in
+// the DB (same 30-day TTL) means re-runs and post-restart runs stop re-fetching
+// every leg from the rate-limited public OSRM demo server.
+model RoutePolylineCache {
+  id        String   @id @default(cuid())
+  fromLat   Float
+  fromLng   Float
+  toLat     Float
+  toLng     Float
+  provider  String   // "OSRM"
+
+  points    Json     // Decoded driving geometry as [[lat, lng], ...]
+
+  cachedAt  DateTime @default(now())
+  expiresAt DateTime
+
+  @@unique([fromLat, fromLng, toLat, toLng, provider])
+  @@index([expiresAt])
+}
+
 // Learned pickup-leg statistics built from historical route plans by
 // `trainRoutePlannerFromHistory`. The scheduler prefers a learned average gap
 // (>= LEARN_MIN_SAMPLES observations) over the 5 min/km distance estimate.
@@ -645,4 +670,47 @@ model ManualRoutePlanEntry {
   @@unique([date, shiftKey, vehicleNumber, employeeId])
   @@index([shiftKey])
   @@index([date])
+}
+
+// Learned route pattern: a vehicle's FINALIZED/edited route for one arrival
+// time, captured at Finalize so the next week's mapping replays the tuned stop
+// sequence + pickup times instead of recomputing from scratch. Keyed by
+// (vehicleId, arrivalTime) — each vehicle can have one standing template per
+// shift. New riders not in the template are corridor-attached around it.
+model RouteTemplate {
+  id            String   @id @default(cuid())
+  shiftKey      String   // "10PM" | "11PM" | "12AM-6AM"
+  office        String   // normalized office name snapshot ("Regnum" | "Spectra")
+  arrivalTime   String   // display label ("11 PM", "12 AM", ...) — replay key
+  vehicleId     String
+  vehicle       Vehicle  @relation("RouteTemplateVehicle", fields: [vehicleId], references: [id], onDelete: Cascade)
+  sourcePlanId  String?  // last RoutePlan this template was learned from
+  stops         RouteTemplateStop[]
+  lastLearnedAt DateTime @default(now())
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@unique([vehicleId, arrivalTime])
+  @@index([shiftKey, office])
+}
+
+// One ordered stop of a learned route pattern. employeeId is the stable match
+// key when replaying onto a new week's schedule; the address/point snapshots +
+// labels survive even if the employee later edits their profile or pickup point.
+model RouteTemplateStop {
+  id            String   @id @default(cuid())
+  templateId    String
+  template      RouteTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  seq           Int      // 1-based visiting order (the vehicle's office is the final implicit destination)
+  employeeId    String?
+  employee      User?    @relation("RouteTemplateStopEmployee", fields: [employeeId], references: [id], onDelete: SetNull)
+  pickupType    String?  // "PRESET_POINT" | "HOME_ADDRESS"
+  pickupPointId String?
+  addressId     String?  // pickup address snapshot (id) at learn time
+  pickupTime    String?  // "HH:mm" as finalized
+  employeeLabel String?  // employee fullName snapshot
+  stopLabel     String?  // pickup point / address label snapshot
+
+  @@unique([templateId, seq])
+  @@index([employeeId])
 }

@@ -19,8 +19,15 @@
  */
 
 import { prisma } from "@/lib/prisma";
-import { getDistanceMatrix, getRoutePolyline, Location } from "./osrm";
+import {
+  getDistanceMatrix,
+  getRoutePolyline,
+  warmPolylineCache,
+  type Location,
+  type PolylineWarmKey,
+} from "./osrm";
 import { geocodeAddress } from "./geocoder";
+import { patternOrderForMembers } from "./route-pattern";
 import {
   haversineDistance,
   bearingDegrees,
@@ -176,10 +183,29 @@ type ScheduleAgg = {
 };
 
 /** Resolve an employee's home address, auto-geocoding their free-text address
- * via OpenStreetMap when coordinates are missing (best effort). */
+ * via OpenStreetMap when coordinates are missing (best effort).
+ *
+ * FIXED-ARRIVAL employees ride from their assigned PICK-UP POINT, not from
+ * their home address: their `pickupAddressId` names an active PickupPoint whose
+ * coordinates Facilities maintains on the Pick-up Points page. Returning the
+ * pickup-point Address here (when it carries real coordinates) keeps the fixed-
+ * arrival rider's lat/lng in sync with that pickup point — if Facilities later
+ * edits the point's coordinates, the next RUN MAPPING picks them up at the new
+ * location instead of a stale home pin. Falls back to the home address only
+ * when the pickup point has no usable coordinates (and otherwise behaves
+ * exactly as before for regular employees). */
 async function resolveHomeAddress(
   employee: EmployeeShape
 ): Promise<HomeAddressShape | null> {
+  const pickup = employee.pickupAddress;
+  if (
+    employee.pickupAddressId &&
+    pickup &&
+    !(pickup.latitude === 0 && pickup.longitude === 0)
+  ) {
+    return pickup;
+  }
+
   let home = employee.homeAddress;
   const text = employee.address?.trim();
 
@@ -752,6 +778,12 @@ export async function generate10PMRoutes(
           {
             firstPickupTime: vehicleRow?.firstPickupTime ?? null,
             baseETA: vehicleRow?.baseETA ?? null,
+            // No manual anchor needed: the 10 PM shift's office arrival is
+            // 22:00, so the schedule is back-calculated from the taught /
+            // learned leg gaps instead of a manually set first pickup time.
+            defaultArrival: minutesToTimeString(
+              arrivalMinutesFromLabel("10 PM") ?? 22 * 60
+            ),
           },
           pickupPoints.map((p) => ({
             id: p.id,
@@ -1080,6 +1112,31 @@ async function generateCorridorRoutes(
       return distancePointToSegmentKm(p, a, b);
     };
 
+    // Warm the persisted polyline cache with every leg this pass can test —
+    // ONE batched query instead of a DB round-trip per leg during the sweep.
+    // Seeded entries are byte-identical to per-leg lookups/OSRM results, so
+    // planning judgments are unchanged; only fetch latency is removed (re-runs
+    // and post-restart runs skip OSRM entirely).
+    const sweepLocations: Location[] = [
+      office,
+      ...members.map((m) => ({
+        lat: m.home.latitude,
+        lng: m.home.longitude,
+      })),
+    ];
+    const warmKeys: PolylineWarmKey[] = [];
+    for (const a of sweepLocations) {
+      for (const b of sweepLocations) {
+        if (a === b) continue;
+        warmKeys.push({
+          from: a,
+          to: b,
+          initialBearingDeg: bearingDegrees(a, b),
+        });
+      }
+    }
+    await warmPolylineCache(warmKeys);
+
     const planned = await planCorridorRoutes({
       members,
       pool,
@@ -1100,7 +1157,33 @@ async function generateCorridorRoutes(
       let createdRoutePlanId: string | null = null;
 
       try {
-        const { order, vehicle } = planned.routes[planIdx];
+        const { order: plannedOrder, vehicle } = planned.routes[planIdx];
+        let order = plannedOrder;
+
+        // Replay the learned route pattern (tuned sequence from a previous
+        // finalize of this vehicle + arrival time): pattern riders ride first
+        // in the learned order, new riders (not in the pattern) ride after in
+        // their planned order.
+        const template = await prisma.routeTemplate.findUnique({
+          where: {
+            vehicleId_arrivalTime: {
+              vehicleId: vehicle.id,
+              arrivalTime: arrivalLabel,
+            },
+          },
+          select: {
+            stops: { orderBy: { seq: "asc" }, select: { employeeId: true } },
+          },
+        });
+        if (template && template.stops.length > 0) {
+          const replayed = patternOrderForMembers(
+            template.stops.map((s) => s.employeeId),
+            order,
+            (m) => m.employee.id
+          );
+          if (replayed.replayed) order = replayed.order;
+        }
+
         const previousRoutePlanId = reuseById.get(vehicle.id) ?? null;
 
         // Leg drive time: a learned average (>= 3 observations) wins over the
@@ -1179,10 +1262,11 @@ async function generateCorridorRoutes(
         });
         createdRoutePlanId = routePlan.id;
 
-        for (let i = 0; i < order.length; i++) {
-          const m = order[i];
-          await prisma.tripAssignment.create({
-            data: {
+        if (order.length > 0) {
+          // One batched insert instead of a per-rider round-trip — same rows,
+          // same sequence numbering, one database call.
+          await prisma.tripAssignment.createMany({
+            data: order.map((m, i) => ({
               routePlanId: routePlan.id,
               weeklyScheduleDayId: m.schedule.id,
               employeeId: m.employee.id,
@@ -1192,7 +1276,7 @@ async function generateCorridorRoutes(
               pickupTime: pickupTimes[i],
               sequenceInTrip: i + 1,
               assignedAt: new Date(),
-            },
+            })),
           });
         }
 

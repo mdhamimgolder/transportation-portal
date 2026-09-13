@@ -48,6 +48,25 @@ export async function createPickupPoint(input: {
   await requireRole([Role.FACILITIES, Role.SUPER_ADMIN]);
 
   try {
+    // The point name must be the LOCATION, never a resident's name. Real
+    // address rows keep the location in `addressText` (their `label` is the
+    // first employee who lived there — e.g. "Shamim Hasan" on the SS
+    // Properties row), so for those the name is forced to `addressText`.
+    // Only coordinate-only rows ("23.75, 90.37") carry their name in `label`.
+    const address = await prisma.address.findUnique({
+      where: { id: input.addressId },
+      select: { addressText: true },
+    });
+    const isCoordinateText = (text: string): boolean =>
+      /^\s*-?\d+(\.\d+)?\s*,\s*-?\d+(\.\d+)?\s*$/.test(text);
+    const name =
+      address && !isCoordinateText(address.addressText)
+        ? address.addressText
+        : input.name.trim();
+    if (!name) {
+      return { success: false, error: "Pickup point has no name" };
+    }
+
     // Only an ACTIVE point is a real conflict — soft-deleted rows squatting on
     // the slot are pushed out of the way first (they still hold the DB-unique
     // (vehicleId, sequence) index).
@@ -69,7 +88,7 @@ export async function createPickupPoint(input: {
 
     const point = await prisma.pickupPoint.create({
       data: {
-        name: input.name,
+        name,
         sequence: input.sequence,
         vehicleId: input.vehicleId,
         addressId: input.addressId,

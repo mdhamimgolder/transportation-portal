@@ -5,6 +5,24 @@ Read this at the start of every task so you can continue without re-exploring.
 block and bump Work State / Next Move). Do this EVERY session — it is how we
 work fast without interruption.
 
+## ⏳ LATEST (2026-09-13b) — kill the "Set a vehicle first pickup time or BASE ETA" error — anchor auto-derives from taught data
+**User:** saw error per-vehicle "Set a vehicle first pickup time or BASE ETA before scheduling." while RUN MAPPING.
+Explicit: "pick time will be set from learned/teached — i don't want set manually; system will generate first pick-up time
+from teach from manual plan."
+**Root cause:** `computePickupSchedule` REQUIRED one of `Vehicle.firstPickupTime` / `Vehicle.baseETA`; the manual
+"Set pick-up times" UI was removed earlier (2026-09-12c), so vehicles with neither field (older rows) hit the hard error —
+in BOTH the 10 PM preset generator (`algorithms.ts`) and the pickup-point time sync (`syncPickupPointTimes`).
+**Fix (no schema change):**
+- `lib/routing/pickup-schedule.ts`: added optional `defaultArrival` to `PickupAnchor`; `computePickupSchedule` now uses
+  `baseETA ?? defaultArrival` so pickup times are BACK-CALCULATED from the taught/learned leg gaps anchored on the office
+  arrival instead of requiring a manually entered anchor. `syncPickupPointTimes` passes `defaultArrival: "22:00"` (preset
+  points = 10 PM shift → office arrival 22:00).
+- `lib/routing/algorithms.ts` 10 PM generator passes `defaultArrival: minutesToTimeString(arrivalMinutesFromLabel("10 PM"))`.
+- Corridor (11 PM / 12 AM-6 AM) was already fine — `backCalculatePickupMinutes(arrivalMinutes, ...)` anchors on the shift
+  label. The hard error path remains only if no caller supplies an anchor (defensive).
+Verified: `npx tsc --noEmit` + eslint clean; `node --import tsx --test lib/routing/__tests__/*.ts` = 19/19 pass; dev server
+hot-reloaded, all 200s. NOT committed.
+
 ## Design preferences (the human, gathered from feedback)
 - **LOVES clean / classic / minimal / professional layouts.** Rejected a `data-viz`
   timeline ("overnight rail" with nodes) as **messy/confusing** — wanted **"just a
@@ -101,6 +119,203 @@ task is touched, and overrides any "optimization" that would reorder stops other
 - **tsx scripts** need `import "dotenv/config"` at top; no top-level await (use `async main()`);
   temp scripts live in repo root (`_name.ts`) and are deleted after verifying.
 
+## Latest Session (2026-09-13a) — Day-wise (single-day) RUN MAPPING module in Auto Route Planner
+**User request:** "i want generate day wise route mapping — select a day of week then mapping that day's schedule. Weekly run mapping
+plans the full week schedule, but a day wise run map only shows that day's route planning. This module will be set below of week to map."
+Restated rules ("10 PM = preset pick-up point sequence; 11 PM-6 AM = home-address pick") + flagged 21 Sep wrong direction (audited, rules conform).
+**Rejected earlier attempts (both reverted cleanly):** (1) `day-run-map.tsx` all-shifts overlay map ("delete your earlier build, i don't want this");
+(2) a "Day | Week" tab toggle on the Generated-routes card ("you get me wrong"). User wants a **per-DAY GENERATION action**, not a new view.
+**Built (final — as asked):**
+1. **`actions/route-generation.actions.ts`** — extracted the shared loop into `runRouteGeneration(weekStartDate, dayIndexes)`; the draft-cleanup
+   now scopes `deleteMany` to `dayOfWeek: { in: dayIndexes }` so a single-day run NEVER wipes the other days' drafts
+   (`generateWeeklyRoutes` passes `[0,1,2,3,4]` = same result as before). New exported server action
+   **`generateDayRoutes(weekStartDateStr, dayIndex)`** (0=Mon..4=Fri, validates range): same pipeline (requireRole → ensureFixedArrivalSchedules →
+   trainRoutePlannerFromHistory → 10 PM/11 PM/12AM-6AM generators → revalidate paths), returns `GenerateRoutesResult` + new optional `dayOfWeek`.
+2. **`components/facilities/auto-route-planner-client.tsx`** — new **"Day-wise run mapping" card placed directly BELOW the "Week to map" card**:
+   Mon-Fri day picker + "Run mapping for <day>" button (own `dayRunning`/`dayResult` state; does NOT touch the weekly `result`), a teal
+   "mapping this day only" status line, and an inline result panel (success/partial/failed, 10 PM/11 PM/12AM-6AM/errors stats via `ResultStat`,
+   learning-fallback + error lists) identical in style to the weekly Mapping-result card. On success it `setActiveDay(dayIndex)` + refreshes the
+   overview/details so the "Generated routes" breakdown right below shows that day's planning immediately. Weekly RUN MAPPING + its result card
+   untouched.
+Verified: `npx tsc --noEmit` clean, eslint (`--max-warnings=0`) clean on both changed files; dev server hot-reloaded, page 200, no log errors.
+NO schema/migration. NOT committed.
+**21 Sep audit (still valid):** 10 PM (107 trips week 2026-09-21) = every trip `PRESET_POINT` on pickup-point coords, order = saved pickup-point
+`sequence` (Cha-56-0177 Kachukhet→Mirpur 10→Kazipara→Shewrapara north-then-south IS the preset sequence = the rule; to change its direction
+reorder the points in Route Setting, NOT the generator). 11 PM/12 AM-6 AM = HOME_ADDRESS corridor, far-first anchor + nearest-hop chain, no
+far→near sort. Temp `_diag-56*.ts` deleted.
+## Latest Session (2026-09-12d) — RUN MAPPING speed-up (no logic change) + 10 PM map guard
+**User request:** "run mapping takes too much time — make it smooth & faster, don't change any requirement/logic." Plus a 10 PM map complaint ("employee's address are mapped") — investigated, data correct, guard added.
+**Diagnosis (timed):** corridor road-geometry tests call OSRM per leg (global 350 ms throttle on the public demo server, in-memory-only polyline cache → re-fetched after every restart); matrix cache lookup loaded the ENTIRE `DistanceMatrixCache` table per call; `persistPairs` did one upsert PER pair; per-rider `tripAssignment.create` loop; `ensureFixedArrivalSchedules` serial upserts; auto-learn rescanned ALL history every run. Baseline: 6 cold polyline legs = 2669 ms; a cached 4×4 matrix re-read = 1326 ms (full-table scan).
+**Built (all behavior-neutral — outputs proven byte-identical):**
+1. **`RoutePolylineCache`** (migration `20260912232506_route_polyline_cache`, mirror of DistanceMatrixCache: unique `(fromLat, fromLng, toLat, toLng, provider)`, `points` Json, 30-day TTL). `getRoutePolyline` order: in-memory → DB → OSRM (in-flight dedup via `polylineInFlight`); write-through persist stores `[[lat,lng],…]` tuples; `decodePolylinePoints` accepts both tuple + legacy object rows.
+2. **`warmPolylineCache(keys)`** in osrm.ts — ONE batched indexed query per planning pass seeds the in-memory cache with the exact bearing-aware keys the corridor sweep will test; called once in `generateCorridorRoutes` (legs = members ∪ office). Removes the per-leg DB RTT on cold runs too.
+3. **Matrix cache I/O:** `loadCachedPairs` now filters by the requested coordinate tuples (OR-of-tuples, uses unique index) instead of scanning the table; `persistPairs` = single `createMany({ skipDuplicates: true })` instead of N×M upserts.
+4. **Write batching:** per-rider `tripAssignment.create` loop → one `createMany` per route; `ensureFixedArrivalSchedules` → parallel `Promise.all` over users/days (idempotent upserts, same rows). Removed dead `ARRIVAL_VALUE_LABELS` + unused import (pre-existing eslint offender) from route-generation.actions.ts.
+5. **Throttle:** `THROTTLE_REQUESTS = !process.env.OSRM_SERVER_URL` — public demo keeps the 350 ms gap; a self-hosted OSRM skips it.
+**Verified (temp scripts `_perf-*.ts`/`_diag-*.ts`, deleted):** pre-change snapshot vs post-change — polyline VALUES identical (6 legs, ≤1e-9), matrix VALUES identical; warm path 6 fetches from seeded memory = 1 ms vs 2669 ms cold; matrix 5609 → ~340 ms. `npx tsc --noEmit` + eslint (touched files, --max-warnings=0) clean. Migration applied, server restarted, /login HTTP 200.
+**10 PM map complaint:** audited end-to-end for week 2026-09-21 — every 10 PM trip is `PRESET_POINT` with pickupPoint.address lat/lng (e.g., "Adabar Thana" ×7 at same point), cached analyses match, only ONE map exists (RouteMapView) and it only ever plots `pickupLat/pickupLng`/analysis waypoints. No home coords anywhere in the 10 PM path. Likely user saw a stale pre-coord-sync analysis (already invalidated by inputHash + restart) or an 11 PM/12AM map (home-based by design). **Guard applied:** `getGeneratedRouteDetails` now treats `(0,0)` addresses as missing (same rule as loadAnalysisInput) so a pickup point without coords can never draw a pin at 0,0 — map shows its "Pickup coordinates are missing" empty state instead. NOT committed.
+## Latest Session (2026-09-12c) — Set-times module removed + User Info CSV export + "Shamim Hasan" pickup-point fix
+**User requests:** (1) "Delete set times feature, as pick-up time comes from learned data — no need this
+module"; (2) "when I search SS properties, it shows a name Shamim Hasan as a pick-up point — fix";
+(3) "User Info needs an export module: Name, email, pick-up points — these 3 items."
+
+Built:
+1. **Set-times module removed** (`components/facilities/route-setting/route-setting-client.tsx`): deleted
+   the "Set pick-up times" panel + `BASE_ETA_OPTIONS`/`baseETA`/`firstPickupTime` UI state; pickup times
+   now come ONLY from learned data via `syncPickupPointTimes` (still wired in
+   `actions/route-setting.actions.ts` on create/reorder/delete). `VehicleRow.firstPickupTime` (server
+   data type) kept — used by the sync anchor, not by UI. `createPickupPoint` action accepts
+   `baseETA` for backward-compat and ignores it.
+2. **"Shamim Hasan" pickup point (root cause + fix):** an ACTIVE `PickupPoint` row existed with
+   `name="Shamim Hasan"` pointing at the "SS Properties" address (`Address.label="Shamim Hasan"` is the
+   resident-label convention — first employee who lived there; NOT wrong). The combobox searches
+   `addressText`, but the CREATED point kept the person name. Fixes:
+   - Data fix (temp script, deleted): every active PickupPoint whose address is a real (non-coordinate)
+     address renamed to its `addressText` — "Shamim Hasan" → "SS Properties"; all 52 active points now
+     name-match their address (verified with the diagnostic script before deletion).
+   - Client guard (`route-setting-client.tsx` `pickupPointNameFor`): real address rows name the point
+     from `addressText`; only coordinate-only rows ("23.75, 90.37") use `label`. Signature accepts
+     `label?: string | null`.
+   - Server guard (`actions/pickup-point.actions.ts` `createPickupPoint`): the point name is forced to
+     `address.addressText` for non-coordinate addresses — a person label can never become the point
+     name again.
+3. **User Info export** (`components/facilities/export-users-button.tsx` + mounted on
+   `/facilities/user-info`): client-side CSV with EXACTLY Name, Email, Pick-up Point (trimmed to 3
+   columns per user request), RFC-4180 quoting + UTF-8 BOM for Excel, filename
+   `user-info-YYYY-MM-DD.csv`, disabled when the (search-filtered) list is empty.
+
+Verified: `npx tsc --noEmit` + eslint (all touched files, --max-warnings=0) clean; /login + 
+/facilities/user-info HTTP 200. tsx-script recipe note: `import "dotenv/config"` alone missed
+`.env.local` in one run (loaded fine after explicit `dotenv.config({ path: ".env.local" })` first —
+`.env` also exists). NOT committed.
+
+## Latest Session (2026-09-12b) — Fixed-arrival pickup coords sync + User Info delete button
+**User request:** (1) "fixed arrival employee pick-up points lat long were not synced with pickup
+points coordinates — fix"; (2) "add a delete button in user info row to totally delete the user."
+
+Built:
+1. **Coord-sync root cause** (`lib/routing/algorithms.ts`): the corridor generator resolved EVERY
+   rider's planning coordinate via `resolveHomeAddress()` (homeAddress, auto-geocode fallback), so a
+   fixed-arrival employee whose active PickupPoint has Facilities-maintained coordinates was still
+   planned from their HOME pin — never the pickup point lat/lng. Fix: `resolveHomeAddress` now returns
+   the employee's `pickupAddress` FIRST when `pickupAddressId` is set and that Address carries real
+   coords (not 0,0) — home fallback unchanged for everyone else. One fix covers corridor growth,
+   matrix, and corridor-attach geometry for 11 PM + 12 AM–6 AM. (10 PM preset routes already plan from
+   `PickupPoint.address` directly, so they were unaffected.)
+2. **Guard** (`actions/facilities-profile.actions.ts`): saving a FIXED_ARRIVAL profile with a linked
+   pickupAddressId whose Address is missing/(0,0) now errors: "The linked pick-up point has no
+   coordinates. Set its latitude/longitude on the Pick-up Points page before saving this profile."
+3. **User row delete** (`actions/user-management.actions.ts` `deleteUserAction` +
+   `components/facilities/delete-user-dialog.tsx` + mounted on `/facilities/user-info`): destructive
+   confirm dialog → ordered $transaction (Session, WeeklyScheduleDay, WeeklySchedule, Address/Contact/
+   PickupPoint change requests, AdHocRequest, ManualRoutePlanEntry deleteMany → user.delete cascades
+   TripAssignment + SetNulls RouteTemplateStop/reviewedBy). Blocks self-delete + SUPER_ADMIN targets.
+   Requires FACILITIES or SUPER_ADMIN. RoutePlanOverride.changedById is a plain string so history
+   survives.
+4. Migration `20260912165509_fixed_arrival_coord_sync` — EMPTY (no schema change; generated to satisfy
+   the AGENTS.md prisma-migrate step). `prisma generate` run.
+
+Verified: `npx tsc --noEmit` + eslint (all touched files, --max-warnings=0) clean; server restarted,
+/login HTTP 200. NOT committed.
+
+## Latest Session (2026-09-12a) — Route pattern learning + instant week reflection (auto route planner)
+## Latest Session (2026-09-12a) — Route pattern learning + instant week reflection (auto route planner)
+User request: "when a route of vehicles edited and finalized: make sure these are learned for route
+sequence and pick-up time for next mapping; also instant changes for remaining days of week."
+Answered Qs via question tool: (1) next-mapping learning = **Replay template** (finalized route becomes a
+template; next RUN MAPPING replays it, new riders appended by corridor logic); (2) remaining days =
+**mirror on EVERY edit** (pickup time or sequence change on Monday flows to Tue-Fri instantly, no re-mapping).
+
+Built:
+- **Schema** `add_route_template_learning` (20260912012837): `RouteTemplate` keyed
+  `@@unique([vehicleId, arrivalTime])` (+ shiftKey/office/lastLearnedAt/sourcePlanId), `RouteTemplateStop`
+  (seq, employeeId SetNull, pickupType/pickupPointId/addressId/pickupTime/employeeLabel/stopLabel snaps,
+  `@@unique([templateId, seq])`). Applied via `migrate deploy` (migrate dev hung w/ P1017 transient; the
+  --create-only file was applied by deploy). Generated. Migrations now 22.
+- **`lib/routing/route-pattern.ts`** (new, NO `server-only` — kept tsx-testable like the other lib modules):
+  `captureRoutePattern`, `shiftKeyForLabel`, `reflectPatternOntoAssignments` (pattern riders first w/ pattern
+  times, unmatched appended in existing order), `patternOrderForMembers` (order-replay helper for generators),
+  `mirrorRouteEditsAcrossWeek` (rewrites same weekStartDate + vehicleId + arrivalTime OTHER-day **DRAFT**
+  siblings: renumber seq, set pickupTime, `manuallyOverridden=true`, `emailSentAt=null`, snap drop via
+  approachBearing/snappedLat/snappedLng null + `routeAnalysis: Prisma.JsonNull`, `appliedCandidateId=null`,
+  records `RoutePlanOverride.changeType="WEEK_MIRROR"` with changedById "system"), and
+  `learnRouteTemplateFromAssignments` (upserts template, replaceAll stops).
+- **Wires**: `finalizeRoute` (learn template + mirror), `adjustPickupTime`, `reorderRouteTrips`,
+  `reassignEmployeeToVehicle`, `moveTripToRoute` (source+target), and `applyRouteCandidate`
+  (route-analysis.actions) all call `mirrorRouteEditsAcrossWeek` after their update.
+- **Replay**: `generateCorridorRoutes` (11 PM + 12 AM–6 AM only; 10 PM preset routes intentionally NOT
+  replayed) now looks up `RouteTemplate` by (vehicleId, arrivalLabel) and calls `patternOrderForMembers`
+  to ride pattern riders first + append new riders; legs/pickupTimes then computed on the replayed order.
+  Does NOT re-add far→near sort (CORE INSTRUCTION intact) — extra riders stay in their corridor order.
+
+Verified: migration applied, `npx tsc --noEmit` + eslint clean, server restarted (pid 20788, /login 200).
+End-to-end scratch script (`_verify-template.ts`, deleted): learned a template from a real FINALIZED
+"11 PM" Dhaka-Metro-Ga-33-9449 plan, `mirrorRouteEditsAcrossWeek` → 4 sibling draft days got WEEK_MIRROR
++ manual seq/times; then template rows cleaned up (system left pristine). No persisted template yet — the
+first real learn is via Facilities finalizing in the UI. Backfill-from-existing-finalized option exists
+(script) if wanted. Note: mirror also nulls sibling `routeAnalysis` + marks manual + writes WEEK_MIRROR
+overrides — real past-week draft rows were touched during the test (harmless).
+
+## Latest Session (2026-09-11i) — Bulk-upload home coordinates: lenient headers instead of silent drop
+**User report:** "earlier i upload bulk creating profile but lat long not set, but csv have lat long info."
+Diagnostic (`_check-bulk-coords.ts`, deleted): only 12 employees lack home coords — the 2 bulk=true ones
+date 2026-07-20, predating coord support in `bulkCreateUsersAction` (coords landed in a0c64bf). The real
+risk is SILENT DROP: header matching was exact-lowercase (`colIndex("homelatitude")`) and a partial/unparsed
+coord cell just produced `NaN` → coords ignored with no skip reason.
+Fix in `actions/user-management.actions.ts`:
+- Header matching is now case/whitespace/punctuation-agnostic (`normalHeader`: strip non-alnum, lowercase):
+  `homeLatitude`/`Home Latitude`/`home_latitude`/`LAT`; `homeLongitude`/`HOME_LONGITUDE`/`Long`/`lng`;
+  other columns too (`name`, `employeeid`, `dept`, `contact`, `phone`, `pickup`, …).
+- New combined coords column support: `Lat,Long` / `Home Lat/Long` / `latlong` / `coords` / `coordinates`
+  → cell `"23.78, 90.41"` or `"23.7806 90.4070"` split via `splitCoordPair`.
+- Partial/malformed pairs now SKIP the row with a reason (was silent); both-blank still means "no coords".
+- New helpers: `parseCoordinateCell` (blank→null, malformed→NaN), `splitCoordPair`. Verified: logic unit-test
+  (22/22 pass, script deleted), tsc, eslint clean. No schema change → no server restart needed: re-uploading
+  the same CSV backfills coords via the UPDATE path (headers now tolerant).
+
+## Latest Session (2026-09-11h) — User Info: per-row fixed-arrival ON/OFF service switch + inline arrival-time change
+**User request:** "For fixed arrival employee: I need a turn off-on button in user info for each row
+of fixed arrival users also arrival time selection for change arrival."
+**Decision (asked):** OFF keeps the stored arrival time and just pauses service → added a separate
+`User.fixedArrivalActive Boolean @default(true)` field (migration `20260911232301_add_fixed_arrival_active`).
+- `ensureFixedArrivalSchedules` now also requires `fixedArrivalActive: true` (route-generation.actions.ts
+  where-clause) — OFF users are excluded from mapping but keep their time for instant restore.
+- `getEmployeeDirectory` exposes `fixedArrivalActive`; `app/facilities/user-info/page.tsx` gained a
+  "Fixed arrival" column (dash for non-FIXED_ARRIVAL rows) rendering new client component
+  `components/facilities/fixed-arrival-service-controls.tsx`: an ON/OFF pill switch
+  (`role="switch"`, emerald when on) + a shadcn `Select` of `ARRIVAL_TIME_OPTIONS` + "Not set".
+- New server action `updateFixedArrivalServiceAction(userId, { active?, arrivalTime? })` in
+  actions/facilities-profile.actions.ts (guard FACILITIES/SUPER_ADMIN, role must be FIXED_ARRIVAL,
+  arrivalTime validated via `normalizeArrivalTimeInput` + `ARRIVAL_TIME_OPTIONS`, "Not set" → null).
+  Revalidates `/facilities/user-info`, `/employee/profile`, `/fixed-arrival/*`.
+- Component = controlled no-sync pattern: parent keys it by
+  `id:active:time` so `router.refresh()` remounts with fresh props (no state-in-effect — eslint treats
+  `react-hooks/set-state-in-effect` as error); handlers optimistic with rollback + inline error.
+Verified: tsc clean, eslint `--max-warnings=0` clean (note: pre-existing unused `ARRIVAL_VALUE_LABELS`
+warning in route-generation.actions.ts:59 — NOT from this change), page returns 307 to /login
+without a session (auth guard working) — user to eyeball UI in browser. Uncommitted (g + h pending).
+
+## Latest Session (2026-09-11g) — Bulk employee upload now sets Fixed Arrival time
+**User request:** "For fixed arrival employee, add column for bulk upload selecting arrival
+time." Extended `bulkCreateUsersAction` (Super Admin + Facilities bulk upload) +
+`components/super-admin/bulk-upload-dialog.tsx` (used on `/super-admin/users` AND
+`/facilities/user-info`):
+- New CSV column **`fixedArrivalTime`** (alias `arrivaltime` accepted). Blank cell = ignored.
+  Value validated via `normalizeArrivalTimeInput` + `ARRIVAL_TIME_OPTIONS` membership
+  (10 PM–6 AM whole-hour shuttle window); `"not required"` / `NONE` clears to null;
+  out-of-window/invalid → row skipped with reason.
+- Role-gated: only applies to `FIXED_ARRIVAL` rows. A real time on a non-FIXED_ARRIVAL row →
+  row skipped ("fixedArrivalTime only applies to the FIXED_ARRIVAL role"); `not required` on a
+  non-fixed row is silently ignored.
+- Works on BOTH paths: CREATE sets `User.fixedArrivalTime`; UPDATE (existing account, incl.
+  role-flip to FIXED_ARRIVAL) sets/clears it — non-blank cells win, blank keeps current, same
+  convention as every other column. Facilities/Super Admin guard preserved.
+- Dialog: template now has `fixedArrivalTime` right after `role`, an extra sample row
+  (FIXED_ARRIVAL + "11:00 PM"), instructions updated (roles list now includes FIXED_ARRIVAL +
+  CORPORATE_EMPLOYEE; fixedArrivalTime note; skip-row warning).
+Verified: tsc clean, eslint `--max-warnings=0` clean, both pages → 200. Uncommitted (further
+needed: user may want the single "Add employee" dialog to include the arrival select too).
+
 ## Latest Session (2026-09-11e) — Fixed Arrival Employee: creation flow confirmed + Facilities can change arrival + breakdown badge
 **User asked "how to create a fixed-arrival employee profile"** and pasted the FIXED_ARRIVAL
 requirements. Audit result: role/enum/home/prefix, `/fixed-arrival/*` pages + layout, one-time
@@ -121,8 +336,8 @@ auto-includes them.
    to those roles and validates/clears `fixedArrivalTime` (normalized via arrival-times,
    `NO_TRANSPORT_VALUE` → clears to null); `edit-employee-profile-dialog.tsx` shows a "Fixed
    arrival time" select (options + "Not set") when role is FIXED_ARRIVAL — refactored to the
-   add-employee-dialog success-panel + resetKey pattern to fix a pre-existing react-hooks
-   `set-state-in-effect` lint error; user-info page passes the props + shows an amber tag.
+add-employee-dialog success-panel + resetKey pattern to fix a pre-existing react-hooks
+    `set-state-in-effect` lint error; user-info page passes the props + shows an amber tag.
 ## Latest Session (2026-09-11f) — Planner maps: live reorder preview while dragging + Google-Maps-style route adjustment + taller maps
 **User 3-point request on the Generated routes breakdown map:** (1) maps must adjust the routing as rows are dragged,
 (2) Google-Maps-style drag-route-direction (click to add via points), (3) increase map height.
@@ -834,6 +1049,12 @@ User: "use one line for comment box and arrival time box; arrival time box fixed
    5-min grid with ≥5 min gaps.
 
 ### Work State
+- **Latest uncommitted work (2026-09-11g/h + 2026-09-11i + 2026-09-12a):** bulk-upload `fixedArrivalTime` column; User Info fixed-arrival ON/OFF + arrival-time select (`User.fixedArrivalActive`,
+  migration `20260911232301`, `updateFixedArrivalServiceAction`); bulk-upload coords lenient-header fix;
+  route pattern learning + week mirroring (`RouteTemplate`/`RouteTemplateStop`, migration `20260912012837`,
+  `lib/routing/route-pattern.ts`, wires in route-override + route-analysis + corridor replay). All
+  tsc/eslint clean, server restarted (pid 20788). NOT committed (af080b3 also still not pushed).
+  Follow-up option available: backfill templates from existing FINALIZED corridor plans.
 - **This session (2026-09-04) built, verified + pushed** (`4304ad7`, `9e3af94`): ad-hoc band resized (5rem arrival / 25rem panel / h-24);
   driver combobox dropdown renders via portal (not clipped); Note box → message-icon popover (`NoteComposer`) + copy icon
   (`CopyDetailsButton`, NEW `components/facilities/adhoc-actions.tsx`) beside Save/Edit; copy reflects LIVE driver/time (not just saved);

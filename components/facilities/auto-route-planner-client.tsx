@@ -5,6 +5,7 @@ import {
   AlertTriangle,
   ArrowRight,
   Brain,
+  CalendarDays,
   CalendarRange,
   BusFront,
   CheckCircle2,
@@ -36,6 +37,7 @@ import {
 } from "@/components/ui/card";
 import {
   generateWeeklyRoutes,
+  generateDayRoutes,
   getWeekRouteOverview,
   getGeneratedRouteDetails,
   type GenerateRoutesResult,
@@ -105,6 +107,10 @@ export function AutoRoutePlannerClient({ initialWeekStart, initialOverview }: Pr
   const [routesDetail, setRoutesDetail] = useState<GeneratedRouteDay[] | null>(null);
   const [detailLoading, setDetailLoading] = useState(true);
   const [activeDay, setActiveDay] = useState(0);
+  // Day-wise run mapping: single selected weekday + its own run state.
+  const [dayIndex, setDayIndex] = useState(0);
+  const [dayRunning, setDayRunning] = useState(false);
+  const [dayResult, setDayResult] = useState<GenerateRoutesResult | null>(null);
   const [learningStats, setLearningStats] = useState<RouteLearningStats | null>(null);
 
   const refreshOverview = useCallback(async (week: Date) => {
@@ -181,6 +187,38 @@ export function AutoRoutePlannerClient({ initialWeekStart, initialOverview }: Pr
       setRefreshing(false);
     }
   }
+
+  /** Run route mapping for ONE selected weekday only — the rest of the week's
+   *  draft routes are untouched. Afterwards the breakdown below is focused on
+   *  the mapped day so its planning is immediately visible. */
+  async function runDayMapping() {
+    setDayRunning(true);
+    setDayResult(null);
+    try {
+      const res = await generateDayRoutes(toISODate(weekStart), dayIndex);
+      setDayResult(res);
+      setActiveDay(dayIndex);
+      getRouteLearningStats()
+        .then((s) => setLearningStats(s))
+        .catch(() => setLearningStats(null));
+      void refreshOverview(weekStart);
+      void refreshDetails(weekStart);
+    } finally {
+      setDayRunning(false);
+    }
+  }
+
+  const dayResultStatus = dayResult
+    ? dayResult.success
+      ? "success"
+      : dayResult.summary.totalErrors > 0 &&
+          dayResult.summary.routesGenerated10PM +
+            dayResult.summary.routesGenerated11PM +
+            dayResult.summary.routesGenerated12AMPlus >
+            0
+        ? "partial"
+        : "failed"
+    : null;
 
   const totalApproved = overview.reduce((sum, d) => sum + d.approvedEmployees, 0);
   const totalRoutes = overview.reduce((sum, d) => sum + d.routesGenerated, 0);
@@ -327,6 +365,142 @@ export function AutoRoutePlannerClient({ initialWeekStart, initialOverview }: Pr
               memory and survive every retrain.
             </p>
           </div>
+        </CardContent>
+      </Card>
+
+      {/* ── Day-wise run mapping ─────────────────────────────── */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <CalendarDays className="size-4 text-teal" />
+            Day-wise run mapping
+          </CardTitle>
+          <CardDescription>
+            Generate route planning for a single day of the week — the other
+            days&apos; drafts are left untouched. Weekly RUN MAPPING (above)
+            plans the full week; this maps only the day you select.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+            <div className="flex flex-wrap items-center gap-2">
+              {routesDetail?.map((day, idx) => (
+                <Button
+                  key={day.dayOfWeek}
+                  type="button"
+                  variant={dayIndex === idx ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => {
+                    setDayIndex(idx);
+                    setDayResult(null);
+                  }}
+                >
+                  {DAY_LABELS[idx]}
+                </Button>
+              ))}
+            </div>
+            <Button
+              type="button"
+              className="gap-2"
+              disabled={dayRunning}
+              onClick={runDayMapping}
+            >
+              {dayRunning ? (
+                <RefreshCw className="size-4 animate-spin" />
+              ) : (
+                <Play className="size-4" />
+              )}
+              {dayRunning
+                ? `Mapping ${DAY_LABELS[dayIndex]}…`
+                : `Run mapping for ${DAY_LABELS[dayIndex]}`}
+            </Button>
+          </div>
+
+          {dayRunning && (
+            <p className="flex items-center gap-2 rounded-lg border border-teal/30 bg-teal/10 px-3 py-2 text-sm text-teal-foreground">
+              <RefreshCw className="size-4 animate-spin" />
+              Refreshing route memory, then generating 10 PM → 11 PM → 12 AM-6
+              AM routes for {DAY_LABELS[dayIndex]} only — the rest of the week
+              is left untouched.
+            </p>
+          )}
+
+          {dayResult && dayResultStatus && (
+            <div className="rounded-lg border bg-card">
+              <div className="flex flex-wrap items-center gap-2 border-b px-3 py-2">
+                {dayResultStatus === "success" ? (
+                  <CheckCircle2 className="size-4 text-green" />
+                ) : (
+                  <AlertTriangle className="size-4 text-destructive" />
+                )}
+                <span className="text-sm font-medium">
+                  {DAY_LABELS[dayResult.dayOfWeek ?? dayIndex]} mapping —{" "}
+                  {dayResultStatus === "success"
+                    ? "routes generated cleanly"
+                    : dayResultStatus === "partial"
+                      ? "some entries had problems"
+                      : "no routes were created"}
+                </span>
+              </div>
+              <div className="p-3">
+                <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+                  <ResultStat
+                    label="10 PM routes"
+                    value={dayResult.summary.routesGenerated10PM}
+                  />
+                  <ResultStat
+                    label="11 PM routes"
+                    value={dayResult.summary.routesGenerated11PM}
+                  />
+                  <ResultStat
+                    label="12 AM-6 AM routes"
+                    value={dayResult.summary.routesGenerated12AMPlus}
+                  />
+                  <ResultStat
+                    label="Errors"
+                    value={dayResult.summary.totalErrors}
+                    tone={dayResult.summary.totalErrors > 0 ? "danger" : "ok"}
+                  />
+                </div>
+
+                {dayResult.learning && !dayResult.learning.success && (
+                  <p className="mt-3 rounded-lg border border-amber/40 bg-amber/10 px-3 py-2 text-xs text-amber-foreground">
+                    Route memory refresh failed this run — the planner fell back
+                    to the 5 min/km estimate. {dayResult.learning.error}
+                  </p>
+                )}
+
+                {dayResult.summary.totalErrors > 0 && (
+                  <div className="mt-3 space-y-2">
+                    {(
+                      ["errors10PM", "errors11PM", "errors12AMPlus"] as const
+                    ).map((key) => {
+                      const errors = dayResult.details[key];
+                      if (errors.length === 0) return null;
+                      return (
+                        <div
+                          key={key}
+                          className="rounded-lg border border-destructive/30 bg-destructive/5 p-3"
+                        >
+                          <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-destructive">
+                            {key.replace("errors", "") || "Errors"}
+                          </p>
+                          <ul className="list-disc pl-5 text-xs text-muted-foreground">
+                            {errors.slice(0, 12).map((err, idx) => (
+                              <li key={idx}>{err}</li>
+                            ))}
+                            {errors.length > 12 && (
+                              <li>… and {errors.length - 12} more.</li>
+                            )}
+                          </ul>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
         </CardContent>
       </Card>
 

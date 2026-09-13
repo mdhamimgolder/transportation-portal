@@ -93,6 +93,11 @@ export class OsrmError extends Error {
 export { parseNoSegmentIndex };
 
 const MIN_REQUEST_GAP_MS = 350; // public demo server is rate-limited
+// A custom OSRM_SERVER_URL points at a self-hosted instance — no public rate
+// limit applies, so the inter-request gap is skipped and independent requests
+// run with bounded concurrency (generation gets several times faster). The
+// default public demo server keeps the throttled, strictly-spaced behavior.
+const THROTTLE_REQUESTS = !process.env.OSRM_SERVER_URL;
 let lastRequestAt = 0;
 
 /** Great-circle bearing (degrees clockwise from north) from a → b. Local copy
@@ -120,11 +125,13 @@ async function osrmFetch(
   path: string,
   attempt = 1
 ): Promise<Record<string, unknown>> {
-  const sinceLast = Date.now() - lastRequestAt;
-  if (sinceLast < MIN_REQUEST_GAP_MS) {
-    await sleep(MIN_REQUEST_GAP_MS - sinceLast);
+  if (THROTTLE_REQUESTS) {
+    const sinceLast = Date.now() - lastRequestAt;
+    if (sinceLast < MIN_REQUEST_GAP_MS) {
+      await sleep(MIN_REQUEST_GAP_MS - sinceLast);
+    }
+    lastRequestAt = Date.now();
   }
-  lastRequestAt = Date.now();
 
   const response = await fetch(`${OSRM_BASE}${path}`, { cache: "no-store" });
   if (!response.ok) {
@@ -192,10 +199,24 @@ async function loadCachedPairs(
     }
   });
 
+  // Filter to the requested coordinate tuples — the unique compound index
+  // (fromLat, fromLng, toLat, toLng, provider) makes this a cheap indexed
+  // lookup instead of loading the ENTIRE cache table on every matrix call.
+  const fromTuples = [...from.values()].map((o) => ({
+    fromLat: o.lat,
+    fromLng: o.lng,
+  }));
+  const toTuples = [...new Set(destinations.map((d) => `${d.lat},${d.lng}`))].map(
+    (k) => {
+      const [lat, lng] = k.split(",").map(Number);
+      return { toLat: lat, toLng: lng };
+    }
+  );
   const hits = await prisma.distanceMatrixCache.findMany({
     where: {
       provider: CACHE_PROVIDER,
       expiresAt: { gt: new Date() },
+      AND: [{ OR: fromTuples }, { OR: toTuples }],
     },
     select: {
       fromLat: true,
@@ -258,24 +279,15 @@ async function persistPairs(
     }
   }
   if (rows.length === 0) return;
-  // Unique constraint on (fromLat, fromLng, toLat, toLng, provider) forces upsert.
-  await Promise.all(
-    rows.map((row) =>
-      prisma.distanceMatrixCache.upsert({
-        where: {
-          fromLat_fromLng_toLat_toLng_provider: {
-            fromLat: row.fromLat,
-            fromLng: row.fromLng,
-            toLat: row.toLat,
-            toLng: row.toLng,
-            provider: CACHE_PROVIDER,
-          },
-        },
-        update: { distance: row.distance, duration: row.duration, expiresAt },
-        create: { ...row, provider: CACHE_PROVIDER, expiresAt },
-      })
-    )
-  );
+  // Batched instead of one upsert per pair (N×M round-trips). persistPairs
+  // only runs for pairs that were MISSING from the cache, so they are inserts;
+  // duplicates inside one batch (two riders sharing an address) carry the same
+  // OSRM values, so `skipDuplicates` keeps exactly the row the old upsert
+  // would have written.
+  await prisma.distanceMatrixCache.createMany({
+    data: rows.map((row) => ({ ...row, provider: CACHE_PROVIDER, expiresAt })),
+    skipDuplicates: true,
+  });
 }
 
 /**
@@ -538,6 +550,164 @@ export async function optimizeRoute(
 
 /** In-memory cache of decoded driving polylines per leg (per process). */
 const polylineCache = new Map<string, Array<{ lat: number; lng: number }>>();
+/** In-flight polyline fetches — identical concurrent requests share one call. */
+const polylineInFlight = new Map<
+  string,
+  Promise<Array<{ lat: number; lng: number }>>
+>();
+
+/** Decode a persisted geometry JSON value into [{ lat, lng }] points. Accepts
+ * both the current convention (`[[lat, lng], ...]`) and the legacy object
+ * shape (`[{ lat, lng }, ...]`) so older rows keep working. Returns null when
+ * no usable points are found (caller then falls back to OSRM). */
+function decodePolylinePoints(
+  raw: unknown
+): Array<{ lat: number; lng: number }> | null {
+  if (!Array.isArray(raw)) return null;
+  const out: Array<{ lat: number; lng: number }> = [];
+  for (const p of raw) {
+    if (
+      Array.isArray(p) &&
+      p.length >= 2 &&
+      typeof p[0] === "number" &&
+      typeof p[1] === "number"
+    ) {
+      out.push({ lat: p[0], lng: p[1] });
+    } else if (
+      p !== null &&
+      typeof p === "object" &&
+      typeof (p as { lat?: unknown }).lat === "number" &&
+      typeof (p as { lng?: unknown }).lng === "number"
+    ) {
+      out.push({
+        lat: (p as { lat: number }).lat,
+        lng: (p as { lng: number }).lng,
+      });
+    }
+  }
+  return out.length > 0 ? out : null;
+}
+
+/**
+ * Load a persisted leg geometry (30-day TTL) — the polyline counterpart of
+ * the DistanceMatrixCache lookup, so corridor geometry survives restarts and
+ * re-runs instead of being re-fetched from the rate-limited OSRM server.
+ */
+async function loadCachedPolyline(
+  from: Location,
+  to: Location
+): Promise<Array<{ lat: number; lng: number }> | null> {
+  const row = await prisma.routePolylineCache.findUnique({
+    where: {
+      fromLat_fromLng_toLat_toLng_provider: {
+        fromLat: from.lat,
+        fromLng: from.lng,
+        toLat: to.lat,
+        toLng: to.lng,
+        provider: CACHE_PROVIDER,
+      },
+    },
+    select: { points: true, expiresAt: true },
+  });
+  if (!row || row.expiresAt.getTime() <= Date.now()) return null;
+  return decodePolylinePoints(row.points);
+}
+
+/** A leg a caller wants pre-warmed — the exact (from, to, bearing) tuple. */
+export interface PolylineWarmKey {
+  from: Location;
+  to: Location;
+  initialBearingDeg?: number | null;
+  bearingRangeDeg?: number;
+}
+
+/**
+ * Batch-load persisted leg geometries for a whole planning pass and seed the
+ * in-memory cache with the EXACT keys the sweep will look up — ONE query per
+ * pass instead of a DB round-trip per leg. Pure cache warm-up: every row is
+ * byte-identical to what a per-leg lookup (or the original OSRM fetch) would
+ * return, so planning judgments are unchanged — only fetch latency is removed.
+ */
+export async function warmPolylineCache(keys: PolylineWarmKey[]): Promise<void> {
+  if (keys.length === 0) return;
+  const fromTuples = [...new Set(keys.map((k) => `${k.from.lat},${k.from.lng}`))].map(
+    (k) => {
+      const [lat, lng] = k.split(",").map(Number);
+      return { fromLat: lat, fromLng: lng };
+    }
+  );
+  const toTuples = [...new Set(keys.map((k) => `${k.to.lat},${k.to.lng}`))].map(
+    (k) => {
+      const [lat, lng] = k.split(",").map(Number);
+      return { toLat: lat, toLng: lng };
+    }
+  );
+  const rows = await prisma.routePolylineCache.findMany({
+    where: {
+      provider: CACHE_PROVIDER,
+      expiresAt: { gt: new Date() },
+      AND: [{ OR: fromTuples }, { OR: toTuples }],
+    },
+    select: {
+      fromLat: true,
+      fromLng: true,
+      toLat: true,
+      toLng: true,
+      points: true,
+    },
+  });
+  if (rows.length === 0) return;
+  const byPair = new Map<string, Array<{ lat: number; lng: number }>>();
+  for (const row of rows) {
+    const points = decodePolylinePoints(row.points);
+    if (!points || points.length < 2) continue;
+    byPair.set(`${row.fromLat},${row.fromLng}|${row.toLat},${row.toLng}`, points);
+  }
+  for (const k of keys) {
+    const range = k.bearingRangeDeg ?? INITIAL_BEARING_RANGE;
+    const bearings = waypointBearingParam(
+      [k.initialBearingDeg ?? null, null],
+      range
+    );
+    const memKey = `${k.from.lat.toFixed(6)},${k.from.lng.toFixed(6)}|${k.to.lat.toFixed(6)},${k.to.lng.toFixed(6)}|${bearings}`;
+    if (polylineCache.has(memKey)) continue;
+    const points = byPair.get(`${k.from.lat},${k.from.lng}|${k.to.lat},${k.to.lng}`);
+    if (points) polylineCache.set(memKey, points);
+  }
+}
+
+/** Write-through persist — best-effort; a failed write only costs a re-fetch.
+ * Stored as `[[lat, lng], ...]` tuples (the decode convention). */
+function persistPolyline(
+  from: Location,
+  to: Location,
+  points: Array<{ lat: number; lng: number }>
+): void {
+  const tuplePoints = points.map((p) => [p.lat, p.lng]);
+  void prisma.routePolylineCache
+    .upsert({
+      where: {
+        fromLat_fromLng_toLat_toLng_provider: {
+          fromLat: from.lat,
+          fromLng: from.lng,
+          toLat: to.lat,
+          toLng: to.lng,
+          provider: CACHE_PROVIDER,
+        },
+      },
+      update: { points: tuplePoints, expiresAt: new Date(Date.now() + CACHE_TTL_MS) },
+      create: {
+        fromLat: from.lat,
+        fromLng: from.lng,
+        toLat: to.lat,
+        toLng: to.lng,
+        provider: CACHE_PROVIDER,
+        points: tuplePoints,
+        expiresAt: new Date(Date.now() + CACHE_TTL_MS),
+      },
+    })
+    .catch(() => undefined);
+}
 
 /**
  * Default allowed deviation (°) around the enforced initial heading. Kept well
@@ -583,17 +753,37 @@ export async function getRoutePolyline(
   const hit = polylineCache.get(key);
   if (hit) return hit;
 
-  const coords = `${from.lng},${from.lat};${to.lng},${to.lat}`;
-  const data = await osrmFetch(
-    `/route/v1/driving/${coords}?overview=full&geometries=geojson${bearings ? `&bearings=${bearings}` : ""}`
-  );
-  const routes = data.routes as
-    | Array<{ geometry: { coordinates: Array<[number, number]> } }>
-    | undefined;
-  const line = routes?.[0]?.geometry?.coordinates ?? [];
-  const points = line.map(([lng, lat]) => ({ lat, lng }));
-  polylineCache.set(key, points);
-  return points;
+  const inFlight = polylineInFlight.get(key);
+  if (inFlight) return inFlight;
+
+  const task = (async () => {
+    // Persisted cache first (parity with the distance matrix): re-runs and
+    // post-restart runs skip the OSRM round-trip entirely.
+    const dbHit = await loadCachedPolyline(from, to);
+    if (dbHit) {
+      polylineCache.set(key, dbHit);
+      return dbHit;
+    }
+
+    const coords = `${from.lng},${from.lat};${to.lng},${to.lat}`;
+    const data = await osrmFetch(
+      `/route/v1/driving/${coords}?overview=full&geometries=geojson${bearings ? `&bearings=${bearings}` : ""}`
+    );
+    const routes = data.routes as
+      | Array<{ geometry: { coordinates: Array<[number, number]> } }>
+      | undefined;
+    const line = routes?.[0]?.geometry?.coordinates ?? [];
+    const points = line.map(([lng, lat]) => ({ lat, lng }));
+    polylineCache.set(key, points);
+    if (points.length >= 2) persistPolyline(from, to, points);
+    return points;
+  })();
+  polylineInFlight.set(key, task);
+  try {
+    return await task;
+  } finally {
+    polylineInFlight.delete(key);
+  }
 }
 
 /* ── Constraint-aware requests used by the route analysis ───────────── */

@@ -4,7 +4,6 @@ import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { requireRole } from "@/lib/rbac/guards";
 import { Role, WeeklyScheduleStatus } from "@/lib/constants/enums";
-import { ARRIVAL_TIME_OPTIONS } from "@/lib/constants/arrival-times";
 import {
   getMondayOfWeek,
   getWeekDays,
@@ -43,6 +42,9 @@ export interface GenerateRoutesResult {
     confidentLegs: number;
     error?: string;
   };
+  /** Which weekday a day-wise run scoped to (0=Mon .. 4=Fri). Absent for a
+   * full-week run. */
+  dayOfWeek?: number;
 }
 
 /** Parse a "yyyy-mm-dd" string as a LOCAL date (avoids UTC shift-off-by-one). */
@@ -55,10 +57,6 @@ function parseDayString(value: string): Date {
  * UTC (`weekStartDate`, `weeklyScheduleDay.date`), so week-boundary lookups
  * must compare against UTC-midnight values regardless of the server's timezone.
  * (Shared implementation: lib/date/week.ts.) */
-
-const ARRIVAL_VALUE_LABELS = Object.fromEntries(
-  ARRIVAL_TIME_OPTIONS.map((o) => [o.value, o.label])
-);
 
 /**
  * Fixed-arrival employees (role FIXED_ARRIVAL) do not submit weekly
@@ -73,6 +71,7 @@ async function ensureFixedArrivalSchedules(weekStartDate: Date): Promise<number>
     where: {
       role: Role.FIXED_ARRIVAL,
       fixedArrivalTime: { not: null },
+      fixedArrivalActive: true,
       isActive: true,
     },
     select: { id: true, fixedArrivalTime: true },
@@ -81,44 +80,51 @@ async function ensureFixedArrivalSchedules(weekStartDate: Date): Promise<number>
 
   const weekDates = getWeekDays(weekStartDate);
   let ensured = 0;
-  for (const user of fixedUsers) {
-    const arrivalTime = user.fixedArrivalTime;
-    if (!arrivalTime) continue;
-    const schedule = await prisma.weeklySchedule.upsert({
-      where: {
-        employeeId_weekStartDate: { employeeId: user.id, weekStartDate },
-      },
-      update: {},
-      create: {
-        employeeId: user.id,
-        weekStartDate,
-        status: WeeklyScheduleStatus.APPROVED,
-      },
-    });
-    for (let dayOfWeek = 1; dayOfWeek <= 5; dayOfWeek++) {
-      await prisma.weeklyScheduleDay.upsert({
+  // Parallel upserts — every employee/day is an independent row keyed by
+  // (employeeId, weekStartDate) / (weeklyScheduleId, dayOfWeek), so the
+  // outcome is identical to the sequential loop, just without the latency.
+  await Promise.all(
+    fixedUsers.map(async (user) => {
+      const arrivalTime = user.fixedArrivalTime;
+      if (!arrivalTime) return;
+      const schedule = await prisma.weeklySchedule.upsert({
         where: {
-          weeklyScheduleId_dayOfWeek: {
-            weeklyScheduleId: schedule.id,
-            dayOfWeek,
-          },
+          employeeId_weekStartDate: { employeeId: user.id, weekStartDate },
         },
-        update: {
-          arrivalTime,
-          needsTransport: true,
-          date: weekDates[dayOfWeek - 1],
-        },
+        update: {},
         create: {
-          weeklyScheduleId: schedule.id,
-          dayOfWeek,
-          date: weekDates[dayOfWeek - 1],
-          arrivalTime,
-          needsTransport: true,
+          employeeId: user.id,
+          weekStartDate,
+          status: WeeklyScheduleStatus.APPROVED,
         },
       });
-      ensured++;
-    }
-  }
+      await Promise.all(
+        [1, 2, 3, 4, 5].map(async (dayOfWeek) => {
+          await prisma.weeklyScheduleDay.upsert({
+            where: {
+              weeklyScheduleId_dayOfWeek: {
+                weeklyScheduleId: schedule.id,
+                dayOfWeek,
+              },
+            },
+            update: {
+              arrivalTime,
+              needsTransport: true,
+              date: weekDates[dayOfWeek - 1],
+            },
+            create: {
+              weeklyScheduleId: schedule.id,
+              dayOfWeek,
+              date: weekDates[dayOfWeek - 1],
+              arrivalTime,
+              needsTransport: true,
+            },
+          });
+          ensured++;
+        })
+      );
+    })
+  );
   return ensured;
 }
 
@@ -170,6 +176,90 @@ function gapMinutes(a: number | null, b: number | null): number | null {
  *    dynamic routes for each weekday, using OSRM (no Google Maps key).
  * 5. Respect vehicles pinned in Route Setting (VehicleShiftAssignment).
  */
+/** Shared generation core used by both the week-wise and the day-wise run
+ *  mapping actions. Scoped to the given weekday indexes (0=Mon .. 4=Fri) —
+ *  the draft-cleanup and the generation loop touch ONLY those days, so a
+ *  single-day run never wipes the other days' draft routes.
+ */
+async function runRouteGeneration(weekStartDate: Date, dayIndexes: number[]) {
+  // Fixed-arrival employees ride every mapped week at their locked arrival
+  // time — upsert their standing schedule days before generating.
+  await ensureFixedArrivalSchedules(weekStartDate);
+
+  // Auto-"Learn from history": every mapping run first rebuilds the learned
+  // pickup-gap set from all historical route plans, so the fresh plan uses
+  // the real-world signal without a manual button click. A failed refresh
+  // never blocks mapping — the 5 min/km distance estimate is the fallback.
+  const learning = await trainRoutePlannerFromHistory();
+
+  const summary = {
+    routesGenerated10PM: 0,
+    routesGenerated11PM: 0,
+    routesGenerated12AMPlus: 0,
+    totalErrors: 0,
+  };
+
+  const details = {
+    errors10PM: [] as string[],
+    errors11PM: [] as string[],
+    errors12AMPlus: [] as string[],
+  };
+
+  // Idempotency: drop previously generated draft routes for the scoped days
+  // so a re-run produces a clean sheet. Finalized/executed plans are untouched.
+  try {
+    await prisma.routePlan.deleteMany({
+      where: {
+        weekStartDate,
+        dayOfWeek: { in: dayIndexes },
+        status: { in: ["DRAFT", "UNDER_REVIEW"] },
+      },
+    });
+  } catch (error) {
+    throw new Error(
+      `Failed to clear previous draft routes: ${
+        error instanceof Error ? error.message : String(error)
+      }`
+    );
+  }
+
+  // Generate routes for each scoped day (Monday = 0, Friday = 4)
+  for (const dayOfWeek of dayIndexes) {
+    try {
+      const result10PM = await generate10PMRoutes(weekStartDate, dayOfWeek);
+      summary.routesGenerated10PM += result10PM.routesCreated;
+      if (result10PM.errors.length > 0) {
+        details.errors10PM.push(...result10PM.errors);
+        summary.totalErrors += result10PM.errors.length;
+      }
+
+      const result11PM = await generate11PMRoutes(weekStartDate, dayOfWeek);
+      summary.routesGenerated11PM += result11PM.routesCreated;
+      if (result11PM.errors.length > 0) {
+        details.errors11PM.push(...result11PM.errors);
+        summary.totalErrors += result11PM.errors.length;
+      }
+
+      const result12AMPlus = await generate12AMPlus6AMRoutes(
+        weekStartDate,
+        dayOfWeek
+      );
+      summary.routesGenerated12AMPlus += result12AMPlus.routesCreated;
+      if (result12AMPlus.errors.length > 0) {
+        details.errors12AMPlus.push(...result12AMPlus.errors);
+        summary.totalErrors += result12AMPlus.errors.length;
+      }
+    } catch (dayError) {
+      const errorMsg =
+        dayError instanceof Error ? dayError.message : String(dayError);
+      details.errors10PM.push(`Day ${dayOfWeek + 1}: ${errorMsg}`);
+      summary.totalErrors++;
+    }
+  }
+
+  return { summary, details, learning };
+}
+
 export async function generateWeeklyRoutes(
   weekStartDateStr: string
 ): Promise<GenerateRoutesResult> {
@@ -183,79 +273,10 @@ export async function generateWeeklyRoutes(
 
     const weekStartDate = toUtcMidnight(getMondayOfWeek(parsed));
 
-    // Fixed-arrival employees ride every mapped week at their locked arrival
-    // time — upsert their standing schedule days before generating.
-    await ensureFixedArrivalSchedules(weekStartDate);
-
-    // Auto-"Learn from history": every mapping run first rebuilds the learned
-    // pickup-gap set from all historical route plans, so the fresh plan uses
-    // the real-world signal without a manual button click. A failed refresh
-    // never blocks mapping — the 5 min/km distance estimate is the fallback.
-    const learning = await trainRoutePlannerFromHistory();
-
-    const summary = {
-      routesGenerated10PM: 0,
-      routesGenerated11PM: 0,
-      routesGenerated12AMPlus: 0,
-      totalErrors: 0,
-    };
-
-    const details = {
-      errors10PM: [] as string[],
-      errors11PM: [] as string[],
-      errors12AMPlus: [] as string[],
-    };
-
-    // Idempotency: drop previously generated draft routes for this week so a
-    // re-run produces a clean sheet. Finalized/executed plans are untouched.
-    try {
-      await prisma.routePlan.deleteMany({
-        where: {
-          weekStartDate,
-          status: { in: ["DRAFT", "UNDER_REVIEW"] },
-        },
-      });
-    } catch (error) {
-      throw new Error(
-        `Failed to clear previous draft routes: ${
-          error instanceof Error ? error.message : String(error)
-        }`
-      );
-    }
-
-    // Generate routes for each day (Monday = 0, Friday = 4)
-    for (let dayOfWeek = 0; dayOfWeek < 5; dayOfWeek++) {
-      try {
-        const result10PM = await generate10PMRoutes(weekStartDate, dayOfWeek);
-        summary.routesGenerated10PM += result10PM.routesCreated;
-        if (result10PM.errors.length > 0) {
-          details.errors10PM.push(...result10PM.errors);
-          summary.totalErrors += result10PM.errors.length;
-        }
-
-        const result11PM = await generate11PMRoutes(weekStartDate, dayOfWeek);
-        summary.routesGenerated11PM += result11PM.routesCreated;
-        if (result11PM.errors.length > 0) {
-          details.errors11PM.push(...result11PM.errors);
-          summary.totalErrors += result11PM.errors.length;
-        }
-
-        const result12AMPlus = await generate12AMPlus6AMRoutes(
-          weekStartDate,
-          dayOfWeek
-        );
-        summary.routesGenerated12AMPlus += result12AMPlus.routesCreated;
-        if (result12AMPlus.errors.length > 0) {
-          details.errors12AMPlus.push(...result12AMPlus.errors);
-          summary.totalErrors += result12AMPlus.errors.length;
-        }
-      } catch (dayError) {
-        const errorMsg =
-          dayError instanceof Error ? dayError.message : String(dayError);
-        details.errors10PM.push(`Day ${dayOfWeek + 1}: ${errorMsg}`);
-        summary.totalErrors++;
-      }
-    }
+    const { summary, details, learning } = await runRouteGeneration(
+      weekStartDate,
+      [0, 1, 2, 3, 4]
+    );
 
     revalidatePath("/facilities/route-planning");
     revalidatePath("/facilities/automated-route-planner");
@@ -279,6 +300,77 @@ export async function generateWeeklyRoutes(
     return {
       success: false,
       weekStartDate: weekStartDateStr,
+      summary: {
+        routesGenerated10PM: 0,
+        routesGenerated11PM: 0,
+        routesGenerated12AMPlus: 0,
+        totalErrors: 1,
+      },
+      details: {
+        errors10PM: [errorMsg],
+        errors11PM: [],
+        errors12AMPlus: [],
+      },
+      learning: {
+        success: false,
+        legCount: 0,
+        observationCount: 0,
+        confidentLegs: 0,
+      },
+    };
+  }
+}
+
+/** Day-wise run mapping — generates route planning for ONE weekday of the
+ *  given week only, leaving the other days' draft routes untouched.
+ *  `dayIndex` is 0 = Monday .. 4 = Friday.
+ */
+export async function generateDayRoutes(
+  weekStartDateStr: string,
+  dayIndex: number
+): Promise<GenerateRoutesResult> {
+  try {
+    await requireRole([Role.FACILITIES, Role.SUPER_ADMIN]);
+
+    const parsed = parseDayString(weekStartDateStr);
+    if (isNaN(parsed.getTime())) {
+      throw new Error("Invalid week start date format");
+    }
+    if (!Number.isInteger(dayIndex) || dayIndex < 0 || dayIndex > 4) {
+      throw new Error("Invalid day selected — pick a weekday (Mon-Fri)");
+    }
+
+    const weekStartDate = toUtcMidnight(getMondayOfWeek(parsed));
+
+    const { summary, details, learning } = await runRouteGeneration(
+      weekStartDate,
+      [dayIndex]
+    );
+
+    revalidatePath("/facilities/route-planning");
+    revalidatePath("/facilities/automated-route-planner");
+
+    return {
+      success: summary.totalErrors === 0,
+      weekStartDate: weekStartDate.toISOString().split("T")[0],
+      dayOfWeek: dayIndex,
+      summary,
+      details,
+      learning: {
+        success: learning.success,
+        legCount: learning.legCount,
+        observationCount: learning.observationCount,
+        confidentLegs: learning.confidentLegs,
+        error: learning.error,
+      },
+    };
+  } catch (error) {
+    const errorMsg =
+      error instanceof Error ? error.message : "Unknown error occurred";
+    return {
+      success: false,
+      weekStartDate: weekStartDateStr,
+      dayOfWeek: dayIndex,
       summary: {
         routesGenerated10PM: 0,
         routesGenerated11PM: 0,
@@ -641,6 +733,25 @@ export async function getGeneratedRouteDetails(
           pickupLocationLabel =
             t.pickupAddress?.addressText ?? t.employee.address ?? null;
         }
+        // Resolve the stop's rendered coordinates. PRESET points use the
+        // pickup-registry Address (Facilities-maintained lat/lng) — never the
+        // employee's home; everything else uses the assignment's pickup
+        // Address. Placeholder (0, 0) rows count as missing (same rule the
+        // route analysis applies), so a point without coordinates can never
+        // draw a pin at 0, 0 — the map shows its "coordinates missing" state.
+        let pickupLat: number | null = null;
+        let pickupLng: number | null = null;
+        if (t.pickupType === "PRESET_POINT") {
+          pickupLat = t.pickupPoint?.address?.latitude ?? null;
+          pickupLng = t.pickupPoint?.address?.longitude ?? null;
+        } else {
+          pickupLat = t.pickupAddress?.latitude ?? null;
+          pickupLng = t.pickupAddress?.longitude ?? null;
+        }
+        if (pickupLat === 0 && pickupLng === 0) {
+          pickupLat = null;
+          pickupLng = null;
+        }
         return {
           id: t.id,
           sequenceInTrip: t.sequenceInTrip,
@@ -650,14 +761,8 @@ export async function getGeneratedRouteDetails(
           employeeRole: t.employee.role,
           pickupType: t.pickupType,
           pickupLocationLabel,
-          pickupLat:
-            t.pickupType === "PRESET_POINT"
-              ? (t.pickupPoint?.address?.latitude ?? null)
-              : (t.pickupAddress?.latitude ?? null),
-          pickupLng:
-            t.pickupType === "PRESET_POINT"
-              ? (t.pickupPoint?.address?.longitude ?? null)
-              : (t.pickupAddress?.longitude ?? null),
+          pickupLat,
+          pickupLng,
           travelFromPreviousMin: fromPrevious,
           travelToOfficeMin: toOffice,
           approachBearing: t.approachBearing ?? null,

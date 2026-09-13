@@ -73,6 +73,13 @@ export type SchedulePointInput = {
 export type PickupAnchor = {
   firstPickupTime: string | null;
   baseETA: string | null;
+  /**
+   * Office arrival to anchor the schedule on when neither `firstPickupTime`
+   * nor `baseETA` is set on the vehicle. This is the shift's default arrival
+   * (10 PM → 22:00), so the pickup times are back-calculated from taught /
+   * learned leg gaps instead of a manually entered anchor.
+   */
+  defaultArrival?: string | null;
 };
 
 export type PickupScheduleResult =
@@ -154,7 +161,7 @@ export function computePickupSchedule(
   const officeName = office.name;
 
   const first = normalizeTime(anchor.firstPickupTime);
-  const base = normalizeTime(anchor.baseETA);
+  const base = normalizeTime(anchor.baseETA) ?? normalizeTime(anchor.defaultArrival);
   const minutes: number[] = new Array(points.length);
   let method: "first_pickup" | "base_eta";
   let officeArrival: string;
@@ -317,6 +324,10 @@ export async function syncPickupPointTimes(
     {
       firstPickupTime: vehicle.firstPickupTime,
       baseETA: vehicle.baseETA,
+      // Preset points are the 10 PM trips, whose office arrival is 22:00.
+      // When the vehicle has no manual anchor, load-learnt / taught gaps
+      // back-calculate the pickup times from here — no manual entry needed.
+      defaultArrival: "22:00",
     },
     points,
     office,

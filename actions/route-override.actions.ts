@@ -11,6 +11,10 @@ import { officeCoordinatesFor } from "@/lib/constants/office-locations";
 import { loadLearnedLegs, LEARN_MIN_SAMPLES } from "@/lib/routing/pickup-schedule";
 import { backCalculatePickupMinutes } from "@/lib/routing/schedule-math";
 import { haversineDistance, minutesToTimeString } from "@/lib/routing/utils";
+import {
+  learnRouteTemplateFromAssignments,
+  mirrorRouteEditsAcrossWeek,
+} from "@/lib/routing/route-pattern";
 
 /**
  * Reassign an employee to a different vehicle
@@ -95,6 +99,9 @@ export async function reassignEmployeeToVehicle(
         routePlan: true,
       },
     });
+
+    // Propagate the new shape to the other draft days of this week.
+    await mirrorRouteEditsAcrossWeek(currentAssignment.routePlanId);
 
     revalidatePath("/facilities/route-planning");
 
@@ -189,6 +196,10 @@ export async function adjustPickupTime(
         routePlan: true,
       },
     });
+
+    // Push the new pick-up time to the same vehicle's other draft days of the
+    // week (Tue-Fri follow Monday instantly — no re-mapping).
+    await mirrorRouteEditsAcrossWeek(currentAssignment.routePlanId);
 
     revalidatePath("/facilities/route-planning");
     revalidatePath("/facilities/automated-route-planner");
@@ -325,6 +336,20 @@ export async function finalizeRoute(routePlanId: string) {
         finalizedAt: new Date(),
       },
     });
+
+    // Learn the tuned route (stop order + pickup times) as this vehicle's
+    // pattern for this arrival time — the next week's RUN MAPPING replays it.
+    await learnRouteTemplateFromAssignments({
+      vehicleId: routePlan.vehicleId,
+      arrivalTime: routePlan.arrivalTime,
+      office: routePlan.officeLocation,
+      sourcePlanId: routePlanId,
+      assignments: routePlan.tripAssignments,
+    });
+
+    // Better late than never at week start: if Facilities finalizes one day's
+    // route first, the other draft days follow the finalized pattern.
+    await mirrorRouteEditsAcrossWeek(routePlanId);
 
     // Send emails in background after response
     after(async () => {
@@ -699,6 +724,10 @@ export async function reorderRouteTrips(
     const retimeError = await retimeRoute(routePlanId);
     if (retimeError) return { success: false, error: retimeError };
 
+    // The tuned order is the working pattern for the week: reflect it onto the
+    // same vehicle + arrival time on the other draft days.
+    await mirrorRouteEditsAcrossWeek(routePlanId);
+
     revalidatePath("/facilities/automated-route-planner");
     revalidatePath("/facilities/route-planning");
     return {
@@ -812,6 +841,11 @@ export async function moveTripToRoute(
     if (errors.length > 0) {
       return { success: false, error: errors.join(" ") };
     }
+
+    // Both routes changed shape — propagate each pattern to its own other
+    // draft days of the week.
+    await mirrorRouteEditsAcrossWeek(trip.routePlanId);
+    await mirrorRouteEditsAcrossWeek(targetRoutePlanId);
 
     revalidatePath("/facilities/automated-route-planner");
     revalidatePath("/facilities/route-planning");

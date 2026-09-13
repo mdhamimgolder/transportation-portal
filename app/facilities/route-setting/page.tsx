@@ -34,7 +34,7 @@ export default async function RouteSettingPage({
     }),
     getVehicleShiftPins(weekStart.toISOString().split("T")[0]),
     prisma.user.findMany({
-      where: { role: Role.EMPLOYEE, pickupPoint: { not: null } },
+      where: { role: { in: [Role.EMPLOYEE, Role.FIXED_ARRIVAL] }, pickupPoint: { not: null } },
       select: { pickupPoint: true },
     }),
     prisma.pickupPoint.findMany({
