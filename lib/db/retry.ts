@@ -1,4 +1,5 @@
 import "server-only";
+import { logger } from "@/lib/logger";
 
 /** Extract a human-readable message from anything thrown, including the
  * opaque DOM/fetch `ErrorEvent` objects the Neon serverless driver can throw
@@ -50,7 +51,13 @@ export async function withDbRetry<T>(label: string, fn: () => Promise<T>): Promi
       return await fn();
     } catch (error) {
       lastError = error;
-      if (attempt === 1) await sleep(1000);
+      if (attempt === 1) {
+        logger.warn("db", "query failed, retrying once", {
+          label,
+          error: dbErrorMessage(error),
+        });
+        await sleep(1000);
+      }
     }
   }
   throw new Error(

@@ -6,7 +6,7 @@ import type { NavLink } from "@/components/shared/nav-sidebar";
 export default async function FacilitiesLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
-  const user = await requireRole([Role.FACILITIES]);
+  const user = await requireRole([Role.FACILITIES, Role.SUPER_ADMIN]);
 
   const links: NavLink[] = [
     { href: "/facilities/dashboard", label: "Dashboard", icon: "dashboard" },

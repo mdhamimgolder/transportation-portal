@@ -4,7 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { AdHocList } from "@/components/facilities/adhoc-list";
 
 export default async function FacilitiesAdHocPage() {
-  await requireRole([Role.FACILITIES]);
+  await requireRole([Role.FACILITIES, Role.SUPER_ADMIN]);
 
   // Visible as soon as an employee submits -- only assigned (or cancelled)
   // requests drop off, since those have already moved to Allocation History.

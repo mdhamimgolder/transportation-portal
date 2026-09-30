@@ -9,6 +9,8 @@
  * rate limit — searches are memoized in memory so repeat lookups are free.
  */
 
+import { env } from "@/lib/env";
+
 export interface GeocodeResult {
   lat: number;
   lng: number;
@@ -16,28 +18,34 @@ export interface GeocodeResult {
   addressText: string;
 }
 
-const GEOCODER_BASE = (
-  process.env.GEOCODER_URL || "https://nominatim.openstreetmap.org"
-).replace(/\/+$/, "");
-// Nominatim usage policy asks for a valid identifying User-Agent.
-const USER_AGENT =
-  process.env.GEOCODER_USER_AGENT || "transportation-portal/1.0 (route planning)";
-const COUNTRY_CODES = process.env.GEOCODER_COUNTRY_CODES || "bd";
-
 const cache = new Map<string, GeocodeResult[]>();
 
+/** Base URL of the Nominatim server, without trailing slashes. */
+function geocoderBase(): string {
+  return env.GEOCODER_URL.replace(/\/+$/, "");
+}
+
+// Nominatim usage policy asks for a valid identifying User-Agent.
+function userAgent(): string {
+  return env.GEOCODER_USER_AGENT;
+}
+
+function countryCodes(): string {
+  return env.GEOCODER_COUNTRY_CODES;
+}
+
 async function nominatimSearch(term: string, limit: number): Promise<GeocodeResult[]> {
-  const url = new URL(`${GEOCODER_BASE}/search`);
+  const url = new URL(`${geocoderBase()}/search`);
   url.searchParams.set("q", term);
   url.searchParams.set("format", "jsonv2");
   url.searchParams.set("limit", String(limit));
   url.searchParams.set("addressdetails", "0");
-  url.searchParams.set("countrycodes", COUNTRY_CODES);
+  url.searchParams.set("countrycodes", countryCodes());
 
   const response = await fetch(url, {
     cache: "no-store",
     headers: {
-      "User-Agent": USER_AGENT,
+      "User-Agent": userAgent(),
       "Accept-Language": "en",
     },
   });

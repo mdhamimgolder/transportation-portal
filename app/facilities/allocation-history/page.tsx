@@ -9,7 +9,7 @@ export default async function FacilitiesAllocationHistoryPage({
 }: {
   searchParams: Promise<{ q?: string; type?: string; from?: string; to?: string }>;
 }) {
-  await requireRole([Role.FACILITIES]);
+  await requireRole([Role.FACILITIES, Role.SUPER_ADMIN]);
   const { q, type, from, to } = await searchParams;
   const rows = await getAllocationHistory({ q, type, from, to });
 

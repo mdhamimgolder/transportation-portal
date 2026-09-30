@@ -1,5 +1,7 @@
 import { PrismaNeon } from "@prisma/adapter-neon";
 import { PrismaClient } from "@/lib/generated/prisma/client";
+import { env } from "@/lib/env";
+import { logger } from "@/lib/logger";
 
 const KEEP_ALIVE_INTERVAL_MS = 60_000;
 const KEEP_ALIVE_FLAG = "__neonKeepAliveStarted";
@@ -8,13 +10,16 @@ const globalForPrisma = globalThis as unknown as {
   prisma: PrismaClient | undefined;
 };
 
-const adapter = new PrismaNeon({
-  connectionString: process.env.DATABASE_URL,
-});
+/**
+ * Prisma singleton. The client (and its Neon adapter) is created lazily on
+ * first access — never at module import — so pages that never touch the DB
+ * (and `next build` without secrets) don't validate env or open connections.
+ */
+let singleton: PrismaClient | null = null;
 
-export const prisma =
-  globalForPrisma.prisma ??
-  new PrismaClient({
+function createClient(): PrismaClient {
+  const adapter = new PrismaNeon({ connectionString: env.DATABASE_URL });
+  return new PrismaClient({
     adapter,
     // Batch transactions (e.g. re-timing a whole route, week-mirroring all
     // sibling days) routinely exceed Prisma's 5 s default timeout once a route
@@ -24,9 +29,24 @@ export const prisma =
       timeout: 90000,
     },
   });
+}
+
+function getPrisma(): PrismaClient {
+  if (globalForPrisma.prisma) return globalForPrisma.prisma;
+  if (!singleton) singleton = createClient();
+  return singleton;
+}
+
+export const prisma: PrismaClient = new Proxy({} as PrismaClient, {
+  get(_target, property, receiver) {
+    const client = getPrisma();
+    const value = Reflect.get(client, property, receiver);
+    return typeof value === "function" ? value.bind(client) : value;
+  },
+});
 
 if (process.env.NODE_ENV !== "production") {
-  globalForPrisma.prisma = prisma;
+  if (!globalForPrisma.prisma) globalForPrisma.prisma = getPrisma();
   startDevKeepAlive();
 }
 
@@ -44,9 +64,12 @@ function startDevKeepAlive(): void {
   g[KEEP_ALIVE_FLAG] = true;
 
   const ping = () => {
-    prisma.$queryRaw`SELECT 1`.catch(() => {
+    prisma.$queryRaw`SELECT 1`.catch((error: unknown) => {
       // Neon websocket blips are expected (see lib/db/retry.ts); the next tick
       // retries.
+      logger.debug("prisma", "keep-alive ping failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
     });
   };
   void ping();

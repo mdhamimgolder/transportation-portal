@@ -7,7 +7,7 @@ import {
 } from "@/components/facilities/pickup-point-approval-card";
 
 export default async function FacilitiesProfileApprovalsPage() {
-  await requireRole([Role.FACILITIES]);
+  await requireRole([Role.FACILITIES, Role.SUPER_ADMIN]);
 
   const pickupPointRequests = await prisma.pickupPointChangeRequest.findMany({
     include: { employee: true },

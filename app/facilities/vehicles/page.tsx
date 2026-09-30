@@ -15,7 +15,7 @@ import { VehicleDriverFormDialog } from "@/components/facilities/vehicle-driver-
 import { VehicleDriverBulkUploadDialog } from "@/components/facilities/vehicle-driver-bulk-upload-dialog";
 
 export default async function VehiclesAndDriversPage() {
-  await requireRole([Role.FACILITIES]);
+  await requireRole([Role.FACILITIES, Role.SUPER_ADMIN]);
 
   const records = await prisma.vehicleDriver.findMany({
     where: { isActive: true },

@@ -4,7 +4,7 @@ import { getEmployeeDirectory } from "@/lib/queries/users";
 import { UserInfoTable } from "@/components/facilities/user-info-table";
 
 export default async function FacilitiesUserInfoPage() {
-  await requireRole([Role.FACILITIES]);
+  await requireRole([Role.FACILITIES, Role.SUPER_ADMIN]);
   const employees = await getEmployeeDirectory();
 
   return <UserInfoTable employees={employees} />;

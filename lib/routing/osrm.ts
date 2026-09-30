@@ -13,6 +13,7 @@
  */
 
 import { prisma } from "@/lib/prisma";
+import { env } from "@/lib/env";
 import {
   haversineDistance,
   waypointBearingParam,
@@ -41,12 +42,17 @@ export interface DistanceMatrixResponse {
   status: string;
 }
 
-const OSRM_BASE = (
-  process.env.OSRM_SERVER_URL || "https://router.project-osrm.org"
-).replace(/\/+$/, "");
-
 const CACHE_PROVIDER = "OSRM";
 const CACHE_TTL_MS = 1000 * 60 * 60 * 24 * 30; // 30 days -- street geometry is stable
+
+/**
+ * Base URL of the OSRM server, without trailing slashes. Read lazily (function,
+ * never a module-level constant) so importing the routing engine never
+ * validates env — the value is only resolved when a request is actually made.
+ */
+function osrmBase(): string {
+  return env.OSRM_SERVER_URL.replace(/\/+$/, "");
+}
 
 function formatKm(meters: number): string {
   return `${(meters / 1000).toFixed(1)} km`;
@@ -97,7 +103,10 @@ const MIN_REQUEST_GAP_MS = 350; // public demo server is rate-limited
 // limit applies, so the inter-request gap is skipped and independent requests
 // run with bounded concurrency (generation gets several times faster). The
 // default public demo server keeps the throttled, strictly-spaced behavior.
-const THROTTLE_REQUESTS = !process.env.OSRM_SERVER_URL;
+// Read lazily so importing this module never validates env.
+function throttleRequests(): boolean {
+  return !process.env.OSRM_SERVER_URL;
+}
 let lastRequestAt = 0;
 
 /** Great-circle bearing (degrees clockwise from north) from a → b. Local copy
@@ -125,7 +134,7 @@ async function osrmFetch(
   path: string,
   attempt = 1
 ): Promise<Record<string, unknown>> {
-  if (THROTTLE_REQUESTS) {
+  if (throttleRequests()) {
     const sinceLast = Date.now() - lastRequestAt;
     if (sinceLast < MIN_REQUEST_GAP_MS) {
       await sleep(MIN_REQUEST_GAP_MS - sinceLast);
@@ -133,7 +142,7 @@ async function osrmFetch(
     lastRequestAt = Date.now();
   }
 
-  const response = await fetch(`${OSRM_BASE}${path}`, { cache: "no-store" });
+  const response = await fetch(`${osrmBase()}${path}`, { cache: "no-store" });
   if (!response.ok) {
     if ((response.status === 429 || response.status >= 500) && attempt < 4) {
       await sleep(500 * attempt);

@@ -3,6 +3,7 @@ import { cache } from "react";
 import { cookies } from "next/headers";
 import { prisma } from "@/lib/prisma";
 import { withDbRetry } from "@/lib/db/retry";
+import { env } from "@/lib/env";
 import {
   signSessionToken,
   verifySessionToken,
@@ -62,7 +63,7 @@ export async function createSession(user: UserForSession): Promise<void> {
   const cookieStore = await cookies();
   cookieStore.set(SESSION_COOKIE_NAME, token, {
     httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
+    secure: env.NODE_ENV === "production",
     sameSite: "lax",
     path: "/",
     maxAge: SESSION_COOKIE_MAX_AGE_SECONDS,

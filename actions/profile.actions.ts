@@ -11,8 +11,7 @@ import {
 } from "@/lib/constants/enums";
 import type { OfficeLocation } from "@/lib/constants/enums";
 import {
-  FACILITIES_NOTIFICATION_EMAIL,
-  OPERATIONS_NOTIFICATION_EMAIL,
+  notificationRecipients,
 } from "@/lib/constants/notification-recipients";
 import { sendMailBackground } from "@/lib/mailer";
 
@@ -94,9 +93,10 @@ export async function updateProfile(
           data: { address: newAddress, addressChangedAt: new Date() },
         });
 
-        const recipients = [FACILITIES_NOTIFICATION_EMAIL, OPERATIONS_NOTIFICATION_EMAIL].filter(
-          (email) => email.length > 0
-        );
+        const recipients = [
+          notificationRecipients.facilitiesNotificationEmail,
+          notificationRecipients.operationsNotificationEmail,
+        ].filter((email) => email.length > 0);
         after(async () => {
           await Promise.allSettled(
             recipients.map((to) =>

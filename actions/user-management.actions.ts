@@ -9,6 +9,7 @@ import { hashPassword } from "@/lib/auth/password";
 import { parseCsv } from "@/lib/csv";
 import { sendCredentialsEmail, sendCredentialsEmailNow } from "@/lib/mailer";
 import { randomBytes } from "node:crypto";
+import { env } from "@/lib/env";
 import { Role, ALL_ROLES, OFFICE_LOCATIONS } from "@/lib/constants/enums";
 import {
   ARRIVAL_TIME_OPTIONS,
@@ -59,7 +60,9 @@ function splitCoordPair(pair: string): [number, number] | null {
  * locally via `next dev`. On Vercel NODE_ENV=production → validation fully on.
  * TODO: remove this test-mode flag before relying on validation again.
  */
-const IS_PROD = process.env.NODE_ENV === "production";
+function isProd(): boolean {
+  return env.NODE_ENV === "production";
+}
 
 function isValidRole(value: string): value is Role {
   return (ALL_ROLES as string[]).includes(value);
@@ -95,7 +98,7 @@ export async function createUserAction(
 
     if (!fullName) return { error: "Full name is required." };
     if (!email) return { error: "Email is required." };
-    if (IS_PROD && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    if (isProd() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
       return { error: "Please enter a valid email address." };
     }
     if (typeof role !== "string" || !isValidRole(role)) {
@@ -107,7 +110,7 @@ export async function createUserAction(
     if (!employeeCode) return { error: "Employee ID is required." };
     if (!department) return { error: "Department is required." };
     if (!contactNumber) return { error: "Contact number is required." };
-    if (IS_PROD && !/^\d{11}$/.test(contactNumber)) {
+    if (isProd() && !/^\d{11}$/.test(contactNumber)) {
       return { error: "Contact number must be exactly 11 digits." };
     }
     if (!address) return { error: "Address is required." };

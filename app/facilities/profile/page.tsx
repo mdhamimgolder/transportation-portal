@@ -6,7 +6,7 @@ import { ProfileHeroCard } from "@/components/shared/profile-hero-card";
 import { ChangePasswordForm } from "@/components/employee/change-password-form";
 
 export default async function FacilitiesProfilePage() {
-  const session = await requireRole([Role.FACILITIES]);
+  const session = await requireRole([Role.FACILITIES, Role.SUPER_ADMIN]);
 
   const user = await prisma.user.findUniqueOrThrow({
     where: { id: session.id },

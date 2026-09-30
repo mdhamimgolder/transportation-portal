@@ -1,19 +1,43 @@
 import "server-only";
 import nodemailer from "nodemailer";
+import type SMTPTransport from "nodemailer/lib/smtp-transport";
+import { env } from "@/lib/env";
+import { logger } from "@/lib/logger";
 
-const transporter = nodemailer.createTransport({
-  host: process.env.SMTP_HOST || "smtp.gmail.com",
-  port: Number(process.env.SMTP_PORT) || 465,
-  secure: true,
-  auth: {
-    user: process.env.SMTP_USER,
-    pass: process.env.SMTP_PASS,
-  },
-});
+/**
+ * SMTP transporter, created on first send (never at module import) so importing
+ * this module never reads env. `nodemailer.createTransport` with no options
+ * would silently fall back to sendmail — we always pass explicit SMTP options.
+ */
+let transporter: nodemailer.Transporter | null = null;
+
+function getTransporter(): nodemailer.Transporter {
+  if (!transporter) {
+    const options: SMTPTransport.Options = {
+      host: env.SMTP_HOST,
+      port: env.SMTP_PORT,
+      secure: true,
+      auth: {
+        user: env.SMTP_USER,
+        pass: env.SMTP_PASS,
+      },
+    };
+    transporter = nodemailer.createTransport(options);
+  }
+  return transporter;
+}
 
 /** Emails actually send only in production. Locally (`next dev`) the mail
- * module is a no-op — creating test accounts never triggers SMTP. */
-export const EMAIL_ENABLED = process.env.NODE_ENV === "production";
+ * module is a no-op — creating test accounts never triggers SMTP. Read lazily
+ * (function, never a module-level constant) so importing the mailer never
+ * validates env.
+ */
+export function isEmailEnabled(): boolean {
+  return env.NODE_ENV === "production";
+}
+
+/** @deprecated Prefer `isEmailEnabled()`. */
+export const EMAIL_ENABLED = false;
 
 export async function sendMail(params: {
   to: string;
@@ -23,22 +47,26 @@ export async function sendMail(params: {
 }): Promise<void> {
   const { to, subject, body, html } = params;
 
-  if (!EMAIL_ENABLED) {
-    console.log(`[MAILER] DEV — email skipped. To: ${to} | Subject: ${subject}`);
+  if (!isEmailEnabled()) {
+    logger.debug("mailer", "email skipped (non-production)", { to, subject });
     return;
   }
 
   try {
-    await transporter.sendMail({
-      from: process.env.SMTP_FROM || process.env.SMTP_USER,
+    await getTransporter().sendMail({
+      from: env.SMTP_FROM || env.SMTP_USER,
       to,
       subject,
       text: body,
       html: html || body,
     });
-    console.log(`[MAILER] Email sent to ${to} | Subject: ${subject}`);
+    logger.info("mailer", "email sent", { to, subject });
   } catch (error) {
-    console.error(`[MAILER] Failed to send email to ${to}:`, error);
+    logger.error("mailer", "email failed", {
+      to,
+      subject,
+      error: error instanceof Error ? error.message : String(error),
+    });
     throw new Error(
       `Failed to send email: ${error instanceof Error ? error.message : String(error)}`
     );
@@ -54,10 +82,11 @@ export async function sendMailBackground(params: {
   try {
     await sendMail(params);
   } catch (error) {
-    console.error(
-      `[MAILER] Background email failed to ${params.to}:`,
-      error
-    );
+    logger.error("mailer", "background email failed", {
+      to: params.to,
+      subject: params.subject,
+      error: error instanceof Error ? error.message : String(error),
+    });
   }
 }
 
@@ -74,15 +103,22 @@ export async function trySendMail(params: {
   body: string;
   html?: string;
 }): Promise<EmailSendResult> {
-  if (!EMAIL_ENABLED) {
-    console.log(`[MAILER] DEV — email skipped. To: ${params.to} | Subject: ${params.subject}`);
+  if (!isEmailEnabled()) {
+    logger.debug("mailer", "email skipped (non-production)", {
+      to: params.to,
+      subject: params.subject,
+    });
     return { status: "SKIPPED_DEV" };
   }
   try {
     await sendMail(params);
     return { status: "SENT" };
   } catch (error) {
-    console.error(`[MAILER] Failed to send email to ${params.to}:`, error);
+    logger.error("mailer", "email failed", {
+      to: params.to,
+      subject: params.subject,
+      error: error instanceof Error ? error.message : String(error),
+    });
     return {
       status: "FAILED",
       error: error instanceof Error ? error.message : String(error),
@@ -145,7 +181,7 @@ export async function sendCredentialsEmailNow(params: {
   const { subject, body, html } = credentialsEmailContent(params);
   try {
     await sendMail({ to: params.to, subject, body, html });
-    return EMAIL_ENABLED ? { status: "sent" } : { status: "skipped-dev" };
+    return isEmailEnabled() ? { status: "sent" } : { status: "skipped-dev" };
   } catch (error) {
     return {
       status: "failed",

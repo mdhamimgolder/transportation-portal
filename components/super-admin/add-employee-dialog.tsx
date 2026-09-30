@@ -24,7 +24,9 @@ import {
 import { ALL_ROLES, OFFICE_LOCATIONS, ROLE_LABELS, type Role } from "@/lib/constants/enums";
 
 /** TEST MODE (local only): relax the email/contact browser validation in dev —
- * mirrors the server-side checks in createUserAction. */
+ * mirrors the server-side checks in createUserAction. Client components cannot
+ * import the validated `env` module, so this uses the Next.js-provided public
+ * env directly. */
 const IS_PROD = process.env.NODE_ENV === "production";
 
 const initialState: CreateUserState = {};

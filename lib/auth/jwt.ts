@@ -1,5 +1,6 @@
 import { SignJWT, jwtVerify } from "jose";
 import type { Role } from "@/lib/constants/enums";
+import { env } from "@/lib/env";
 
 export type SessionTokenPayload = {
   sub: string; // userId
@@ -9,10 +10,7 @@ export type SessionTokenPayload = {
 };
 
 function getSecretKey() {
-  const secret = process.env.SESSION_SECRET;
-  if (!secret) {
-    throw new Error("SESSION_SECRET environment variable is not set");
-  }
+  const secret = env.SESSION_SECRET;
   return new TextEncoder().encode(secret);
 }
 

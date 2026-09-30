@@ -8,7 +8,7 @@ import { WeatherWidget } from "@/components/shared/weather-widget";
 import { AttentionBoard } from "@/components/shared/attention-board";
 
 export default async function FacilitiesDashboardPage() {
-  const user = await requireRole([Role.FACILITIES]);
+  const user = await requireRole([Role.FACILITIES, Role.SUPER_ADMIN]);
 
   // Current (Dhaka) calendar month boundaries for the pick-up counter.
   const now = new Date();

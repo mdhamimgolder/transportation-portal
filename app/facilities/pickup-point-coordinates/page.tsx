@@ -4,7 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { PickupPointCoordinates } from "@/components/facilities/pickup-point-coordinates";
 
 export default async function PickupPointCoordinatesPage() {
-  await requireRole([Role.FACILITIES]);
+  await requireRole([Role.FACILITIES, Role.SUPER_ADMIN]);
   const users = await prisma.user.findMany({
     where: { role: { in: [Role.EMPLOYEE, Role.FIXED_ARRIVAL] }, pickupPoint: { not: null } },
     select: { pickupPoint: true, pickupAddress: true },

@@ -4,12 +4,22 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "prisma generate && prisma migrate deploy && next build",
+    "build": "prisma generate && next build",
     "start": "next start",
     "lint": "eslint .",
-    "prisma:migrate": "prisma migrate dev",
-    "prisma:studio": "prisma studio",
-    "db:seed": "tsx prisma/seed.ts"
+    "lint:fix": "eslint . --fix",
+    "typecheck": "tsc --noEmit",
+    "verify": "npm run typecheck && npm run lint",
+    "postinstall": "prisma generate",
+    "db:generate": "prisma generate",
+    "db:migrate": "prisma migrate dev",
+    "db:deploy": "prisma migrate deploy",
+    "db:studio": "prisma studio",
+    "db:seed": "tsx prisma/seed.ts",
+    "clean": "node -e \"require('fs').rmSync('.next',{recursive:true,force:true})\""
+  },
+  "engines": {
+    "node": ">=20.9.0"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"
@@ -22,8 +32,6 @@
     "@prisma/adapter-neon": "^7.8.0",
     "@prisma/client": "^7.8.0",
     "@tailwindcss/postcss": "^4.3.2",
-    "@tanstack/react-query": "^5.102.8",
-    "axios": "^1.20.0",
     "bcryptjs": "^3.0.3",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",

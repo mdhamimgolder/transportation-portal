@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { verifySessionToken, SESSION_COOKIE_NAME } from "@/lib/auth/jwt";
-import { ROLE_HOME, ROLE_PATH_PREFIX, type Role } from "@/lib/constants/enums";
+import { ROLE_HOME, ROLE_PATH_PREFIX, Role } from "@/lib/constants/enums";
 
 const PUBLIC_PATHS = [
   "/login",
@@ -10,6 +10,15 @@ const PUBLIC_PATHS = [
   "/reset-password",
   "/403",
 ];
+
+/**
+ * Prefixes a SUPER_ADMIN may enter in addition to the owning role. This must
+ * mirror the layouts exactly, otherwise the edge gate and the DB-backed guard
+ * disagree and a user gets bounced to /403 on a page they are allowed to see.
+ * Facilities is the elevated area: app/facilities/layout.tsx accepts
+ * [FACILITIES, SUPER_ADMIN] and so do all 41 Facilities actions.
+ */
+const SUPER_ADMIN_EXTRA_PREFIXES = ["/facilities"];
 
 function isPublicPath(pathname: string): boolean {
   return PUBLIC_PATHS.some(
@@ -65,7 +74,13 @@ export async function proxy(request: NextRequest) {
       );
     }
     if (payload.role !== requiredRole) {
-      return NextResponse.redirect(new URL("/403", request.url));
+      const requiredPrefix = ROLE_PATH_PREFIX[requiredRole];
+      const isElevatedSuperAdmin =
+        payload.role === Role.SUPER_ADMIN &&
+        SUPER_ADMIN_EXTRA_PREFIXES.includes(requiredPrefix);
+      if (!isElevatedSuperAdmin) {
+        return NextResponse.redirect(new URL("/403", request.url));
+      }
     }
     return NextResponse.next();
   }

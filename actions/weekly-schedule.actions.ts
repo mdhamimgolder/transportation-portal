@@ -19,7 +19,7 @@ import {
   ARRIVAL_TIME_OPTIONS,
   normalizeArrivalTimeInput,
 } from "@/lib/constants/arrival-times";
-import { sendMailBackground, EMAIL_ENABLED } from "@/lib/mailer";
+import { sendMailBackground, isEmailEnabled } from "@/lib/mailer";
 import { Role, WeeklyScheduleStatus } from "@/lib/constants/enums";
 import { parseCsv } from "@/lib/csv";
 
@@ -696,7 +696,7 @@ export async function bulkUploadWeeklySchedules(
     results: {
       created,
       skipped,
-      emailsEnabled: EMAIL_ENABLED,
+      emailsEnabled: isEmailEnabled(),
     },
   };
 }

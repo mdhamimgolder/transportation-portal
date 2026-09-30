@@ -36,7 +36,7 @@ export default async function RoutePlanningPage({
 }: {
   searchParams: Promise<{ day?: string; week?: string }>;
 }) {
-  await requireRole([Role.FACILITIES]);
+  await requireRole([Role.FACILITIES, Role.SUPER_ADMIN]);
 
   const params = await searchParams;
   const dayOfWeek = Number(params.day) >= 1 && Number(params.day) <= 5 ? Number(params.day) : 1;
