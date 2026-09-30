@@ -11,14 +11,14 @@ export default async function NotFound() {
   const homeHref = session ? ROLE_HOME[session.role as Role] : "/login";
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-paper px-6">
-      <div className="w-full max-w-md overflow-hidden rounded-2xl border bg-card">
+    <div className="flex min-h-screen items-center justify-center bg-background px-6">
+      <div className="w-full max-w-md overflow-hidden rounded-2xl border border-border bg-card">
         <div className="h-1 bg-[#70bccc]" />
         <div className="space-y-4 px-8 py-8">
-          <p className="font-mono text-[11px] tracking-wide text-muted-foreground uppercase">
+          <p className="font-mono text-micro tracking-wide text-muted-foreground uppercase">
             404 — not found
           </p>
-          <p className="font-display text-xl">This page does not exist</p>
+          <p className="text-h2">This page does not exist</p>
           <p className="text-sm text-muted-foreground">
             The link may be outdated, or the page may have been moved. Use the
             button below to get back to your dashboard.

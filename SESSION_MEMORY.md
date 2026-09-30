@@ -4,6 +4,49 @@ Read this at the start of every task so you can continue without re-exploring.
 **Always update it before the session ends** (append/rewrite the Latest Session
 block and bump Work State / Next Move). Do this EVERY session — it is how we
 work fast without interruption.
+## Latest Session (2026-10-01) — Structure/hardening refactor, phases 0–3 (DONE, on branch)
+**User request:** full codebase as a senior dev would — well-structured, organized,
+lightweight, production-ready for every role, nothing deleted. Approved plan: phases
+0–3 now (safety + hygiene + lightweight + hardening), phases 4–5 deferred.
+**Done — branch `refactor/structure-hardening` (main untouched at 84df9a6), 3 commits:**
+- `e8cd2b5` chore(git): `.gitignore` no longer swallows `lib/` — tracked 16 stranded app
+  source files (lib/db/retry, lib/routing/*, lib/queries/weather, components/auth+shared/*,
+  lib/auth/*, lib/date/week, lib/queries/settings, lib/validations/*…). Without this, a
+  clean clone/Vercel build could never compile.
+- `3810624` chore: baseline working tree + archive stale scaffold (backend/ + frontend/ +
+  _archived-fastapi-scaffold-2026-07-27/, 199 MB) → `d:\Devolopment\Transportation-System-archive\`
+  (off-repo, on disk, restorable). Full disk backup at
+  `d:\Devolopment\_backup-transportation-system-2026-10-01-0239\`.
+- `e5d7f5a` feat(structure) phases 0–3 (details below).
+**Hygiene (moves only, zero deletions):** 15 root `_*.ts` scripts →
+`scripts/{diagnostics,destructive,maintenance}/` + `scripts/README.md` (destructive two guarded
+so they refuse to run unconfirmed); dev-server logs → archive; README.md (new) +
+docs/{ARCHITECTURE.md,RUNBOOK.md} + docs/archive (FastAPI-era docs via git mv, history kept);
+AGENTS.md + CLAUDE.md rewritten to the real Next.js/Prisma stack; tsconfig excludes
+`.claude/.kilo` scratch; globals.css no longer references archived dirs.
+**Lightweight:** removed 0-import `axios` + `@tanstack/react-query` (package-lock −292 lines);
+`build` = `prisma generate && next build` (migrate deploy OUT — runs at deploy time via
+`db:deploy`); `postinstall: prisma generate`; `engines.node >= 20.9`; scripts
+typecheck/verify/lint:fix/db:*; tsBuildInfoFile → `.next/cache`.
+**Hardening (the build-without-secrets fix):** `lib/env.ts` rewritten to TRUE lazy per-key
+zod validation (old shape validated the whole env on first touch → importing mailer/prisma
+threw without DATABASE_URL; now each key validates alone, defaults apply per-key) +
+`lib/logger.ts` (JSON in prod, readable in dev, LOG_LEVEL). Lazy env reads in
+mailer (transporter created on first send, `isEmailEnabled()` fn, EMAIL_ENABLED kept as
+deprecated `false`), prisma (Proxy-lazy singleton), osrm/geocoder (fn accessors),
+notification-recipients (getters + deprecated consts kept), jwt/session/user-management.
+Error UX: app/{error,global-error,not-found,loading}.tsx in design tokens — globals.css now
+maps every token via `@theme inline` (bg-paper/bg-card/bg-ink/text-muted-foreground/…) +
+`font-display` utility; `/api/health` (SELECT 1, version, warnings, 503 when down);
+next.config (poweredByHeader off, strict mode, nodemailer/bcryptjs external, security
+headers). Role gate: proxy.ts SUPER_ADMIN elevated-prefixes bug fixed (compared Role→prefix
+before) + facilities layout + 10 pages → `requireRole([FACILITIES, SUPER_ADMIN])`, matching
+the 41 action-level grants. `.env.example` single source, no duplicates.
+**Verified:** `npx tsc --noEmit` exit 0; eslint touched files 0 errors (repo baseline is
+17 unrelated problems in scripts/diagnostics + route-setting + automated-route-planner +
+fixed-arrival — untouched); `npm run build` green (38 routes + proxy); `git status` clean.
+**Next:** user reviews → merge branch to main; then phases 4–5 if wanted (route-group move,
+RoleShell/nav-config, thin-action→lib/services, vitest).
 ## Latest Session (2026-09-28) — Dhaka weather widget on every role dashboard
 **User request:** weather (Dhaka temperature) widget on the top-right of EVERY role's dashboard,
 standard/professional UI, minimal animation; free open-source weather API ok. Evolution: (1) full

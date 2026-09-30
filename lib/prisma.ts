@@ -10,11 +10,6 @@ const globalForPrisma = globalThis as unknown as {
   prisma: PrismaClient | undefined;
 };
 
-/**
- * Prisma singleton. The client (and its Neon adapter) is created lazily on
- * first access — never at module import — so pages that never touch the DB
- * (and `next build` without secrets) don't validate env or open connections.
- */
 let singleton: PrismaClient | null = null;
 
 function createClient(): PrismaClient {
@@ -33,20 +28,44 @@ function createClient(): PrismaClient {
 
 function getPrisma(): PrismaClient {
   if (globalForPrisma.prisma) return globalForPrisma.prisma;
-  if (!singleton) singleton = createClient();
+  if (!singleton) {
+    singleton = createClient();
+    // Remember the real client across HMR re-evals (dev only — in production
+    // the module is evaluated once, so the local singleton is enough).
+    if (process.env.NODE_ENV !== "production") {
+      globalForPrisma.prisma = singleton;
+    }
+  }
   return singleton;
 }
 
-export const prisma: PrismaClient = new Proxy({} as PrismaClient, {
-  get(_target, property, receiver) {
+/**
+ * Prisma singleton. The client (and its Neon adapter) is created lazily on
+ * first query — never at module import — so pages that never touch the DB
+ * (and `next build` without secrets) don't validate env or open connections.
+ *
+ * Implementation note: the proxy forwards every property on first access via
+ * `get`, so a fresh client is only constructed when one is actually used.
+ * `Reflect.get` without a proxy receiver keeps getters and methods bound to
+ * the REAL client — this matters for `prisma.$queryRaw`, which is a tagged
+ * template calling `this`.
+ */
+const prismaHandler: ProxyHandler<PrismaClient> = {
+  get(_target, property) {
     const client = getPrisma();
-    const value = Reflect.get(client, property, receiver);
-    return typeof value === "function" ? value.bind(client) : value;
+    const value = Reflect.get(
+      client as unknown as Record<PropertyKey, unknown>,
+      property
+    );
+    return typeof value === "function"
+      ? (value as (...args: never[]) => unknown).bind(client)
+      : value;
   },
-});
+};
+
+export const prisma = new Proxy({} as PrismaClient, prismaHandler);
 
 if (process.env.NODE_ENV !== "production") {
-  if (!globalForPrisma.prisma) globalForPrisma.prisma = getPrisma();
   startDevKeepAlive();
 }
 

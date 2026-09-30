@@ -66,8 +66,8 @@ const REQUIRED_KEYS: readonly EnvKey[] = ["DATABASE_URL", "SESSION_SECRET"];
  * other key) to be set — it just falls back to its default.
  */
 function readKey<K extends EnvKey>(key: K): Env[K] {
-  const field = envSchema.shape[key] as z.ZodTypeAny;
-  const parsed = field.safeParse(process.env[key]);
+  const shape = envSchema.shape as Record<EnvKey, z.ZodTypeAny>;
+  const parsed = shape[key].safeParse(process.env[key]);
   if (!parsed.success) {
     throw new Error(
       `Invalid environment configuration:\n` +
@@ -87,7 +87,9 @@ function readKey<K extends EnvKey>(key: K): Env[K] {
  */
 export const env = new Proxy({} as Env, {
   get(_target, property: string | symbol) {
-    if (typeof property === "symbol") return undefined;
+    if (typeof property !== "string" || !(property in envSchema.shape)) {
+      return undefined;
+    }
     return readKey(property as EnvKey);
   },
   has(_target, property: string | symbol) {

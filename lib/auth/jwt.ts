@@ -1,6 +1,6 @@
 import { SignJWT, jwtVerify } from "jose";
-import type { Role } from "@/lib/constants/enums";
 import { env } from "@/lib/env";
+import type { Role } from "@/lib/constants/enums";
 
 export type SessionTokenPayload = {
   sub: string; // userId
