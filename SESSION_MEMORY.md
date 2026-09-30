@@ -8,7 +8,7 @@ work fast without interruption.
 **User request:** full codebase as a senior dev would — well-structured, organized,
 lightweight, production-ready for every role, nothing deleted. Approved plan: phases
 0–3 now (safety + hygiene + lightweight + hardening), phases 4–5 deferred.
-**Done — branch `refactor/structure-hardening` (main untouched at 84df9a6), 3 commits:**
+**Done — branch `refactor/structure-hardening` (main untouched at 84df9a6), 4 commits:**
 - `e8cd2b5` chore(git): `.gitignore` no longer swallows `lib/` — tracked 16 stranded app
   source files (lib/db/retry, lib/routing/*, lib/queries/weather, components/auth+shared/*,
   lib/auth/*, lib/date/week, lib/queries/settings, lib/validations/*…). Without this, a
@@ -18,6 +18,11 @@ lightweight, production-ready for every role, nothing deleted. Approved plan: ph
   (off-repo, on disk, restorable). Full disk backup at
   `d:\Devolopment\_backup-transportation-system-2026-10-01-0239\`.
 - `e5d7f5a` feat(structure) phases 0–3 (details below).
+- `ed9fe12` fix(structure): lazy-env follow-ups — prisma proxy binds methods to the real
+  client (keeps `prisma.$queryRaw` tagged-template working), preserves the dev HMR
+  singleton + keep-alive, `env` proxy returns `undefined` for unknown keys, error.tsx uses
+  `<Link>`, design-token class fixes. `tsc` 0 errors, eslint touched files 0 errors,
+  `npm run build` green (38 routes + proxy).
 **Hygiene (moves only, zero deletions):** 15 root `_*.ts` scripts →
 `scripts/{diagnostics,destructive,maintenance}/` + `scripts/README.md` (destructive two guarded
 so they refuse to run unconfirmed); dev-server logs → archive; README.md (new) +
