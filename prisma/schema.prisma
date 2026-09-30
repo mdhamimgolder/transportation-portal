@@ -415,8 +415,8 @@ model Vehicle {
   baseETA         String?
 
   // Time the vehicle reaches its FIRST pickup point ("HH:mm"). When set, the
-  // pickup schedule is computed forward from here (5 min/km); when null, it
-  // is computed backwards from BASE ETA.
+  // pickup schedule is computed forward from here (trained legs only); when
+  // null, it is computed backwards from BASE ETA.
   firstPickupTime String?
   
   pickupSequence  PickupPoint[]
@@ -617,8 +617,10 @@ model RoutePolylineCache {
 }
 
 // Learned pickup-leg statistics built from historical route plans by
-// `trainRoutePlannerFromHistory`. The scheduler prefers a learned average gap
-// (>= LEARN_MIN_SAMPLES observations) over the 5 min/km distance estimate.
+// `trainRoutePlannerFromHistory`. The scheduler REQUIRES a learned average gap
+// (>= LEARN_MIN_SAMPLES observations) before assigning a pick-up time for a
+// leg — the 5 min/km distance estimate was removed, so untrained legs error
+// instead of being estimated.
 // fromKey/toKey are stable location keys: "addr:<addressId>" or "office:<name>".
 model RouteLegLearning {
   id          String   @id @default(cuid())

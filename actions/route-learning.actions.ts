@@ -6,6 +6,7 @@ import { requireRole } from "@/lib/rbac/guards";
 import { Role } from "@/lib/constants/enums";
 import { LEARN_MIN_SAMPLES } from "@/lib/routing/pickup-schedule";
 import { legObservationsFromManualEntries } from "@/lib/routing/manual-plan-training";
+import { errorMessage } from "@/lib/routing/algorithms";
 
 /**
  * "Skill-up" data mining.
@@ -13,9 +14,10 @@ import { legObservationsFromManualEntries } from "@/lib/routing/manual-plan-trai
  * `trainRoutePlannerFromHistory` scans every historical RoutePlan and derives,
  * per ordered stop pair, the actual elapsed pickup-pickup (and office->first /
  * last->office) gap — the real signal Facilities tuned day after day. The
- * per-leg medians are stored in `RouteLegLearning` and the scheduler prefers
- * them (once a leg has >= LEARN_MIN_SAMPLES observations) over the generic
- * 5 min/km distance estimate.
+ * per-leg medians are stored in `RouteLegLearning`. The scheduler REQUIRES a
+ * leg to be trained (>= LEARN_MIN_SAMPLES observations) before it will assign
+ * a pick-up time for that leg — the old 5 min/km distance estimate was removed,
+ * so an untrained leg errors instead of being estimated.
  *
  * Runs automatically at the start of every RUN MAPPING (generateWeeklyRoutes
  * calls this before generating), so Facilities never has to click "Learn from
@@ -253,8 +255,7 @@ export async function trainRoutePlannerFromHistory(): Promise<LearnFromHistoryRe
   } catch (error) {
     return {
       success: false,
-      error:
-        error instanceof Error ? error.message : String(error),
+      error: errorMessage(error),
       legCount: 0,
       observationCount: 0,
       confidentLegs: 0,
@@ -381,8 +382,8 @@ export async function getRouteMemoryDiagnostic(): Promise<RouteMemoryDiagnostic>
         trusted: r.sampleCount >= LEARN_MIN_SAMPLES,
       })),
       notes: [
-        `A leg is TRUSTED once it has ≥ ${LEARN_MIN_SAMPLES} observations — trusted legs replace the 5 min/km estimate when planning pick-up times.`,
-        "Pick-up times are back-calculated from the shift arrival along each leg: trusted gap first, otherwise straight-line distance × 5 min/km, snapped to the 5-minute grid with ≥ 5 minutes between stops.",
+        `A leg is TRUSTED once it has ≥ ${LEARN_MIN_SAMPLES} observations — pick-up times come from TRUSTED (finalized/taught) legs only; a leg without enough observations errors the route instead of being estimated.`,
+        "Pick-up times are back-calculated from the shift arrival along each leg (trusted gap only — no distance estimate), snapped to the 5-minute grid with ≥ 5 minutes between stops.",
         "Teach from manual plan stores your hand-made gaps; every RUN MAPPING re-merges them, so they survive automatic retrains.",
         "Employees with both a pickup and a home address share the same learned leg across both address keys (bridged), so a leg taught from your plan is found whichever address the route uses.",
         `One full week (5–6 days) of the same repeating run per vehicle brings every leg in it to trusted — that is the recommended amount of reference data.`,
@@ -391,7 +392,7 @@ export async function getRouteMemoryDiagnostic(): Promise<RouteMemoryDiagnostic>
   } catch (error) {
     return {
       success: false,
-      error: error instanceof Error ? error.message : String(error),
+      error: errorMessage(error),
     };
   }
 }

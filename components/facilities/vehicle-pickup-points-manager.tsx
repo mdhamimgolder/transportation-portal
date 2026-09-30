@@ -395,7 +395,7 @@ function PickupPointForm({
         />
         <p className="text-xs text-gray-500 mt-1">
           Pickup time is calculated automatically from the vehicle&apos;s first
-          pickup time (~5 min/km, 5-minute grid).
+          pickup time (trained gaps, 5-minute grid).
         </p>
       </div>
 

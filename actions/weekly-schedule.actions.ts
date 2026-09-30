@@ -609,20 +609,22 @@ export async function bulkUploadWeeklySchedules(
       continue;
     }
 
-    // One upsert (was: findUnique + create + update = up to 3 round trips).
+    // Check for existing schedule — one employee, one schedule per week.
+    const existingSchedule = await prisma.weeklySchedule.findUnique({
+      where: { employeeId_weekStartDate: { employeeId: employee.id, weekStartDate } },
+    });
+    if (existingSchedule) {
+      skipped.push({
+        line,
+        reason: `Duplicate entry for "${rawEmail}" — schedule for this week already exists (created ${existingSchedule.createdAt.toISOString().split("T")[0]}).`,
+      });
+      continue;
+    }
+
+    // Create new schedule (no upsert — duplicates are caught above).
     const now = new Date();
-    const schedule = await prisma.weeklySchedule.upsert({
-      where: {
-        employeeId_weekStartDate: { employeeId: employee.id, weekStartDate },
-      },
-      update: {
-        status: WeeklyScheduleStatus.APPROVED,
-        rejectReason: null,
-        submittedAt: now,
-        reviewedById: session.id,
-        reviewedAt: now,
-      },
-      create: {
+    const schedule = await prisma.weeklySchedule.create({
+      data: {
         employeeId: employee.id,
         weekStartDate,
         status: WeeklyScheduleStatus.APPROVED,

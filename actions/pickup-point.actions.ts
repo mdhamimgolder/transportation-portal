@@ -99,7 +99,7 @@ export async function createPickupPoint(input: {
     });
 
     // Sequence changed → recompute the remaining pickup times (first point
-    // anchored on the vehicle's first pickup time / BASE ETA, 5 min/km).
+    // anchored on the vehicle's first pickup time / BASE ETA, trained legs only).
     await syncPickupPointTimes(input.vehicleId).catch(() => null);
 
     revalidatePath("/facilities/vehicles");

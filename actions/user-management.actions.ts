@@ -10,6 +10,48 @@ import { parseCsv } from "@/lib/csv";
 import { sendCredentialsEmail, sendCredentialsEmailNow } from "@/lib/mailer";
 import { randomBytes } from "node:crypto";
 import { Role, ALL_ROLES, OFFICE_LOCATIONS } from "@/lib/constants/enums";
+import {
+  ARRIVAL_TIME_OPTIONS,
+  NO_TRANSPORT_VALUE,
+  normalizeArrivalTimeInput,
+} from "@/lib/constants/arrival-times";
+
+/**
+ * A fixed arrival time must be one of the overt shuttle window slots
+ * (10 PM – 6 AM, whole hours). "not required" / NONE clears it to unset.
+ */
+function normalizeFixedArrival(
+  raw: string
+): { value: string | null } | { error: string } {
+  const normalized = normalizeArrivalTimeInput(raw);
+  if (normalized === null) {
+    return {
+      error: `Fixed arrival time "${raw}" is not recognized — use labels like "11:00 PM" or "23:00" (10 PM–6 AM), or "not required" to leave it unset.`,
+    };
+  }
+  if (normalized === NO_TRANSPORT_VALUE) return { value: null };
+  if (!ARRIVAL_TIME_OPTIONS.some((o) => o.value === normalized)) {
+    return {
+      error: `Fixed arrival time "${raw}" is outside the shuttle window (10 PM–6 AM).`,
+    };
+  }
+  return { value: normalized };
+}
+
+/** Parses one numeric coordinate cell. Blank → null, malformed → NaN. */
+function parseCoordinateCell(raw: string | undefined): number | null {
+  const trimmed = raw?.trim();
+  if (!trimmed) return null;
+  const value = Number(trimmed);
+  return Number.isFinite(value) ? value : NaN;
+}
+
+/** Splits a combined "latitude, longitude" / "latitude longitude" cell. */
+function splitCoordPair(pair: string): [number, number] | null {
+  const values = pair.split(/[\s,;]+/).filter(Boolean).map(Number);
+  if (values.length !== 2 || values.some((n) => !Number.isFinite(n))) return null;
+  return [values[0], values[1]];
+}
 
 /**
  * TEST MODE (local only): the email/contact-number format checks below are
@@ -164,20 +206,53 @@ export async function bulkCreateUsersAction(
     return { error: "The CSV file has no data rows." };
   }
 
-  const header = rows[0].map((h) => h.trim().toLowerCase());
-  const colIndex = (name: string) => header.indexOf(name);
+  // Header matching is case/whitespace/punctuation-agnostic ("Home Latitude",
+  // "home_latitude", "Lat,Long") so CSV exports beyond the template still map.
+  // Home coordinates also accept a single combined column ("23.78, 90.41").
+  const normalHeader = (h: string) =>
+    h.trim().toLowerCase().replace(/[^a-z0-9]/g, "");
+  const headers = rows[0].map(normalHeader);
+  const findHeader = (names: readonly string[]): number => {
+    for (let i = 0; i < headers.length; i++) {
+      if (names.includes(headers[i])) return i;
+    }
+    return -1;
+  };
+  const fixedArrivalIdx = (() => {
+    const primary = findHeader(["fixedarrivaltime"]);
+    return primary !== -1 ? primary : findHeader(["arrivaltime"]);
+  })();
   const idx = {
-    fullName: colIndex("fullname"),
-    email: colIndex("email"),
-    role: colIndex("role"),
-    employeeCode: colIndex("employeecode"),
-    department: colIndex("department"),
-    contactNumber: colIndex("contactnumber"),
-    address: colIndex("address"),
-    homeLatitude: colIndex("homelatitude"),
-    homeLongitude: colIndex("homelongitude"),
-    pickupPoint: colIndex("pickuppoint"),
-    password: colIndex("password"),
+    fullName: findHeader(["fullname", "name"]),
+    email: findHeader(["email"]),
+    role: findHeader(["role"]),
+    employeeCode: findHeader(["employeecode", "employeeid", "empcode"]),
+    department: findHeader(["department", "dept"]),
+    contactNumber: findHeader(["contactnumber", "contact", "phone", "mobile"]),
+    address: findHeader(["address", "homeaddress"]),
+    homeLatitude: findHeader(["homelatitude", "homelat", "latitude", "lat"]),
+    homeLongitude: findHeader([
+      "homelongitude",
+      "homelong",
+      "longitude",
+      "long",
+      "lng",
+    ]),
+    homeCoordinates: findHeader([
+      "homelatlong",
+      "homelatlongitude",
+      "homelatlng",
+      "latlong",
+      "latlng",
+      "latitudelongitude",
+      "homecoords",
+      "homecoordinates",
+      "coords",
+      "coordinates",
+    ]),
+    pickupPoint: findHeader(["pickuppoint", "pickup"]),
+    fixedArrivalTime: fixedArrivalIdx,
+    password: findHeader(["password"]),
   };
   // Only fullName + email are truly required — an account cannot exist
   // without them. Every other column is optional: blank cells simply leave
@@ -185,7 +260,7 @@ export async function bulkCreateUsersAction(
   if (idx.fullName === -1 || idx.email === -1) {
     return {
       error:
-        "CSV must include at least a fullName and email column. role, employeeCode, department, contactNumber, address, pickupPoint, homeLatitude, homeLongitude, and password are all optional (blank = fill in later).",
+        "CSV must include at least a fullName and email column. role, employeeCode, department, contactNumber, address, pickupPoint, fixedArrivalTime, homeLatitude, homeLongitude, and password are all optional (blank = fill in later; fixedArrivalTime applies to Fixed Arrival Employee rows only).",
     };
   }
 
@@ -296,8 +371,6 @@ export async function bulkCreateUsersAction(
     const department = cols[idx.department]?.trim() || null;
     const contactNumber = cols[idx.contactNumber]?.trim() || null;
     const address = cols[idx.address]?.trim() || null;
-    const homeLatitude = Number(cols[idx.homeLatitude]?.trim());
-    const homeLongitude = Number(cols[idx.homeLongitude]?.trim());
     const pickupPoint = cols[idx.pickupPoint]?.trim() || null;
     const password = cols[idx.password]?.trim();
 
@@ -314,12 +387,48 @@ export async function bulkCreateUsersAction(
     const rawRole = cols[idx.role]?.trim();
     const role = (rawRole || Role.EMPLOYEE).toUpperCase();
 
-    // homeLatitude / homeLongitude are OPTIONAL. When both are provided and
-    // valid they update the address's coordinates; when absent the address
-    // keeps whatever coordinates it already has (or is linked without any for
-    // an address text the system has never seen).
-    const hasCoords =
-      Number.isFinite(homeLatitude) && Number.isFinite(homeLongitude);
+    // homeCoordinates are OPTIONAL. Accepted as the split homeLatitude /
+    // homeLongitude columns (any casing/spacing) OR one combined column
+    // ("23.78, 90.41"). When provided and valid they update the address's
+    // coordinates; when absent the address keeps whatever coordinates it
+    // already has (or is linked without any for an address text the system
+    // has never seen). A partial or malformed pair SKIPS the row with a
+    // reason instead of silently dropping the coordinates.
+    const latCell = cols[idx.homeLatitude]?.trim();
+    const lngCell = cols[idx.homeLongitude]?.trim();
+    const coordCell =
+      idx.homeCoordinates !== -1 ? cols[idx.homeCoordinates]?.trim() : undefined;
+
+    let homeLatitude: number | null = null;
+    let homeLongitude: number | null = null;
+    if (idx.homeCoordinates !== -1 && coordCell) {
+      const pair = splitCoordPair(coordCell);
+      if (!pair) {
+        skipped.push({
+          line,
+          reason: `Coordinates "${coordCell}" must be two numbers — "latitude, longitude".`,
+        });
+        continue;
+      }
+      [homeLatitude, homeLongitude] = pair;
+    } else if (idx.homeLatitude !== -1 || idx.homeLongitude !== -1) {
+      const lat = parseCoordinateCell(latCell);
+      const lng = parseCoordinateCell(lngCell);
+      if (lat === null && lng === null) {
+        // both blank → no coordinates for this row
+      } else if (lat === null || lng === null || Number.isNaN(lat) || Number.isNaN(lng)) {
+        skipped.push({
+          line,
+          reason: `homeLatitude and homeLongitude must both be numbers (got "${latCell ?? ""}" / "${lngCell ?? ""}").`,
+        });
+        continue;
+      }
+      homeLatitude = lat;
+      homeLongitude = lng;
+    }
+    const hasCoords = homeLatitude !== null && homeLongitude !== null;
+    const coordLat = homeLatitude ?? 0;
+    const coordLng = homeLongitude ?? 0;
 
     if (!isValidRole(role)) {
       skipped.push({ line, reason: `Unknown role "${cols[idx.role]?.trim()}".` });
@@ -329,6 +438,31 @@ export async function bulkCreateUsersAction(
       skipped.push({ line, reason: "Facilities cannot create Super Admin accounts." });
       continue;
     }
+
+    // Fixed arrival time is only meaningful for FIXED_ARRIVAL roles. A blank
+    // cell is ignored; a real time is validated against the 10 PM–6 AM
+    // shuttle window; "not required" / NONE clears any existing value.
+    const rawArrival = cols[idx.fixedArrivalTime]?.trim();
+    let fixedArrivalTime: string | null | undefined = undefined;
+    if (rawArrival) {
+      const result = normalizeFixedArrival(rawArrival);
+      if ("error" in result) {
+        skipped.push({ line, reason: result.error });
+        continue;
+      }
+      if (role === Role.FIXED_ARRIVAL) {
+        fixedArrivalTime = result.value;
+      } else if (result.value !== null) {
+        skipped.push({
+          line,
+          reason: `fixedArrivalTime only applies to the FIXED_ARRIVAL role.`,
+        });
+        continue;
+      }
+      // For non-FIXED_ARRIVAL rows with "not required" / NONE → silently
+      // ignore (the cell is meaningless for this role).
+    }
+
     if (password && password.length < 8) {
       skipped.push({
         line,
@@ -337,7 +471,7 @@ export async function bulkCreateUsersAction(
       });
       continue;
     }
-    if (hasCoords && (Math.abs(homeLatitude) > 90 || Math.abs(homeLongitude) > 180)) {
+    if (hasCoords && (Math.abs(coordLat) > 90 || Math.abs(coordLng) > 180)) {
       skipped.push({ line, reason: "Home latitude must be -90 to 90 and longitude -180 to 180." });
       continue;
     }
@@ -376,12 +510,14 @@ export async function bulkCreateUsersAction(
         passwordHash?: string;
         address?: string;
         homeAddressId?: string;
+        fixedArrivalTime?: string | null;
       } = {};
       if (fullName && fullName !== existingUser.fullName) updates.fullName = fullName;
       if (rawRole && role !== existingUser.role) updates.role = role;
       if (department) updates.department = department;
       if (contactNumber) updates.contactNumber = contactNumber;
       if (pickupPoint) updates.pickupPoint = pickupPoint;
+      if (fixedArrivalTime !== undefined) updates.fixedArrivalTime = fixedArrivalTime;
       if (employeeCode && employeeCode !== existingUser.employeeCode) {
         const owner = codeOwnerByEmail.get(employeeCode);
         if (owner && owner !== email) {
@@ -396,7 +532,7 @@ export async function bulkCreateUsersAction(
       if (password) updates.passwordHash = passwordHash;
       if (address) {
         updates.address = address;
-        const linked = await resolveHomeAddressId(address, hasCoords, homeLatitude, homeLongitude);
+        const linked = await resolveHomeAddressId(address, hasCoords, coordLat, coordLng);
         if (linked) updates.homeAddressId = linked;
       }
       if (Object.keys(updates).length > 0) {
@@ -408,7 +544,7 @@ export async function bulkCreateUsersAction(
     }
 
     const homeAddressId = address
-      ? await resolveHomeAddressId(address, hasCoords, homeLatitude, homeLongitude)
+      ? await resolveHomeAddressId(address, hasCoords, coordLat, coordLng)
       : null;
 
     let user;
@@ -427,6 +563,7 @@ export async function bulkCreateUsersAction(
           passwordHash,
           mustChangePassword: false,
           isBulkCreated: true,
+          fixedArrivalTime: fixedArrivalTime ?? undefined,
         },
       });
     } catch (error) {
@@ -636,5 +773,66 @@ export async function setUserPasswordAction(
 
   revalidatePath("/super-admin/users");
   revalidatePath("/facilities/user-info");
+  return { success: true };
+}
+
+export type DeleteUserState = { error?: string; success?: boolean };
+
+/**
+ * Permanently removes a user account and ALL of their data from the system.
+ *
+ * Ordered transaction deletes (child rows whose `onDelete` is the Prisma
+ * default `Restrict` must go first):
+ *  - Session              (user, required, Restrict)
+ *  - WeeklyScheduleDay    (→ WeeklySchedule, Restrict)
+ *  - WeeklySchedule       (employee, required, Restrict)
+ *  - AddressChangeRequest / ContactChangeRequest / PickupPointChangeRequest
+ *                         (employee, required, Restrict)
+ *  - AdHocRequest         (employee, required, Restrict)
+ *  - ManualRoutePlanEntry (employee, required, Restrict)
+ * The final `user.delete` auto-cascades TripAssignment (onDelete: Cascade) and
+ * auto-SetNulls RouteTemplateStop.employee plus the `reviewedBy` reviewer
+ * relations (optional relations default to SetNull). RoutePlanOverride stores
+ * `changedById` as a plain string (no FK) so history rows survive the delete.
+ */
+export async function deleteUserAction(
+  _prevState: DeleteUserState,
+  formData: FormData
+): Promise<DeleteUserState> {
+  const actor = await requireRole([Role.FACILITIES, Role.SUPER_ADMIN]);
+
+  const userId = formData.get("userId");
+  if (typeof userId !== "string" || !userId) {
+    return { error: "Missing user." };
+  }
+  if (userId === actor.id) {
+    return { error: "You cannot delete your own account." };
+  }
+
+  const target = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { id: true, role: true, fullName: true },
+  });
+  if (!target) return { error: "User not found." };
+  if (target.role === Role.SUPER_ADMIN) {
+    return { error: "Super Admin accounts cannot be deleted." };
+  }
+
+  await prisma.$transaction([
+    prisma.session.deleteMany({ where: { userId } }),
+    prisma.weeklyScheduleDay.deleteMany({
+      where: { weeklySchedule: { employeeId: userId } },
+    }),
+    prisma.weeklySchedule.deleteMany({ where: { employeeId: userId } }),
+    prisma.addressChangeRequest.deleteMany({ where: { employeeId: userId } }),
+    prisma.contactChangeRequest.deleteMany({ where: { employeeId: userId } }),
+    prisma.pickupPointChangeRequest.deleteMany({ where: { employeeId: userId } }),
+    prisma.adHocRequest.deleteMany({ where: { employeeId: userId } }),
+    prisma.manualRoutePlanEntry.deleteMany({ where: { employeeId: userId } }),
+    prisma.user.delete({ where: { id: userId } }),
+  ]);
+
+  revalidatePath("/facilities/user-info");
+  revalidatePath("/super-admin/users");
   return { success: true };
 }

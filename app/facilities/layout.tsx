@@ -1,6 +1,5 @@
 import { requireRole } from "@/lib/rbac/guards";
-import { Role, ROLE_LABELS, PickupPointChangeStatus } from "@/lib/constants/enums";
-import { prisma } from "@/lib/prisma";
+import { Role, ROLE_LABELS } from "@/lib/constants/enums";
 import { NavSidebar } from "@/components/shared/nav-sidebar";
 import type { NavLink } from "@/components/shared/nav-sidebar";
 
@@ -8,10 +7,6 @@ export default async function FacilitiesLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
   const user = await requireRole([Role.FACILITIES]);
-
-  const pendingPickupPointChanges = await prisma.pickupPointChangeRequest.count({
-    where: { status: PickupPointChangeStatus.PENDING },
-  });
 
   const links: NavLink[] = [
     { href: "/facilities/dashboard", label: "Dashboard", icon: "dashboard" },
@@ -34,12 +29,6 @@ export default async function FacilitiesLayout({
     { href: "/facilities/adhoc", label: "Ad-hoc Transport", icon: "adhoc" },
     { href: "/facilities/vehicles", label: "Vehicles & Drivers", icon: "vehicles" },
     { href: "/facilities/user-info", label: "User Info", icon: "users" },
-    {
-      href: "/facilities/profile-approvals",
-      label: "Profile Approvals",
-      icon: "approvals",
-      badge: pendingPickupPointChanges,
-    },
     {
       href: "/facilities/allocation-history",
       label: "Allocation History",

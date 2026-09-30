@@ -6,8 +6,9 @@
  * date/shift/vehicle. This module turns those rows into leg observations —
  * pickup→pickup and last-pickup→office gaps — that
  * `trainRoutePlannerFromHistory` merges into `RouteLegLearning` alongside the
- * mined history. The planner prefers a learned leg (>= LEARN_MIN_SAMPLES
- * observations) over the 5 min/km estimate, so hand-tuned times win.
+ * mined history. Trained legs (>= LEARN_MIN_SAMPLES observations) are the ONLY
+ * source of pick-up times — the old 5 min/km distance estimate was removed — so
+ * hand-tuned times are what the planner uses.
  *
  * All parsing/aggregation here is deliberately dependency-free so it is
  * unit-testable with `node:test`.

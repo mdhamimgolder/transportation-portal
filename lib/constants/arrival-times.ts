@@ -29,11 +29,11 @@ export function normalizeArrivalTimeInput(value: string): string | null {
   );
   if (exactMatch) return exactMatch.value;
 
-  const twelveHourMatch = trimmed.match(/^(\d{1,2})(?::(\d{2}))?\s*(am|pm)$/i);
+  const twelveHourMatch = trimmed.match(/^(\d{1,2})(?::(\d{2}))?(?::(\d{2}))?\s*(am|pm)$/i);
   if (twelveHourMatch) {
     const hour = Number(twelveHourMatch[1]);
     const minute = Number(twelveHourMatch[2] ?? "0");
-    const period = twelveHourMatch[3].toLowerCase();
+    const period = twelveHourMatch[4].toLowerCase();
 
     let hour24 = hour % 12;
     if (period === "pm") hour24 += 12;
@@ -44,7 +44,7 @@ export function normalizeArrivalTimeInput(value: string): string | null {
     return `${normalizedHour.toString().padStart(2, "0")}:00`;
   }
 
-  const twentyFourHourMatch = trimmed.match(/^(\d{1,2}):(\d{2})$/);
+  const twentyFourHourMatch = trimmed.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
   if (twentyFourHourMatch) {
     const hour = Number(twentyFourHourMatch[1]);
     const minute = Number(twentyFourHourMatch[2]);

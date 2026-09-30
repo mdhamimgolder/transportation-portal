@@ -25,6 +25,7 @@ const SAMPLE_HEADERS = [
   "fullName",
   "email",
   "role",
+  "fixedArrivalTime",
   "employeeCode",
   "department",
   "contactNumber",
@@ -38,6 +39,7 @@ const SAMPLE_ROW = [
   "Jamie Rivera",
   "jamie.rivera@example.com",
   "EMPLOYEE",
+  "",
   "EMP0042",
   "Logistics",
   "01700000000",
@@ -46,6 +48,20 @@ const SAMPLE_ROW = [
   "90.4070",
   "Gulshan Circle 2",
   "Passw0rd!23",
+];
+const SAMPLE_FIXED_ARRIVAL_ROW = [
+  "Maya Chen",
+  "maya.chen@example.com",
+  "FIXED_ARRIVAL",
+  "11:00 PM",
+  "EMP0077",
+  "Customer Care",
+  "01700000011",
+  "8 Park Road, Dhaka",
+  "23.7821",
+  "90.4121",
+  "Gulshan 2 Bus Stand",
+  "",
 ];
 
 function SubmitButton() {
@@ -124,20 +140,27 @@ function BulkUploadDialogBody({ onDone }: { onDone: () => void }) {
           <code className="font-mono">fullName, email</code>. Everything else is
           optional —{" "}
           <code className="font-mono">
-            role, employeeCode, department, contactNumber, address, pickupPoint,
-            homeLatitude, homeLongitude, password
+            role, fixedArrivalTime, employeeCode, department, contactNumber,
+            address, pickupPoint, homeLatitude, homeLongitude, password
           </code>{" "}
           — leave any cell blank and fill it in later from User Info. Rows
           whose email already exists are UPDATED with the non-blank values
           (blank cells keep the current value). Role must be one of EMPLOYEE,
-          OPERATIONS, FACILITIES, SUPER_ADMIN (blank = EMPLOYEE). A blank
+          OPERATIONS, FACILITIES, SUPER_ADMIN, FIXED_ARRIVAL, CORPORATE_EMPLOYEE
+          (blank = EMPLOYEE). For{" "}
+          <code className="font-mono">FIXED_ARRIVAL</code> rows,{" "}
+          <code className="font-mono">fixedArrivalTime</code> locks the
+          employee&apos;s arrival (e.g. <code className="font-mono">11:00 PM</code>{" "}
+          or <code className="font-mono">23:00</code>, 10 PM–6 AM;{" "}
+          <code className="font-mono">not required</code> leaves it unset).
+          A fixedArrivalTime on a non-FIXED_ARRIVAL row skips that row. A blank
           password gets a generated temporary one emailed to the user; a
           provided password must be at least 8 characters.
         </p>
         <ExportCsvButton
           filename="bulk-upload-template.csv"
           headers={SAMPLE_HEADERS}
-          rows={[SAMPLE_ROW]}
+          rows={[SAMPLE_ROW, SAMPLE_FIXED_ARRIVAL_ROW]}
           label="Download template"
         />
       </div>

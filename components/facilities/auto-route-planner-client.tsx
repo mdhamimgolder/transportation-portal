@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   AlertTriangle,
   ArrowRight,
@@ -17,6 +17,7 @@ import {
   Map,
   MapPin,
   PackageOpen,
+  Pin,
   Play,
   RefreshCw,
   Route as RouteIcon,
@@ -40,6 +41,7 @@ import {
   generateDayRoutes,
   getWeekRouteOverview,
   getGeneratedRouteDetails,
+  getRoutePlanDetail,
   type GenerateRoutesResult,
   type WeekRouteOverview,
   type GeneratedRouteDay,
@@ -59,6 +61,7 @@ import {
   adjustPickupTime,
   finalizeRoute,
   moveTripToRoute,
+  moveTripToUnusedVehicle,
   reorderRouteTrips,
 } from "@/actions/route-override.actions";
 import type {
@@ -69,6 +72,7 @@ import type {
 import { RouteComparePanel } from "@/components/facilities/route-compare-panel";
 import { ManualPlanUploadDialog } from "@/components/facilities/manual-plan-upload-dialog";
 import { RouteMemoryDiagnostics } from "@/components/facilities/route-memory-diagnostics";
+import { RouteBreakdown } from "@/components/facilities/route-breakdown";
 import type { RouteMapStop, StopHeading } from "@/components/facilities/route-map";
 import { DAY_LABELS, formatShortDate, getMondayOfWeek } from "@/lib/date/week";
 
@@ -107,6 +111,7 @@ export function AutoRoutePlannerClient({ initialWeekStart, initialOverview }: Pr
   const [routesDetail, setRoutesDetail] = useState<GeneratedRouteDay[] | null>(null);
   const [detailLoading, setDetailLoading] = useState(true);
   const [activeDay, setActiveDay] = useState(0);
+  const [activeRouteId, setActiveRouteId] = useState<string | null>(null);
   // Day-wise run mapping: single selected weekday + its own run state.
   const [dayIndex, setDayIndex] = useState(0);
   const [dayRunning, setDayRunning] = useState(false);
@@ -136,6 +141,24 @@ export function AutoRoutePlannerClient({ initialWeekStart, initialOverview }: Pr
     setDetailLoading(true);
     await loadDetails(week);
   }, [loadDetails]);
+
+  /** In-place replacement of one updated route card — day-wise breakdown patches
+   *  without any loading skeleton, so a finalize / reorder / time edit never
+   *  triggers a page refresh. */
+  const patchRouteInDay = useCallback((updated: GeneratedRouteDetail) => {
+    setRoutesDetail((prev) =>
+      prev
+        ? prev.map((day) =>
+            day.routes.some((r) => r.id === updated.id)
+              ? {
+                  ...day,
+                  routes: day.routes.map((r) => (r.id === updated.id ? updated : r)),
+                }
+              : day
+          )
+        : prev
+    );
+  }, []);
 
   useEffect(() => {
     void loadDetails(weekStart);
@@ -359,10 +382,11 @@ export function AutoRoutePlannerClient({ initialWeekStart, initialOverview }: Pr
             <p className="mt-2 text-xs text-muted-foreground">
               Every RUN MAPPING first mines all past route plans for the real
               pickup-to-pickup gaps Facilities tuned day by day, then plans with
-              them. Confident legs (3+ observations) replace the 5 min/km
-              estimate. Use “Teach from manual plan” to upload a route plan you
-              made by hand — its real pickup gaps are merged into the same
-              memory and survive every retrain.
+              them. Pick-up times come from trained legs only (3+ observations);
+              a leg that was never finalized or taught errors that route instead
+              of being estimated. Use “Teach from manual plan” to upload a route
+              plan you made by hand — its real pickup gaps are merged into the
+              same memory and survive every retrain.
             </p>
           </div>
         </CardContent>
@@ -465,8 +489,9 @@ export function AutoRoutePlannerClient({ initialWeekStart, initialOverview }: Pr
 
                 {dayResult.learning && !dayResult.learning.success && (
                   <p className="mt-3 rounded-lg border border-amber/40 bg-amber/10 px-3 py-2 text-xs text-amber-foreground">
-                    Route memory refresh failed this run — the planner fell back
-                    to the 5 min/km estimate. {dayResult.learning.error}
+                    Route memory refresh failed this run — routes with untrained
+                    legs will error (pickup times are trained-gap only).{" "}
+                    {dayResult.learning.error}
                   </p>
                 )}
 
@@ -548,8 +573,9 @@ export function AutoRoutePlannerClient({ initialWeekStart, initialOverview }: Pr
 
             {result.learning && !result.learning.success && (
               <p className="mt-4 rounded-lg border border-amber/40 bg-amber/10 px-3 py-2 text-xs text-amber-foreground">
-                Route memory refresh failed this run — the planner fell back to
-                the 5 min/km estimate. {result.learning.error}
+                Route memory refresh failed this run — routes with untrained legs
+                will error (pickup times are trained-gap only).{" "}
+                {result.learning.error}
               </p>
             )}
 
@@ -732,16 +758,15 @@ export function AutoRoutePlannerClient({ initialWeekStart, initialOverview }: Pr
               ))}
             </div>
           ) : routesDetail && routesDetail[activeDay]?.routes.length > 0 ? (
-            <div className="space-y-3">
-              {routesDetail[activeDay].routes.map((route) => (
-                <GeneratedRouteCard
-                  key={route.id}
-                  route={route}
-                  // Silent reload (no skeleton) so an open map stays mounted.
-                  onChanged={() => loadDetails(weekStart)}
-                />
-              ))}
-            </div>
+            <RouteBreakdown
+              routes={routesDetail[activeDay].routes}
+              activeRouteId={activeRouteId}
+              onRouteSelect={setActiveRouteId}
+              onRefresh={() => refreshDetails(weekStart)}
+              onChanged={() => void loadDetails(weekStart)}
+              onRouteUpdated={patchRouteInDay}
+              isLoading={detailLoading}
+            />
           ) : (
             <div className="flex flex-col items-center gap-2 rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">
               <MapPin className="size-6 text-muted-foreground/50" />
@@ -749,43 +774,6 @@ export function AutoRoutePlannerClient({ initialWeekStart, initialOverview }: Pr
               above, or pick another day / week.
             </div>
           )}
-        </CardContent>
-      </Card>
-
-      {/* ── How it works ──────────────────────────────────────── */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Info className="size-4 text-teal" />
-            How mapping executes
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="grid gap-4 text-sm text-muted-foreground md:grid-cols-3">
-          <div className="rounded-lg border p-4">
-            <p className="font-semibold text-foreground">10 PM — preset points</p>
-            Employees on the 10 PM shift are picked up at the preset pickup
-            points you define in{" "}
-            <Link href="/facilities/route-setting" className="underline">
-              Route Setting
-            </Link>
-            . Skipped points pull later ETAs earlier (15 min each).
-          </div>
-          <div className="rounded-lg border p-4">
-            <p className="font-semibold text-foreground">11 PM — dynamic (max 4)</p>
-            Employees are grouped by road corridor (up to 4 per vehicle), the
-            farthest-from-office rider is picked up first and the route walks
-            back far → near. Pickup times are back-calculated from the shift
-            arrival using OSRM road minutes. Home addresses are auto-geocoded
-            via OpenStreetMap when missing.
-          </div>
-          <div className="rounded-lg border p-4">
-            <p className="font-semibold text-foreground">12 AM-6 AM — reuse</p>
-            Same corridor grouping per late-night shift, reusing the office&apos;s
-            10 PM vehicles when available. Vehicles pinned to a shift in Route
-            Setting are used first. Open any route&apos;s map to compare the
-            drawn path with a side-of-road-aware and an optimized order, and
-            apply one.
-          </div>
         </CardContent>
       </Card>
     </div>
@@ -832,6 +820,7 @@ const STATUS_TONE: Record<string, string> = {
   UNDER_REVIEW: "bg-cyan/10 text-cyan border-cyan/30",
   FINALIZED: "bg-green/10 text-green border-green/30",
   EXECUTED: "bg-muted text-muted-foreground border-border",
+  NOT_MAPPED: "bg-muted text-muted-foreground border-dashed border-border",
 };
 
 /** Which candidate to draw first: default to the currently applied one (the
@@ -848,8 +837,10 @@ function preferredCandidate(route: Pick<GeneratedRouteDetail, "appliedCandidateI
 }
 
 /** Row being dragged between GeneratedRouteCard instances. The drag source
- *  rides in the native HTML5 drag event payload — no shared component state. */
-type DragState = { tripId: string; routeId: string };
+ *  rides in the native HTML5 drag event payload — no shared component state.
+ *  `employeeName` is carried for the "Move <name> here" drop indicator on a
+ *  different vehicle's rows. */
+type DragState = { tripId: string; routeId: string; employeeName?: string };
 
 /** Live during a drag: `dataTransfer.getData` is unreliable on `dragover`, so
  *  the source row is pinned here at drag start for instant reorder preview. */
@@ -867,7 +858,12 @@ function readDragPayload(e: React.DragEvent): DragState | null {
       typeof parsed.tripId === "string" &&
       typeof parsed.routeId === "string"
     ) {
-      return { tripId: parsed.tripId, routeId: parsed.routeId };
+      return {
+        tripId: parsed.tripId,
+        routeId: parsed.routeId,
+        employeeName:
+          typeof parsed.employeeName === "string" ? parsed.employeeName : undefined,
+      };
     }
   } catch {
     /* not our payload — not a route row drag */
@@ -878,9 +874,11 @@ function readDragPayload(e: React.DragEvent): DragState | null {
 function GeneratedRouteCard({
   route,
   onChanged,
+  onRouteUpdated,
 }: {
   route: GeneratedRouteDetail;
   onChanged: () => void;
+  onRouteUpdated: (updated: GeneratedRouteDetail) => void;
 }) {
   const [showMap, setShowMap] = useState(false);
   const [analysis, setAnalysis] = useState<RouteAnalysis | null>(route.routeAnalysis);
@@ -891,6 +889,23 @@ function GeneratedRouteCard({
   );
   const [applying, setApplying] = useState(false);
   const [applyMessage, setApplyMessage] = useState<{ tone: "ok" | "error"; text: string } | null>(null);
+
+  // In-place edits (pickup time / reorder / finalize / apply / adjust) patch
+  // just this card via a single-route fetch instead of reloading the whole
+  // week — that is what made every drag-drop and time blur take so long.
+  const refreshingRef = useRef(false);
+  async function reloadCurrent() {
+    if (refreshingRef.current) return;
+    refreshingRef.current = true;
+    try {
+      const updated = await getRoutePlanDetail(route.id);
+      if (updated) onRouteUpdated(updated);
+    } catch {
+      // keep the card's last-known-good state on network hiccups
+    } finally {
+      refreshingRef.current = false;
+    }
+  }
 
   // ── Drag-reorder live preview: the map re-routes through the prospective
   //    row order as you hover; the drop then persists that order. ──
@@ -965,7 +980,8 @@ function GeneratedRouteCard({
         setAdjustMode(false);
         setAdjustViaPoints([]);
         setAdjustResult(null);
-        onChanged();
+        await reloadCurrent();
+        void runAnalysis(true);
       } else {
         setSheetMessage({
           tone: "error",
@@ -1054,7 +1070,7 @@ function GeneratedRouteCard({
           tone: res.error ? "error" : "ok",
           text: res.error ?? "Route updated — stops re-sequenced and pickup times recalculated.",
         });
-        onChanged();
+        await reloadCurrent();
         // The applied order is now the stored one — re-judge it so the panel
         // and the map reflect the new baseline.
         void runAnalysis(true);
@@ -1073,12 +1089,17 @@ function GeneratedRouteCard({
   } | null>(null);
   const [busy, setBusy] = useState<string | null>(null); // "time:<id>" | "finalize" | "move"
 
+  // Per-row in-progress time text: the input is controlled so the cell follows
+  // the keystroke instantly; saving happens on blur and only writes the row
+  // that changed (no unwieldy per-row remount on save).
+  const [timeDrafts, setTimeDrafts] = useState<Record<string, string>>({});
+
   /** Draft routes are the working sheet; FINALIZED/EXECUTED routes are locked. */
   const editable = route.status === "DRAFT" || route.status === "UNDER_REVIEW";
-
-  function timeInputKey(tripId: string, time: string | null): string {
-    return `time-${tripId}-${time ?? ""}`;
-  }
+  /** A pinned-but-unused vehicle's blank card has NO RoutePlan row yet, so it is
+   *  never "editable" — but it MUST still accept cross-vehicle drops (that is
+   *  the whole point of showing it: drop a rider to map the spare vehicle). */
+  const droppable = editable || route.pinnedNotMapped === true;
 
   /** Normalize "9:05" → "09:05" (server + storage use fixed two-digit hours). */
   function normalizePickupInput(value: string): string | null {
@@ -1090,7 +1111,7 @@ function GeneratedRouteCard({
     return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
   }
 
-  async function savePickupTime(tripId: string, value: string) {
+  async function savePickupTime(tripId: string, value: string): Promise<void> {
     if (!editable) return;
     const normalized = normalizePickupInput(value);
     if (!normalized) {
@@ -1101,7 +1122,14 @@ function GeneratedRouteCard({
       return;
     }
     const current = route.trips.find((t) => t.id === tripId)?.pickupTime;
-    if (current === normalized) return;
+    if (current === normalized) {
+      setTimeDrafts((s) => {
+        const next = { ...s };
+        delete next[tripId];
+        return next;
+      });
+      return;
+    }
     setBusy(`time:${tripId}`);
     setSheetMessage(null);
     try {
@@ -1111,7 +1139,7 @@ function GeneratedRouteCard({
           tone: "ok",
           text: res.message ?? "Pickup time updated.",
         });
-        onChanged();
+        await reloadCurrent();
       } else {
         setSheetMessage({
           tone: "error",
@@ -1128,19 +1156,27 @@ function GeneratedRouteCard({
       });
     } finally {
       setBusy(null);
+      setTimeDrafts((s) => {
+        const next = { ...s };
+        delete next[tripId];
+        return next;
+      });
     }
   }
 
   function timeEditor(tripId: string, time: string | null): React.ReactNode {
+    const value = timeDrafts[tripId] ?? time ?? "";
     return (
       <Input
-        key={timeInputKey(tripId, time)}
-        defaultValue={time ?? ""}
+        value={value}
+        onChange={(e) =>
+          setTimeDrafts((s) => ({ ...s, [tripId]: e.target.value }))
+        }
         className={`h-7 w-20 min-w-0 rounded-md px-1.5 text-right text-xs tabular-nums ${
           editable ? "" : "bg-muted/40 text-muted-foreground"
         }`}
         placeholder="HH:mm"
-        disabled={busy != null || !editable}
+        disabled={busy === `time:${tripId}` || !editable}
         aria-label="Pickup time (HH:mm)"
         title={editable ? "Editable pick-up time" : "Route finalized — locked"}
         onBlur={(e) => void savePickupTime(tripId, e.target.value)}
@@ -1156,13 +1192,20 @@ function GeneratedRouteCard({
     setBusy("move");
     setSheetMessage(null);
     try {
-      const res = await moveTripToRoute(tripId, route.id);
+      // Blank "pinned vehicle" cards have no RoutePlan id — they route through
+      // the dedicated action that CREATES the plan on the unused vehicle first.
+      const res =
+        route.pinnedNotMapped && route.vehicleId
+          ? await moveTripToUnusedVehicle(tripId, route.vehicleId)
+          : await moveTripToRoute(tripId, route.id);
       if (res.success) {
         setSheetMessage({ tone: "ok", text: res.message ?? "Employee moved." });
         onChanged();
       } else {
         setSheetMessage({ tone: "error", text: res.error ?? "Failed to move." });
       }
+    } catch (error) {
+      setSheetMessage({ tone: "error", text: String(error) });
     } finally {
       setBusy(null);
     }
@@ -1196,7 +1239,11 @@ function GeneratedRouteCard({
           tone: "ok",
           text: res.message ?? "Row reordered — pickup times recalculated.",
         });
-        onChanged();
+        // Patch only this card. The stored order changed, so drop the analytic
+        // candidate — the map instantly re-renders the new stored sequence.
+        setAnalysis(null);
+        setSelectedId("current");
+        await reloadCurrent();
       } else {
         setSheetMessage({ tone: "error", text: res.error ?? "Failed to reorder rows." });
       }
@@ -1222,7 +1269,7 @@ function GeneratedRouteCard({
           tone: "ok",
           text: res.message ?? "Route finalized and emails dispatched.",
         });
-        onChanged();
+        await reloadCurrent();
       }
     } catch (error) {
       setSheetMessage({
@@ -1240,28 +1287,52 @@ function GeneratedRouteCard({
       draggable: editable,
       onDragStart: (e: React.DragEvent) => {
         if (!editable) return;
-        activeDrag = { tripId, routeId: route.id };
+        const draggedTrip = route.trips.find((t) => t.id === tripId);
+        activeDrag = {
+          tripId,
+          routeId: route.id,
+          employeeName: draggedTrip?.employeeName,
+        };
         setPreviewTripIds(null);
         // Open the map so the reorder is visible while the row is being
-        // dragged; kick a first analysis if none has run yet.
+        // dragged. No analysis is kicked here — OSRM on every drag-start was
+        // a major part of the drag sluggishness; the analytic overlay loads
+        // when the card's map is toggled again.
         if (!showMap) setShowMap(true);
-        if (!analysis && !analyzing) void runAnalysis(false);
         e.dataTransfer.effectAllowed = "move";
         e.dataTransfer.setData(
           "text/plain",
-          JSON.stringify({ tripId, routeId: route.id })
+          JSON.stringify({
+            tripId,
+            routeId: route.id,
+            employeeName: draggedTrip?.employeeName,
+          })
         );
       },
       onDragOver: (e: React.DragEvent) => {
         if (!editable) return;
         e.preventDefault();
-        e.dataTransfer.dropEffect = "move";
-        if (activeDrag && activeDrag.routeId === route.id && activeDrag.tripId !== tripId) {
-          previewOrderOnRow(tripId, activeDrag.tripId);
+        const source = activeDrag;
+        // A row in ANOTHER vehicle's card: just flag this row as the drop
+        // target (the actual move is validated server-side on drop).
+        if (source && source.routeId !== route.id) {
+          setDropTargetRowId(tripId);
+          e.dataTransfer.dropEffect = source.tripId === tripId ? "none" : "move";
+          return;
         }
+        e.dataTransfer.dropEffect = "move";
+        if (source && source.routeId === route.id && source.tripId !== tripId) {
+          previewOrderOnRow(tripId, source.tripId);
+        }
+      },
+      onDragLeave: () => {
+        setDropTargetRowId((current) =>
+          current === tripId ? null : current
+        );
       },
       onDrop: (e: React.DragEvent) => {
         e.preventDefault();
+        setDropTargetRowId(null);
         activeDrag = null;
         setPreviewTripIds(null);
         void dropOnRow(tripId, readDragPayload(e));
@@ -1269,22 +1340,31 @@ function GeneratedRouteCard({
       onDragEnd: () => {
         activeDrag = null;
         setPreviewTripIds(null);
+        setDropTargetRowId(null);
       },
     } as const;
   }
 
   function rowDragStyle(): string {
+    if (dropTargetRowId) {
+      return "cursor-grab active:cursor-grabbing bg-teal/10 outline outline-2 outline-teal/40";
+    }
     return editable ? "cursor-grab active:cursor-grabbing" : "";
   }
 
   const [draggingOverCard, setDraggingOverCard] = useState(false);
+  /** Row inside a DIFFERENT vehicle's card that a dragged employee is currently
+   *  hovering — highlights the drop target and shows the "Move here" chip. */
+  const [dropTargetRowId, setDropTargetRowId] = useState<string | null>(null);
   function cardDropProps() {
     return {
       onDragOver: (e: React.DragEvent) => {
-        if (editable) e.preventDefault();
+        // Without preventDefault the browser cancels the drop entirely
+        // (not-allowed cursor) — so this must fire for blank cards too.
+        if (droppable) e.preventDefault();
       },
       onDragEnter: () => {
-        if (editable) setDraggingOverCard(true);
+        if (droppable) setDraggingOverCard(true);
       },
       onDragLeave: () => setDraggingOverCard(false),
       onDrop: (e: React.DragEvent) => {
@@ -1293,25 +1373,48 @@ function GeneratedRouteCard({
         activeDrag = null;
         setPreviewTripIds(null);
         const source = readDragPayload(e);
-        if (source && source.routeId !== route.id && editable) {
+        if (source && source.routeId !== route.id && droppable) {
           void moveTripHere(source.tripId);
         }
       },
     } as const;
   }
 
-  const storedStops: RouteMapStop[] = route.trips
-    .filter((t) => t.pickupLat != null && t.pickupLng != null)
-    .map((t) => ({
-      lat: t.pickupLat as number,
-      lng: t.pickupLng as number,
-      sequence: t.sequenceInTrip,
-      name: t.employeeName,
-      label: t.pickupLocationLabel,
-      time: t.pickupTime,
-      travelFromPreviousMin: t.travelFromPreviousMin,
-      travelToOfficeMin: t.travelToOfficeMin,
-    }));
+  const storedStops: RouteMapStop[] = (() => {
+    // One pin per PHYSICAL pickup point — never one per rider. Preset routes
+    // share a point among several employees, and a pin named after the rider
+    // (with overlapping markers per employee) reads as "scattered home pins".
+    // Collapse riders on identical coordinates into one stop, name the pin
+    // with the pick-up point LOCATION, and list the riders in the popup.
+    // (Using a plain record of order-preserving keys — the lucide `Map` icon
+    // shadows the global Map here.)
+    const grouped: Record<string, { trip: GeneratedRouteTrip; riders: string[] }> = {};
+    const order: string[] = [];
+    for (const t of route.trips) {
+      if (t.pickupLat == null || t.pickupLng == null) continue;
+      const key = `${t.pickupLat.toFixed(6)},${t.pickupLng.toFixed(6)}`;
+      if (grouped[key]) {
+        grouped[key].riders.push(t.employeeName);
+      } else {
+        grouped[key] = { trip: t, riders: [t.employeeName] };
+        order.push(key);
+      }
+    }
+    return order.map((key, idx) => {
+      const { trip, riders } = grouped[key];
+      return {
+        tripId: trip.id,
+        lat: trip.pickupLat as number,
+        lng: trip.pickupLng as number,
+        sequence: idx + 1,
+        name: trip.pickupLocationLabel ?? trip.employeeName,
+        label: riders.join(", "),
+        time: trip.pickupTime,
+        travelFromPreviousMin: trip.travelFromPreviousMin,
+        travelToOfficeMin: trip.travelToOfficeMin,
+      };
+    });
+  })();
 
   const candidate = analysis?.candidates.find((c) => c.id === selectedId) ?? null;
   const currentCandidate = analysis?.candidates.find((c) => c.id === "current") ?? null;
@@ -1339,11 +1442,12 @@ function GeneratedRouteCard({
           t != null && t.pickupLat != null && t.pickupLng != null
       )
       .map((t, idx) => ({
+        tripId: t.id,
         lat: t.pickupLat as number,
         lng: t.pickupLng as number,
         sequence: idx + 1,
-        name: t.employeeName,
-        label: t.pickupLocationLabel,
+        name: t.pickupLocationLabel ?? t.employeeName,
+        label: t.employeeName,
         time: t.pickupTime,
         travelFromPreviousMin: null,
         travelToOfficeMin: null,
@@ -1357,11 +1461,12 @@ function GeneratedRouteCard({
       const seq = stops.length + 1;
       const side = candidate.stops[pos];
       stops.push({
+        tripId: wp.tripIds[0] ?? `waypoint-${w}`,
         lat: wp.lat,
         lng: wp.lng,
         sequence: seq,
-        name: wp.employeeNames.join(", "),
-        label: wp.label,
+        name: wp.label ?? wp.employeeNames.join(", "),
+        label: wp.employeeNames.join(", "),
         time: candidate.id === "optimized" ? null : timeByTripId[wp.tripIds[0]] ?? null,
         travelFromPreviousMin: pos > 0 ? candidate.legMinutes[pos - 1] ?? null : null,
         travelToOfficeMin: null,
@@ -1386,13 +1491,22 @@ function GeneratedRouteCard({
   }
 
   return (
-    <div className="overflow-hidden rounded-lg border">
+    <div
+      {...(route.pinnedNotMapped ? cardDropProps() : {})}
+      className={`overflow-hidden rounded-lg border ${
+        route.pinnedNotMapped && draggingOverCard
+          ? "ring-2 ring-amber-400/70"
+          : ""
+      }`}
+    >
       <div
-        {...cardDropProps()}
+        {...(route.pinnedNotMapped ? {} : cardDropProps())}
         title={
-          editable
-            ? `Drop a row here to move the rider onto ${route.vehicle.vehicleNumber}`
-            : `Route ${route.status} — locked`
+          route.pinnedNotMapped
+            ? `Drop a rider row here to map ${route.vehicle.vehicleNumber}`
+            : editable
+              ? `Drop a row here to move the rider onto ${route.vehicle.vehicleNumber}`
+              : `Route ${route.status} — locked`
         }
         className={`flex flex-wrap items-center justify-between gap-3 border-b px-4 py-3 ${
           draggingOverCard
@@ -1425,6 +1539,13 @@ function GeneratedRouteCard({
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <Badge variant="outline">{route.arrivalTime}</Badge>
+          <Badge variant="outline" className="text-muted-foreground">
+            {route.pinnedNotMapped
+              ? "Pinned vehicle"
+              : route.routeType === "PRESET_10PM"
+                ? "Pickup-point route"
+                : "Home-address route"}
+          </Badge>
           <span
             className={`rounded-full border px-2.5 py-0.5 text-xs font-medium ${
               STATUS_TONE[route.status] ?? "bg-muted text-muted-foreground border-border"
@@ -1645,7 +1766,7 @@ function GeneratedRouteCard({
       {route.trips.length > 0 ? (
         <>
           <ul className="divide-y divide-border sm:hidden">
-            {route.trips.map((trip) => (
+            {route.trips.map((trip, rowIndex) => (
               <li
                 key={`${route.id}-${trip.sequenceInTrip}`}
                 {...rowDragProps(trip.id)}
@@ -1656,24 +1777,35 @@ function GeneratedRouteCard({
                     {editable ? (
                       <GripVertical className="size-3.5 shrink-0 text-muted-foreground/60" />
                     ) : null}
-                    <span className="truncate">{trip.employeeName}</span>
+                    <span
+                      className={`truncate ${
+                        trip.employeeRole === "FIXED_ARRIVAL"
+                          ? "rounded bg-amber-500/15 px-1.5 text-amber-600"
+                          : ""
+                      }`}
+                      title={
+                        trip.employeeRole === "FIXED_ARRIVAL"
+                          ? "Fixed-arrival employee"
+                          : undefined
+                      }
+                    >
+                      {trip.employeeName}
+                    </span>
                     {trip.employeeCode ? (
                       <span className="ml-1 shrink-0 text-xs font-normal text-muted-foreground">
                         {trip.employeeCode}
                       </span>
                     ) : null}
-                    {trip.employeeRole === "FIXED_ARRIVAL" ? (
-                      <span
-                        className="ml-1.5 inline-flex shrink-0 items-center rounded-full bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium text-amber-600"
-                        title="Fixed-arrival employee"
-                      >
-                        Fixed arrival
-                      </span>
-                    ) : null}
                   </p>
                   <span className="text-xs tabular-nums text-muted-foreground">
-                    Stop {trip.sequenceInTrip}
+                    Stop {rowIndex + 1}
                   </span>
+                  {dropTargetRowId === trip.id ? (
+                    <span className="ml-2 inline-flex shrink-0 items-center justify-end gap-1 rounded-full bg-teal px-2 py-0.5 text-[10px] font-semibold text-teal-foreground">
+                      <ArrowRight className="size-3" />
+                      Move {activeDrag?.employeeName ?? "here"}
+                    </span>
+                  ) : null}
                 </div>
                 <div className="mt-1.5 space-y-1 text-xs">
                   <p className="flex items-start gap-2">
@@ -1716,18 +1848,29 @@ function GeneratedRouteCard({
                         {editable ? (
                           <GripVertical className="size-3.5 shrink-0 cursor-grab text-muted-foreground/60" />
                         ) : null}
-                        <span className="truncate">{trip.employeeName}</span>
+<span
+                          className={`truncate ${
+                            trip.employeeRole === "FIXED_ARRIVAL"
+                              ? "rounded bg-amber-500/15 px-1.5 text-amber-600"
+                              : ""
+                          }`}
+                          title={
+                            trip.employeeRole === "FIXED_ARRIVAL"
+                              ? "Fixed-arrival employee"
+                              : undefined
+                          }
+                        >
+                          {trip.employeeName}
+                        </span>
                         {trip.employeeCode ? (
                           <span className="ml-2 shrink-0 text-xs font-normal text-muted-foreground">
                             {trip.employeeCode}
                           </span>
                         ) : null}
-                        {trip.employeeRole === "FIXED_ARRIVAL" ? (
-                          <span
-                            className="ml-1.5 inline-flex shrink-0 items-center rounded-full bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium text-amber-600"
-                            title="Fixed-arrival employee"
-                          >
-                            Fixed arrival
+                        {dropTargetRowId === trip.id ? (
+                          <span className="ml-2 inline-flex shrink-0 items-center gap-1 rounded-full bg-teal px-2 py-0.5 text-[10px] font-semibold text-teal-foreground">
+                            <ArrowRight className="size-3" />
+                            Move {activeDrag?.employeeName ?? "here"}
                           </span>
                         ) : null}
                       </span>
@@ -1752,8 +1895,13 @@ function GeneratedRouteCard({
           </div>
         </>
       ) : (
-        <p className="px-4 py-3 text-sm text-muted-foreground">
-          No employees assigned to this route yet.
+        <p className="flex items-start gap-2 px-4 py-3 text-sm text-muted-foreground">
+          <Pin className="mt-0.5 size-3.5 shrink-0" />
+          <span>
+            {route.pinnedNotMapped
+              ? "Pinned vehicle — not mapped on this day. Drag an employee row here from another vehicle to map it."
+              : "No employees assigned to this route yet."}
+          </span>
         </p>
       )}
     </div>

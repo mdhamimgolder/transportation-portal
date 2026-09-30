@@ -10,8 +10,14 @@ const eslintConfig = defineConfig([
     "node_modules/**",
     "next-env.d.ts",
     "tsconfig.tsbuildinfo",
-    "frontend/**",
-    "_archived-fastapi-scaffold-2026-07-27/**",
+    // Agent scratch / worktrees hold stale *copies* of this repo (they are
+    // separate git worktrees, not source) — never lint them.
+    ".claude/**",
+    ".kilo/**",
+    // Legacy FastAPI scaffold + Vite frontend moved to
+    // ../Transportation-System-archive/ (kept for history, not part of the app).
+    "_archived-fastapi-scaffold-*/**",
+    "_archive-*/**",
   ]),
 ]);
 

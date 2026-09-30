@@ -1,12 +1,12 @@
 /**
  * Single source of truth for a vehicle's pickup-point schedule times.
  *
- * Drive rule ("the 5-minute rule"):
- *  - between any two pickup points — and between the last point and the office —
- *    straight-line km × 5 minutes is the drive time (Math.ceil per leg);
- *  - when the journey planner has been TRAINED on history (see the
- *    RouteLegLearning table), a learned average gap for the same leg replaces
- *    the distance estimate once it has >= LEARN_MIN_SAMPLES observations.
+ * Drive rule ("trained-data rule"):
+ *  - a leg's drive time is ALWAYS a learned average gap for that exact leg
+ *    (see the RouteLegLearning table), trusted once it has >= LEARN_MIN_SAMPLES
+ *    observations mined from FINALIZED routes and "Teach from manual plan"
+ *    uploads. There is NO distance estimate fallback — if a leg was never
+ *    finalized or taught, the schedule errors instead of inventing a time.
  *
  * Time grid ("5-minute pickup times"):
  *  - every pickup time (and the derived office arrival) lands on a 5-minute
@@ -30,7 +30,7 @@
  */
 
 import { prisma } from "@/lib/prisma";
-import { haversineDistance, minutesToTimeString } from "./utils";
+import { minutesToTimeString } from "./utils";
 import { officeCoordinatesFor } from "@/lib/constants/office-locations";
 import {
   PICKUP_GRID_MINUTES,
@@ -44,9 +44,6 @@ export {
   snapPickupMinutesUp,
   backCalculatePickupMinutes,
 } from "./schedule-math";
-
-/** City-speed assumption: 1 km of driving takes ~5 minutes. */
-export const MINUTES_PER_KM = 5;
 
 /** A learned leg is trusted once it has at least this many observations. */
 export const LEARN_MIN_SAMPLES = 3;
@@ -95,6 +92,26 @@ export type PickupScheduleResult =
 
 export type OfficeCoordsLike = { lat: number; lng: number; name?: string };
 
+export type VehiclePointSchedule = {
+  vehicleId: string;
+  vehicleNumber: string | null;
+  officeLocation: string;
+  /** Derived office arrival ("HH:mm") that follows the LAST pickup time. */
+  officeArrival: string;
+  method: "first_pickup" | "base_eta";
+  /** pickupPointId → "HH:mm". The point's ONE pickup time, every day / week. */
+  times: Map<string, string>;
+  /** The vehicle's active points, in configured (preset) sequence order. */
+  points: Array<{
+    id: string;
+    sequence: number;
+    addressId: string;
+    name: string;
+  }>;
+  /** True when the persisted point times had to be (re)computed on this call. */
+  recomputed: boolean;
+};
+
 function normalizeTime(raw: string | null | undefined): string | null {
   const value = (raw ?? "").trim();
   if (!value) return null;
@@ -109,26 +126,27 @@ function legKey(fromKey: string | null | undefined, toKey: string | null | undef
 }
 
 /**
- * Drive minutes for one leg: a learned median (>= LEARN_MIN_SAMPLES samples)
- * when the resolver knows the pair, otherwise distance × 5 min/km. Never < 1.
+ * Drive minutes for one leg — TRAINED DATA ONLY. Returns the learned average
+ * (>= LEARN_MIN_SAMPLES samples) when the resolver knows the pair, otherwise
+ * `null`. The 5 min/km distance estimate was removed so pickup times can never
+ * be invented from coordinates; callers must error when a leg resolves to
+ * `null`.
  */
 export function driveLegMinutes(
   a: { latitude: number; longitude: number; key?: string | null },
   b: { latitude: number; longitude: number; key?: string | null },
   learned?: LearnedResolver,
   officeName?: string
-): number {
+): number | null {
   const aKey = a.key ?? (officeName ? `office:${officeName}` : null);
-  const learnedMinutes = learned?.get(legKey(aKey, b.key ?? (officeName ? `office:${officeName}` : null)) ?? "");
+  const bKey = b.key ?? (officeName ? `office:${officeName}` : null);
+  const leg = legKey(aKey, bKey);
+  if (!leg) return null;
+  const learnedMinutes = learned?.get(leg);
   if (learnedMinutes && learnedMinutes.sampleCount >= LEARN_MIN_SAMPLES) {
     return Math.max(1, Math.round(learnedMinutes.avgMinutes));
   }
-  return Math.max(
-    1,
-    Math.ceil(
-      haversineDistance(a.latitude, a.longitude, b.latitude, b.longitude) * MINUTES_PER_KM
-    )
-  );
+  return null;
 }
 
 export function computePickupSchedule(
@@ -160,6 +178,45 @@ export function computePickupSchedule(
   const officeCoords = { latitude: office.lat, longitude: office.lng };
   const officeName = office.name;
 
+  // Trained-data rule (no estimate fallback): every leg of the pickup schedule
+  // — each consecutive point pair and the last point -> office — must resolve
+  // to a learned drive time (>= LEARN_MIN_SAMPLES observations from finalized
+  // routes / taught manual plans). Otherwise we refuse to fabricate a picking
+  // time and list the missing legs instead.
+  const label = (p: SchedulePointInput) => p.name?.trim() || p.id;
+  const legMinutes: Array<number | null> = [];
+  for (let i = 0; i < points.length; i++) {
+    const isOfficeLeg = i === points.length - 1;
+    legMinutes.push(
+      driveLegMinutes(
+        coords[i],
+        isOfficeLeg ? officeCoords : coords[i + 1],
+        learned,
+        officeName
+      )
+    );
+  }
+  const untrained = points.flatMap((_, i) =>
+    legMinutes[i] == null
+      ? [
+          `${label(points[i])} → ${
+            i === points.length - 1 ? officeName : label(points[i + 1])
+          }`,
+        ]
+      : []
+  );
+  if (untrained.length > 0) {
+    return {
+      success: false,
+      error:
+        `No finalized/taught drive time yet for: ${untrained.join(", ")}. ` +
+        `Pickup times come from trained gaps only — finalize this route or use ` +
+        `"Teach from manual plan" (needing ≥ ${LEARN_MIN_SAMPLES} observations ` +
+        `per leg); the 5 min/km estimate was removed.`,
+    };
+  }
+  const legMins = legMinutes as number[];
+
   const first = normalizeTime(anchor.firstPickupTime);
   const base = normalizeTime(anchor.baseETA) ?? normalizeTime(anchor.defaultArrival);
   const minutes: number[] = new Array(points.length);
@@ -171,28 +228,17 @@ export function computePickupSchedule(
     const [h, m] = first.split(":").map(Number);
     minutes[0] = snapPickupMinutesUp(h * 60 + m);
     for (let i = 1; i < points.length; i++) {
-      minutes[i] = snapPickupMinutesUp(
-        minutes[i - 1] + driveLegMinutes(coords[i - 1], coords[i], learned, officeName)
-      );
+      minutes[i] = snapPickupMinutesUp(minutes[i - 1] + legMins[i - 1]);
     }
-    officeArrival = minutesToTimeString(
-      snapPickupMinutesUp(
-        minutes[points.length - 1] +
-          driveLegMinutes(coords[coords.length - 1], officeCoords, learned, officeName)
-      )
-    );
+    officeArrival = minutesToTimeString(snapPickupMinutesUp(minutes[points.length - 1] + legMins[points.length - 1]));
   } else if (base) {
     method = "base_eta";
     const [h, m] = base.split(":").map(Number);
     const anchorMinutes = h * 60 + m;
     const back = new Array<number>(points.length);
-    back[points.length - 1] =
-      anchorMinutes -
-      driveLegMinutes(coords[coords.length - 1], officeCoords, learned, officeName);
+    back[points.length - 1] = anchorMinutes - legMins[points.length - 1];
     for (let i = points.length - 2; i >= 0; i--) {
-      back[i] =
-        back[i + 1] -
-        driveLegMinutes(coords[i], coords[i + 1], learned, officeName);
+      back[i] = back[i + 1] - legMins[i];
     }
     if (back[0] < 0) {
       return {
@@ -292,8 +338,9 @@ export async function loadLearnedLegs(shiftKey: string): Promise<LearnedResolver
 
 /**
  * Recompute and persist every active pickup point's `baseETA` for a vehicle
- * from its first pickup time (forward) or BASE ETA (backward), using the
- * 5 min/km rule and the learned 10 PM set. Best-effort: never throws.
+ * from its first pickup time (forward) or BASE ETA (backward), using trained
+ * legs only (finalized routes / taught manual plans) and the 10 PM learned
+ * set. Best-effort: never throws.
  */
 export async function syncPickupPointTimes(
   vehicleId: string
@@ -345,4 +392,171 @@ export async function syncPickupPointTimes(
   );
 
   return result;
+}
+
+/** "HH:mm" → minutes since midnight (null when unparsable). */
+function timeToMinutes(raw: string | null | undefined): number | null {
+  const normalized = normalizeTime(raw);
+  if (!normalized) return null;
+  const [h, m] = normalized.split(":").map(Number);
+  return h * 60 + m;
+}
+
+/**
+ * THE canonical pickup-point schedule of one vehicle: `PickupPoint.baseETA` is
+ * the source of truth, so a point keeps ONE pickup time — Sankar at 20:55 is
+ * 20:55 on Monday AND Friday, this week AND the next.
+ *
+ * The schedule is recomputed + persisted ONLY when the stored values can't be
+ * trusted (missing, unparsable, missing coordinates, or no longer increasing
+ * with the configured point sequence — which is what a sequence change without
+ * a sync looks like). Consumers therefore never re-derive times per day from
+ * whatever the learned legs happen to hold at that moment — that feedback loop
+ * was what made the same point drift 21:10 → 21:05 → 21:00 across a week.
+ *
+ * Every consumer reads its times from here: the 10 PM generator, the
+ * drag/reorder re-timer, the planner diagnostics and the repair scripts.
+ */
+export async function ensurePickupPointSchedule(
+  vehicleId: string,
+  shiftKey = "10PM"
+): Promise<
+  { success: true; schedule: VehiclePointSchedule } | { success: false; error: string }
+> {
+  const vehicle = await prisma.vehicle.findFirst({
+    where: { id: vehicleId },
+    include: {
+      pickupSequence: {
+        where: { isActive: true },
+        orderBy: { sequence: "asc" },
+        include: { address: true },
+      },
+    },
+  });
+  if (!vehicle) return { success: false, error: "Vehicle not found." };
+
+  const points = vehicle.pickupSequence;
+  if (points.length === 0) {
+    return { success: false, error: "Vehicle has no pickup points." };
+  }
+
+  const officeName = vehicle.officeLocation ?? "Regnum";
+  const office = officeCoordinatesFor(officeName);
+  const officeCoords = {
+    latitude: office.lat,
+    longitude: office.lng,
+    key: `office:${officeName}`,
+  };
+  const learned = await loadLearnedLegs(shiftKey);
+  const anchor: PickupAnchor = {
+    firstPickupTime: vehicle.firstPickupTime,
+    baseETA: vehicle.baseETA,
+    // Preset points are the 10 PM trips, whose office arrival is 22:00.
+    defaultArrival: shiftKey === "10PM" ? "22:00" : null,
+  };
+
+  const pointRefs = points.map((p) => ({
+    id: p.id,
+    sequence: p.sequence,
+    addressId: p.addressId,
+    name: p.name,
+  }));
+
+  const storedMinutes = points.map((p) => timeToMinutes(p.baseETA));
+  const hasCoords = points.every(
+    (p) => p.address?.latitude != null && p.address?.longitude != null
+  );
+  // Usable = every point has a parsed time AND the times still increase with
+  // the configured sequence (equal times are impossible between distinct
+  // points on the 5-minute grid, so a repeat means the rows are stale).
+  const usable =
+    hasCoords &&
+    storedMinutes.every((m) => m != null) &&
+    storedMinutes.every(
+      (m, i) => i === 0 || (m as number) > (storedMinutes[i - 1] as number)
+    );
+
+  if (usable) {
+    const last = points[points.length - 1];
+    const lastToOffice = driveLegMinutes(
+      {
+        latitude: last.address!.latitude!,
+        longitude: last.address!.longitude!,
+        key: `addr:${last.addressId}`,
+      },
+      officeCoords,
+      learned,
+      officeName
+    );
+
+    if (lastToOffice != null) {
+      const times = new Map<string, string>();
+      points.forEach((p, i) => times.set(p.id, minutesToTimeString(storedMinutes[i] as number)));
+
+      const officeArrival = minutesToTimeString(
+        snapPickupMinutesUp(
+          (storedMinutes[storedMinutes.length - 1] as number) + lastToOffice
+        )
+      );
+
+      return {
+        success: true,
+        schedule: {
+          vehicleId,
+          vehicleNumber: vehicle.vehicleNumber,
+          officeLocation: officeName,
+          officeArrival,
+          method: normalizeTime(anchor.firstPickupTime) ? "first_pickup" : "base_eta",
+          times,
+          points: pointRefs,
+          recomputed: false,
+        },
+      };
+    }
+    // Last -> office leg has no finalized/taught drive time — fall through to
+    // recompute, which validates every leg against the trained set and reports
+    // exactly which legs are missing.
+  }
+
+  // Stored schedule is missing / stale → recompute it once from the vehicle's
+  // anchor (first pickup time, else BASE ETA, else the shift's office arrival)
+  // and persist it, so every day of every week reads the same values.
+  const result = computePickupSchedule(
+    anchor,
+    points.map((p) => ({
+      id: p.id,
+      name: p.name,
+      latitude: p.address?.latitude ?? null,
+      longitude: p.address?.longitude ?? null,
+      key: p.addressId ? `addr:${p.addressId}` : null,
+    })),
+    office,
+    learned
+  );
+  if (!result.success) return { success: false, error: result.error };
+
+  await prisma
+    .$transaction(
+      result.points.map((u) =>
+        prisma.pickupPoint.update({
+          where: { id: u.id },
+          data: { baseETA: u.pickup },
+        })
+      )
+    )
+    .catch(() => undefined);
+
+  return {
+    success: true,
+    schedule: {
+      vehicleId,
+      vehicleNumber: vehicle.vehicleNumber,
+      officeLocation: officeName,
+      officeArrival: result.officeArrival,
+      method: result.method,
+      times: new Map(result.points.map((u) => [u.id, u.pickup])),
+      points: pointRefs,
+      recomputed: true,
+    },
+  };
 }

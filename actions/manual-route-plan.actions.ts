@@ -24,8 +24,9 @@ import {
  * old rows) and then the full learned set is rebuilt via
  * `trainRoutePlannerFromHistory`, which merges the manual rows into
  * `RouteLegLearning` alongside mined history. From the next RUN MAPPING on,
- * the planner plans pick-up times from those real, hand-tuned gaps instead of
- * the generic 5 min/km estimate.
+ * the planner plans pick-up times from those real, hand-tuned gaps alone —
+ * the 5 min/km distance estimate was removed, so trained gaps are the only
+ * timing source.
  */
 
 export type ManualPlanImportSkip = { line: number; reason: string };

@@ -59,6 +59,8 @@ export function isLateNightArrivalLabel(
   label: string | null | undefined
 ): boolean {
   const norm = (label ?? "").toUpperCase().replace(/\s+/g, "");
+  // 11 PM is NOT late night - it's pickup → office like 10 PM
+  if (norm === "11PM") return false;
   return LATE_NIGHT_LABELS.some(
     (l) => l.toUpperCase().replace(/\s+/g, "") === norm
   );

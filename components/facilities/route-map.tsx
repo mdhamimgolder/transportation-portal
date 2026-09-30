@@ -17,6 +17,8 @@ import { isLateNightArrivalLabel } from "@/lib/constants/route-shifts";
 
 /** A single pickup stop on a route map. */
 export interface RouteMapStop {
+  /** Stable trip-assignment id — the ONLY key used for ordering/matching. */
+  tripId: string;
   lat: number;
   lng: number;
   sequence: number;
@@ -68,6 +70,29 @@ interface RouteMapViewProps {
     geometry: [number, number][],
     totals: { minutes: number; km: number }
   ) => void;
+
+  /** Preview props for drag-and-drop reordering */
+  /** Trip IDs in the prospective order (for drag preview) */
+  previewOrder?: string[] | null;
+  /** Pre-fetched geometry for the preview order (debounced OSRM result) */
+  previewGeometry?: [number, number][] | null;
+  /** Whether a drag preview is currently active for this route */
+  isPreviewing?: boolean;
+  /** Leg minutes for the preview geometry */
+  previewLegMinutes?: number[] | null;
+  /** Trip currently selected in the table — its marker is highlighted. */
+  selectedTripId?: string | null;
+  /** Called when a stop marker is clicked (syncs back to the table). */
+  onStopSelect?: (tripId: string | null) => void;
+  /** Identity of the route's COMMITTED stop order (trip ids). Keys the Leaflet
+   *  container div: changes only when the saved order changes — i.e. exactly
+   *  when the map must remount on a freshly allocated container. Drag-hover
+   *  previews (previewOrder) never change it, so the map stays stable while
+   *  rows are dragged and only remounts ONCE after a reorder/move commits.
+   *  Without this, react-leaflet re-initializes over a just-release·d DOM node
+   *  and Leaflet throws "Map container is being reused by another instance"
+   *  (React 19 dev StrictMode surfaces it as a red runtime-error overlay). */
+  containerKey?: string | null;
 }
 
 /** Which way the vehicle faces when stopped at a pickup, and where on the road. */
@@ -81,6 +106,16 @@ export interface StopHeading {
 const ROUTE_COLOR = "#C6F432";
 const OFFICE_COLOR = "#22D3EE";
 const GHOST_COLOR = "#A1A1AA";
+const SELECTED_COLOR = "#F59E0B";
+
+/** Per-shift marker accent so 10 PM / 11 PM / late-night routes are
+ *  distinguishable at a glance. The route line itself stays brand lime. */
+function shiftAccent(arrivalTime: string | null | undefined): string {
+  const norm = (arrivalTime ?? "").toUpperCase().replace(/\s+/g, "");
+  if (norm === "10PM") return "#22D3EE";
+  if (norm === "11PM") return "#C6F432";
+  return "#C084FC";
+}
 
 const COMPASS = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
 /** 0..360 → "N" | "NE" | … */
@@ -148,17 +183,20 @@ async function fetchRoadGeometry(
   const coords = pts
     .map((p) => `${p[1].toFixed(6)},${p[0].toFixed(6)}`)
     .join(";");
+  // Full geometry + continue_straight so OSRM returns the true shortest
+  // drivable path in the exact waypoint order given (table order). Bearings
+  // are NOT applied by default: constraining every stop's heading is what
+  // produced the unnatural loops and non-shortest detours.
   const query =
-    `?overview=simplified&geometries=geojson&alternatives=false&steps=false`;
+    `?overview=full&geometries=geojson&alternatives=false&steps=false&continue_straight=true`;
 
-  /** bearings=true runs the constrained request; false retries unconstrained
-   * (a genuine U-turn / divider loop is the only drivable option there). */
+  /** bearings=true runs the constrained request; false is the shortest path. */
   const run = async (withBearings: boolean): Promise<RoadGeometry | null> => {
     const bearings = withBearings ? waypointBearingsParam(pts) : "";
     const url =
       `https://router.project-osrm.org/route/v1/driving/${coords}` +
       `${query}${bearings ? `&bearings=${bearings}` : ""}`;
-    const res = await fetch(url, { signal: AbortSignal.timeout(15000) });
+    const res = await fetch(url, { signal: AbortSignal.timeout(20000) });
     if (!res.ok) return null;
     const data = await res.json();
     if (data?.code && data.code !== "Ok") return null;
@@ -178,13 +216,13 @@ async function fetchRoadGeometry(
   };
 
   try {
-    // Constrained first: every stop departs toward the NEXT stop, regardless
-    // of which side of the road its lat/lng pin sits on.
-    const constrained = await run(true);
-    if (constrained) return constrained;
-    // No routable path under the heading constraints — accept the real
-    // geometry (may include a U-turn) instead of losing the map.
-    return await run(false);
+    // Shortest path first — the waypoint order already encodes the pickup
+    // sequence, so OSRM must simply connect the dots by road.
+    const shortest = await run(false);
+    if (shortest) return shortest;
+    // No routable shortest path (e.g. divided-road snap) — retry with
+    // heading constraints instead of losing the map.
+    return await run(true);
   } catch {
     return null;
   }
@@ -236,10 +274,11 @@ function bearingDeg(
   return (toDeg(Math.atan2(y, x)) + 360) % 360;
 }
 
-function stopIcon(sequence: number) {
+function stopIcon(displayNumber: number, accent: string, selected: boolean) {
+  const ring = selected ? `0 0 0 3px ${SELECTED_COLOR},` : "";
   return divIcon({
     className: "",
-    html: `<div style="width:26px;height:26px;border-radius:50%;background:#0A0A0B;border:2px solid ${ROUTE_COLOR};color:${ROUTE_COLOR};font:600 12px/23px system-ui;text-align:center;box-shadow:0 2px 6px rgba(0,0,0,.55);">${sequence}</div>`,
+    html: `<div style="width:26px;height:26px;border-radius:50%;background:#0A0A0B;border:2px solid ${accent};color:${accent};font:600 12px/23px system-ui;text-align:center;box-shadow:${ring}0 2px 6px rgba(0,0,0,.55);">${displayNumber}</div>`,
     iconSize: [26, 26],
     iconAnchor: [13, 13],
     popupAnchor: [0, -15],
@@ -328,36 +367,79 @@ export function RouteMapView({
   onViaPointMove,
   onViaPointRemove,
   onAdjustReady,
+  previewOrder = null,
+  previewGeometry = null,
+  isPreviewing = false,
+  previewLegMinutes = null,
+  selectedTripId = null,
+  onStopSelect,
+  containerKey = null,
 }: RouteMapViewProps) {
-  const ordered = useMemo(
+  const baseOrdered = useMemo(
     () => [...stops].sort((a, b) => a.sequence - b.sequence),
     [stops]
   );
 
-  /** Late-night shifts ("12 AM" – "6 AM") draw pickups → office only: the
+  /** Late-night shifts (12 AM – 6 AM) draw pickups → office only: the
    * office → first-pickup empty-run leg is not required on the map (it still
-   * exists in the schedule math). Shared helper so the server-side analysis
+   * exists in the schedule math). 10 PM and 11 PM always draw
+   * pickups → office. Shared helper so the server-side analysis
    * and this map never disagree on the topology. */
   const isLateNight = isLateNightArrivalLabel(arrivalTime);
+  const accent = shiftAccent(arrivalTime);
 
   const providedGeometry =
     geometry && geometry.length >= 2 ? geometry : null;
 
+  /** Order stops by trip id — the same ids the table, drag preview, and
+   *  server use. Never match by display name (duplicates break it). */
+  const ordered = useMemo(() => {
+    if (!previewOrder || previewOrder.length === 0) return baseOrdered;
+    const byId = new Map(baseOrdered.map((s) => [s.tripId, s]));
+    const mapped = previewOrder
+      .map((id) => byId.get(id) ?? null)
+      .filter((s): s is typeof baseOrdered[0] => s != null);
+    // A cross-vehicle preview can reference a trip id this route doesn't
+    // have yet — never render an empty map because of it.
+    if (mapped.length === 0) return baseOrdered;
+    const seen = new Set(mapped.map((s) => s.tripId));
+    return [...mapped, ...baseOrdered.filter((s) => !seen.has(s.tripId))];
+  }, [baseOrdered, previewOrder]);
+
+  const isPreviewActive = isPreviewing && previewOrder && previewOrder.length > 0;
+
+  /** Only stops with real coordinates take part in routing and markers.
+   *  Zero/missing pins are listed separately as unmapped — they must never
+   *  consume a stop number or a routing slot (that is what made visible
+   *  markers start at 2 / 4 / 7). Display numbers are always 1..n over the
+   *  mapped stops in table order. */
+  const validOrdered = useMemo(
+    () => ordered.filter((s) => s.lat !== 0 || s.lng !== 0),
+    [ordered]
+  );
+  const unmapped = useMemo(
+    () => ordered.filter((s) => s.lat === 0 && s.lng === 0),
+    [ordered]
+  );
+
   /** Ordered endpoints the vehicle actually drives, expressed as [lat, lng]. */
   const reqPts = useMemo<[number, number][]>(() => {
-    const stopPts = ordered.map((s) => [s.lat, s.lng] as [number, number]);
+    const stopPts = validOrdered.map((s) => [s.lat, s.lng] as [number, number]);
     if (!destination) return stopPts;
     return [...stopPts, [destination.lat, destination.lng]];
-  }, [ordered, destination]);
+  }, [validOrdered, destination]);
 
   /** Drive minutes per leg (leg k = reqPts[k] → reqPts[k+1]). */
   const legTimes = useMemo<number[]>(() => {
-    const n = ordered.length;
+    const n = validOrdered.length;
     const t: number[] = [];
     if (n === 0) return t;
+
+    if (isPreviewActive && previewLegMinutes) {
+      return previewLegMinutes;
+    }
+
     if (legMinutesOverride) {
-      // Analysis candidates for late-night loops carry the office → first
-      // pickup leg at index 0 — drop it so the chips match the drawn path.
       if (legMinutesOverride.length === reqPts.length) {
         return [...legMinutesOverride.slice(1)];
       }
@@ -365,14 +447,14 @@ export function RouteMapView({
         return [...legMinutesOverride];
       }
     }
-    for (let i = 1; i < n; i++) t.push(ordered[i].travelFromPreviousMin ?? 0);
-    t.push(ordered[n - 1].travelToOfficeMin ?? 0);
+    for (let i = 1; i < n; i++) t.push(validOrdered[i].travelFromPreviousMin ?? 0);
+    t.push(validOrdered[n - 1].travelToOfficeMin ?? 0);
     return t;
-  }, [ordered, legMinutesOverride, reqPts.length]);
+  }, [validOrdered, legMinutesOverride, reqPts.length, isPreviewActive, previewLegMinutes]);
 
   const reqPtsKey = useMemo(
-    () => `${isLateNight}|${reqPts.map((p) => p.join(",")).join(";")}`,
-    [reqPts, isLateNight]
+    () => `${isLateNight}|${validOrdered.map((s) => s.tripId).join(",")}|${reqPts.map((p) => p.join(",")).join(";")}`,
+    [validOrdered, reqPts, isLateNight]
   );
 
   /** Road geometry for the current request key. undefined = still routing;
@@ -382,10 +464,11 @@ export function RouteMapView({
     key: string;
     value: RoadGeometry | null;
   } | null>(null);
+  const [retryNonce, setRetryNonce] = useState(0);
 
   const cacheKey = useMemo(
-    () => `${routeKey ?? "map"}|${reqPtsKey}`,
-    [routeKey, reqPtsKey]
+    () => `${routeKey ?? "map"}|${reqPtsKey}|retry=${retryNonce}`,
+    [routeKey, reqPtsKey, retryNonce]
   );
 
   const fetchedGeo =
@@ -395,24 +478,24 @@ export function RouteMapView({
         ? undefined
         : null;
 
-  /** Polyline to draw: server-provided geometry wins (it matches the
-   * applied candidate's sides/order), else the client OSRM fetch. Late-night
-   * provided geometry starts at the office — cut the empty-run leg so the
+  /** Polyline to draw: preview geometry > server-provided geometry > client OSRM fetch.
+   * Late-night provided geometry starts at the office — cut the empty-run leg so the
    * drawn path begins at the first pickup. */
   const firstStopPt: [number, number] | null =
-    isLateNight && ordered.length > 0 ? [ordered[0].lat, ordered[0].lng] : null;
+    isLateNight && validOrdered.length > 0 ? [validOrdered[0].lat, validOrdered[0].lng] : null;
   const trimOfficeStart = (g: [number, number][]): [number, number][] => {
     if (!firstStopPt || g.length < 2) return g;
     const cut = nearestIndex(g, firstStopPt);
     return cut > 0 ? g.slice(cut) : g;
   };
   const drawn = useMemo<[number, number][]>(() => {
+    if (isPreviewActive && previewGeometry) return trimOfficeStart(previewGeometry);
     if (providedGeometry) return trimOfficeStart(providedGeometry);
     if (fetchedGeo && fetchedGeo.line.length >= 2) return fetchedGeo.line;
     return reqPts;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [providedGeometry, fetchedGeo, reqPts, firstStopPt]);
-  const routing = !providedGeometry && fetchedGeo === undefined;
+  }, [isPreviewActive, previewGeometry, providedGeometry, fetchedGeo, reqPts, firstStopPt]);
+  const routing = !providedGeometry && !isPreviewActive && fetchedGeo === undefined;
 
   /** Real driving totals for the footer: caller-supplied totals (route
    * analysis candidate) win; else the fetched route's OSRM distance /
@@ -461,7 +544,7 @@ export function RouteMapView({
 
   useEffect(() => {
     if (!adjustMode) return;
-    const stops = ordered.map((s) => [s.lat, s.lng] as [number, number]);
+    const stops = validOrdered.map((s) => [s.lat, s.lng] as [number, number]);
     const office = destination
       ? [[destination.lat, destination.lng] as [number, number]]
       : [];
@@ -488,7 +571,7 @@ export function RouteMapView({
     return () => {
       cancelled = true;
     };
-  }, [adjustMode, adjustKey, ordered, destination, viaPoints, onAdjustReady]);
+  }, [adjustMode, adjustKey, validOrdered, destination, viaPoints, onAdjustReady]);
 
   /** While dropping/dragging adjust via points, draw the adjusted path
    *  exclusively (the stored candidate geometry is bypassed). Until the
@@ -524,16 +607,16 @@ export function RouteMapView({
   }, [drawn, reqPts]);
 
   const bounds = useMemo(() => {
-    const pts: [number, number][] = ordered.map((s) => [s.lat, s.lng]);
+    const pts: [number, number][] = validOrdered.map((s) => [s.lat, s.lng]);
     if (destination) pts.push([destination.lat, destination.lng]);
     if (pts.length === 0) return null;
     return pts;
-  }, [ordered, destination]);
+  }, [validOrdered, destination]);
 
   return (
     <div className="space-y-2">
       {bounds ? (
-        <div className="h-96 w-full overflow-hidden rounded-lg border bg-[#0A0A0B]">
+        <div key={containerKey ?? routeKey ?? "map"} className="h-96 w-full overflow-hidden rounded-lg border bg-[#0A0A0B]">
           <MapContainer
             center={bounds[0]}
             zoom={13}
@@ -662,14 +745,14 @@ export function RouteMapView({
                 ))
               : null}
 
-            {ordered.map((s) => {
+            {validOrdered.map((s) => {
               const h = headingBySequence.get(s.sequence);
               if (!h || h.headingDeg == null) return null;
               const pos: [number, number] =
                 h.lat != null && h.lng != null ? [h.lat, h.lng] : [s.lat, s.lng];
               return (
                 <Marker
-                  key={`facing-${s.sequence}`}
+                  key={`facing-${s.tripId}`}
                   position={pos}
                   icon={facingIcon(h.headingDeg)}
                   interactive={false}
@@ -678,16 +761,21 @@ export function RouteMapView({
               );
             })}
 
-            {ordered.map((s) => {
+            {validOrdered.map((s, idx) => {
               const h = headingBySequence.get(s.sequence);
               return (
                 <Marker
-                  key={`stop-${s.sequence}`}
+                  key={`stop-${s.tripId}`}
                   position={[s.lat, s.lng]}
-                  icon={stopIcon(s.sequence)}
+                  icon={stopIcon(idx + 1, accent, selectedTripId === s.tripId)}
+                  eventHandlers={{
+                    click: () => onStopSelect?.(s.tripId),
+                  }}
                 >
                   <Popup>
-                    <strong>{s.name}</strong>
+                    <strong>
+                      Stop {idx + 1}: {s.name}
+                    </strong>
                     {s.label ? <span style={{ display: "block" }}>{s.label}</span> : null}
                     {s.time ? (
                       <span style={{ display: "block", color: "#A1A1AA" }}>
@@ -729,6 +817,33 @@ export function RouteMapView({
         </div>
       )}
 
+      {unmapped.length > 0 && (
+        <div className="rounded-lg border border-dashed border-amber-500/40 bg-amber-500/5 px-3 py-2 text-xs text-amber-600">
+          {unmapped.length} stop{unmapped.length > 1 ? "s" : ""} ha{unmapped.length > 1 ? "ve" : "s"} no
+          pickup coordinates and {unmapped.length > 1 ? "are" : "is"} not drawn:{" "}
+          {unmapped.map((s) => s.name).join(", ")}. Geocode the pickup point to
+          include {unmapped.length > 1 ? "them" : "it"} in the route.
+        </div>
+      )}
+      {fetchedGeo === null && reqPts.length >= 2 && !providedGeometry && !isPreviewActive && (
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs">
+          <span className="text-amber-600">
+            Road routing failed for this stop order — showing straight waypoint
+            connections. Check pickup coordinates, then retry.
+          </span>
+          <button
+            type="button"
+            className="rounded-md border border-amber-500/40 px-2 py-1 font-medium text-amber-600 hover:bg-amber-500/10"
+            onClick={() => {
+              setGeoState(null);
+              setRetryNonce((n) => n + 1);
+            }}
+          >
+            Retry routing
+          </button>
+        </div>
+      )}
+
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
         {adjusting ? (
           <span className="flex items-center gap-1.5 rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 font-medium text-amber-600">
@@ -741,11 +856,11 @@ export function RouteMapView({
             className="h-1.5 w-5 rounded-full"
             style={{ background: adjusting ? "#F59E0B" : ROUTE_COLOR }}
           />
-          {ordered.length === 0
+          {validOrdered.length === 0
             ? "Pickup order —"
             : adjusting
               ? "Adjusted path"
-              : "Pickups → office"}
+              : "Pickups → office · stop numbers match table rows"}
         </span>
         <span className="flex items-center gap-1.5">
           <RouteIcon className="size-3.5" />
@@ -802,6 +917,12 @@ export function RouteMapView({
             Current route
           </span>
         ) : null}
+        {isPreviewActive && (
+          <span className="flex items-center gap-1.5 rounded-full border border-teal/40 bg-teal/10 px-2 py-0.5 font-medium text-teal text-xs">
+            <span className="size-1.5 rounded-full bg-teal animate-pulse" />
+            Preview: drag reorder
+          </span>
+        )}
         {vehicleNumber && <span className="ml-auto">{vehicleNumber}</span>}
       </div>
     </div>

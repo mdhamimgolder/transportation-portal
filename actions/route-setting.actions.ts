@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { requireRole } from "@/lib/rbac/guards";
 import { Role } from "@/lib/constants/enums";
-import { getMondayOfWeek } from "@/lib/date/week";
+import { getMondayOfWeek, toUtcMidnight } from "@/lib/date/week";
 import { normalizeOfficeLocation } from "@/lib/constants/office-locations";
 import { SHIFT_KEYS } from "@/lib/constants/route-shifts";
 import type { PinState, ShiftKey } from "@/lib/constants/route-shifts";
@@ -157,7 +157,7 @@ export async function toggleVehicleShiftPin(
     const vehicle = await prisma.vehicle.findUnique({ where: { id: vehicleId } });
     if (!vehicle) return { success: false, pin: null, error: "Vehicle not found." };
 
-    const weekStart = getMondayOfWeek(parseDayString(weekStartDateStr));
+    const weekStart = toUtcMidnight(getMondayOfWeek(parseDayString(weekStartDateStr)));
     const existing = await prisma.vehicleShiftAssignment.findFirst({
       where: { vehicleId, startDate: weekStart },
     });
@@ -213,7 +213,7 @@ export async function getVehicleShiftPins(
 ): Promise<{ pins: PinState[]; error?: string }> {
   try {
     await requireRole([Role.FACILITIES, Role.SUPER_ADMIN]);
-    const weekStart = getMondayOfWeek(parseDayString(weekStartDateStr));
+    const weekStart = toUtcMidnight(getMondayOfWeek(parseDayString(weekStartDateStr)));
     const rows = await prisma.vehicleShiftAssignment.findMany({
       where: { startDate: weekStart, isActive: true },
       select: { vehicleId: true, shifts: true },
@@ -392,10 +392,22 @@ export async function updateVehicle(
 
     await prisma.vehicle.update({ where: { id: input.id }, data });
 
-    // First pickup time / BASE ETA edits re-anchor the whole pickup schedule.
-    const schedule = await syncPickupPointTimes(input.id);
-    if (!schedule.success) {
-      return { success: false, error: schedule.error };
+    // Only first-pickup-time / BASE ETA edits re-anchor the pickup schedule, so
+    // recompute then. Never hard-fail unrelated edits (e.g. capacity, driver,
+    // office) just because a vehicle currently has no pickup points -- dynamic
+    // 11 PM routes pick employees up from home addresses instead. Callers that
+    // intentionally schedule points (`autoCalcPickupTimes`, `syncPickupPointTimes`)
+    // keep surfacing schedule errors on their own.
+    let pickupUpdates: Array<{ id: string; baseETA: string }> | undefined;
+    if (input.baseETA !== undefined || input.firstPickupTime !== undefined) {
+      const schedule = await syncPickupPointTimes(input.id);
+      if (!schedule.success) {
+        return { success: false, error: schedule.error };
+      }
+      pickupUpdates = schedule.points.map((point) => ({
+        id: point.id,
+        baseETA: point.pickup,
+      }));
     }
 
     revalidatePath("/facilities/route-setting");
@@ -403,10 +415,7 @@ export async function updateVehicle(
 
     return {
       success: true,
-      pickupUpdates: schedule.points.map((point) => ({
-        id: point.id,
-        baseETA: point.pickup,
-      })),
+      pickupUpdates,
     };
   } catch (error) {
     return {
@@ -420,9 +429,9 @@ export async function updateVehicle(
 
 /**
  * Recalculate every active pickup point's time for a vehicle using the shared
- * 5 min/km rule (all times on a 5-minute grid) — FORWARD from the vehicle's
- * first pickup time (set by Facilities) or BACKWARD from its BASE ETA when no
- * first pickup time is set.
+ * trained-leg rule (trained gaps only, all times on a 5-minute grid) — FORWARD
+ * from the vehicle's first pickup time (set by Facilities) or BACKWARD from its
+ * BASE ETA when no first pickup time is set.
  * Persists each point's baseETA and returns the per-point updates so the UI can
  * stay in sync without a refetch.
  */

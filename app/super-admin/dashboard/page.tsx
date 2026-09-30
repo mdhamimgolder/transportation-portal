@@ -3,6 +3,7 @@ import { requireRole } from "@/lib/rbac/guards";
 import { Role, ROLE_LABELS } from "@/lib/constants/enums";
 import { prisma } from "@/lib/prisma";
 import { DashboardHero } from "@/components/shared/dashboard-hero";
+import { WeatherWidget } from "@/components/shared/weather-widget";
 import { AttentionBoard } from "@/components/shared/attention-board";
 import { MiniStat } from "@/components/shared/mini-stat";
 
@@ -33,48 +34,50 @@ export default async function SuperAdminDashboardPage() {
 
   return (
     <div className="space-y-7">
-      <DashboardHero
-        eyebrow={`${ROLE_LABELS[Role.SUPER_ADMIN]} · ${new Date().toLocaleDateString(undefined, {
-          weekday: "long",
-          month: "long",
-          day: "numeric",
-        })}`}
-        title={
-          <>
-            System overview, {firstName}.
-          </>
-        }
-        subline="Accounts, roles, and transport volumes across the whole portal."
-      />
-
-      <AttentionBoard
-        subline="Every role counts only active users. Assignments are all-time driver placements."
-        accent="text-[#70bccc]"
-        items={[
-          {
-            value: totalUsers,
-            label: "Active accounts across all roles",
-            action: "Manage users",
-            href: "/super-admin/users",
-            icon: Users,
-            urgent: totalUsers > 0,
-          },
-          {
-            value: employees + corporate,
-            label: "Employee riders (MDS + corporate)",
-            action: "View users",
-            href: "/super-admin/users",
-            icon: UserRound,
-          },
-          {
-            value: assignmentsCount,
-            label: "Transport assignments delivered",
-            action: "Open reports",
-            href: "/super-admin/reports",
-            icon: BarChart3,
-          },
-        ]}
-      />
+      {/* Hero + board share the left column; the weather glass spans both
+          rows at top right, its top edge aligned with the welcome line —
+          so neither the hero nor the board goes full width. */}
+      <div className="grid grid-cols-1 gap-5 sm:grid-cols-[minmax(0,1fr)_160px]">
+        <DashboardHero
+          eyebrow={`${ROLE_LABELS[Role.SUPER_ADMIN]} · ${new Date().toLocaleDateString(undefined, {
+            weekday: "long",
+            month: "long",
+            day: "numeric",
+          })}`}
+          title={<>System overview, {firstName}.</>}
+          subline="Accounts, roles, and transport volumes across the whole portal."
+        />
+        <WeatherWidget className="sm:col-start-2 sm:row-span-2 sm:row-start-1 sm:self-start" />
+        <AttentionBoard
+          className="min-w-0"
+          subline="Every role counts only active users. Assignments are all-time driver placements."
+          accent="text-[#70bccc]"
+          items={[
+            {
+              value: totalUsers,
+              label: "Active accounts across all roles",
+              action: "Manage users",
+              href: "/super-admin/users",
+              icon: Users,
+              urgent: totalUsers > 0,
+            },
+            {
+              value: employees + corporate,
+              label: "Employee riders (MDS + corporate)",
+              action: "View users",
+              href: "/super-admin/users",
+              icon: UserRound,
+            },
+            {
+              value: assignmentsCount,
+              label: "Transport assignments delivered",
+              action: "Open reports",
+              href: "/super-admin/reports",
+              icon: BarChart3,
+            },
+          ]}
+        />
+      </div>
 
       {/* Role roster — a classified breakdown of the account base */}
       <div>

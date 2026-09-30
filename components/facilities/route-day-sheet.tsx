@@ -166,11 +166,7 @@ export function RouteDaySheet({
                     >
                       {row.employeeName}
                     </span>
-                    {row.isFixedArrival ? (
-                      <span className="ml-1.5 inline-flex rounded-full bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium text-amber-600">
-                        Fixed arrival
-                      </span>
-                    ) : null}
+                    
                   </TableCell>
                   <TableCell className="max-w-56 truncate text-muted-foreground">
                     {row.address ?? "—"}

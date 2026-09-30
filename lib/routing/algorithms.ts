@@ -32,6 +32,7 @@ import {
   haversineDistance,
   bearingDegrees,
   minutesToTimeString,
+  timeStringToMinutes,
 } from "./utils";
 import {
   ARRIVAL_TIMES_BY_SHIFT,
@@ -43,9 +44,10 @@ import {
   type OfficeCoords,
 } from "@/lib/constants/office-locations";
 import {
-  computePickupSchedule,
+  ensurePickupPointSchedule,
   loadLearnedLegs,
   backCalculatePickupMinutes,
+  PICKUP_GRID_MINUTES,
   LEARN_MIN_SAMPLES,
 } from "./pickup-schedule";
 
@@ -58,8 +60,10 @@ export interface RouteGenerationResult {
 export const SHIFT_KEYS = ["10PM", "11PM", "12AM-6AM"] as const;
 export type ShiftKey = (typeof SHIFT_KEYS)[number];
 
-/** Dynamic (11 PM / late-night) shared-ride rules. */
-const DYNAMIC_GROUP_CAPACITY = 4;
+/** Dynamic (11 PM / late-night) shared-ride rules.
+ * Max riders per vehicle — a 10-seater fills to 6, a 4-seater stays at its
+ * seats (never more riders than physical capacity). */
+export const DYNAMIC_GROUP_CAPACITY = 6;
 /** Homes within this straight-line radius of the growing group share a
  * vehicle — nearby addresses ride together. Anyone farther is left for a
  * later vehicle. */
@@ -759,53 +763,29 @@ export async function generate10PMRoutes(
           orderBy: { sequence: "asc" },
         });
 
-        // ===== SCHEDULED PICKUP TIMES =====
-        // The vehicle's first pickup time (set by Facilities) anchors the
-        // schedule forward; remaining points are previous + drive (5 min/km or
-        // a learned average from history), office arrival is derived — always
-        // on a 5-minute grid with >= 5 min between consecutive pickups. When
-        // no first pickup time is set, the vehicle's BASE ETA anchors the
-        // schedule backward. This is the exact rule used by "Set pickup times"
-        // / route-setting sync, so the generated schedule always matches what
-        // Facilities configured.
-        const learned10PM = await loadLearnedLegs("10PM");
+        // ===== SCHEDULED PICKUP TIMES (canonical, per pickup point) =====
+        // `PickupPoint.baseETA` is the source of truth for a point's time, so a
+        // point keeps ONE pickup time on EVERY day of EVERY week — Sankar at
+        // 20:55 is 20:55 on Monday AND Friday. Re-deriving the schedule per day
+        // from the learned legs (the old behaviour) was what made the same point
+        // drift 21:10 → 21:05 → 21:00 across a week, because each day's run saw
+        // a slightly different learned set. If the stored schedule is missing or
+        // stale it is recomputed + persisted ONCE here, then never drifts again.
         const vehicleRow = await prisma.vehicle.findUnique({
           where: { id: vehicleId },
-          select: { vehicleNumber: true, firstPickupTime: true, baseETA: true },
+          select: { vehicleNumber: true },
         });
         const office = officeCoordinatesFor(group.office);
-        const schedule = computePickupSchedule(
-          {
-            firstPickupTime: vehicleRow?.firstPickupTime ?? null,
-            baseETA: vehicleRow?.baseETA ?? null,
-            // No manual anchor needed: the 10 PM shift's office arrival is
-            // 22:00, so the schedule is back-calculated from the taught /
-            // learned leg gaps instead of a manually set first pickup time.
-            defaultArrival: minutesToTimeString(
-              arrivalMinutesFromLabel("10 PM") ?? 22 * 60
-            ),
-          },
-          pickupPoints.map((p) => ({
-            id: p.id,
-            name: p.name,
-            latitude: p.address?.latitude ?? null,
-            longitude: p.address?.longitude ?? null,
-            key: p.address ? `addr:${p.address.id}` : null,
-          })),
-          office,
-          learned10PM
-        );
-        if (!schedule.success) {
+        const pointSchedule = await ensurePickupPointSchedule(vehicleId);
+        if (!pointSchedule.success) {
           errors.push(
             `Vehicle ${vehicleRow?.vehicleNumber || vehicleId}: ${
-              schedule.error
+              pointSchedule.error
             }`
           );
           continue;
         }
-        const pickupByPointId = new Map(
-          schedule.points.map((u) => [u.id, u.pickup])
-        );
+        const pickupByPointId = pointSchedule.schedule.times;
 
         const dayDate = new Date(weekStartDate);
         dayDate.setDate(dayDate.getDate() + dayOfWeek);
@@ -853,10 +833,42 @@ export async function generate10PMRoutes(
         // it is stable and exact.
         entries.sort((a, b) => a.pointSequence - b.pointSequence);
 
-        const completionMinutes = hhmmToMinutes(schedule.officeArrival);
+        const completionMinutes = hhmmToMinutes(
+          pointSchedule.schedule.officeArrival
+        );
 
         const departureTime10 = new Date(dayDate);
         departureTime10.setHours(20, 0, 0, 0);
+
+        // Idempotency over previously committed runs: regenerate only
+        // DRAFT/UNDER_REVIEW drafts. A FINALIZED/EXECUTED plan for this
+        // vehicle+day+shift is left untouched — re-mapping must never destroy
+        // a locked route (and the (dayDate, vehicleId, arrivalTime) unique key
+        // would reject re-creation anyway).
+        const existing10PM = await prisma.routePlan.findUnique({
+          where: {
+            dayDate_vehicleId_arrivalTime: {
+              dayDate,
+              vehicleId,
+              arrivalTime: "10 PM",
+            },
+          },
+          select: { id: true, status: true },
+        });
+        if (existing10PM) {
+          if (
+            existing10PM.status === "FINALIZED" ||
+            existing10PM.status === "EXECUTED"
+          ) {
+            errors.push(
+              `10 PM: vehicle ${vehicleId} already has a locked ${existing10PM.status} route for this day — skipped (route kept intact)`
+            );
+            continue;
+          }
+          await prisma.routePlan
+            .delete({ where: { id: existing10PM.id } })
+            .catch(() => undefined);
+        }
 
         const routePlan = await prisma.routePlan.create({
           data: {
@@ -919,9 +931,19 @@ export async function generate10PMRoutes(
 }
 
 /** Best-effort human-readable message from any thrown value (including DOM /
- * fetch `ErrorEvent` objects that aren't `Error` instances). */
-function errorMessage(error: unknown): string {
-  if (error instanceof Error) return error.message || String(error);
+ *  fetch `ErrorEvent` objects that aren't `Error` instances). */
+export function errorMessage(error: unknown): string {
+  if (error instanceof Error) {
+    if (error.message) return error.message;
+    const cause = (error as Error & { cause?: unknown }).cause;
+    if (cause && typeof cause === "object") {
+      const c = cause as { message?: unknown; reason?: unknown; detail?: unknown };
+      if (typeof c.message === "string" && c.message) return c.message;
+      if (typeof c.reason === "string" && c.reason) return c.reason;
+      if (typeof c.detail === "string" && c.detail) return c.detail;
+    }
+    return String(error);
+  }
   if (
     error &&
     typeof error === "object" &&
@@ -931,7 +953,45 @@ function errorMessage(error: unknown): string {
   ) {
     return (error as { message: string }).message;
   }
-  return String(error);
+  if (
+    error &&
+    typeof error === "object" &&
+    "reason" in error &&
+    typeof (error as { reason?: unknown }).reason === "string"
+  ) {
+    return String((error as { reason: unknown }).reason);
+  }
+  // ErrorEvent (undici/fetch): url + type + message carry the failure.
+  if (error && typeof error === "object") {
+    const o = error as {
+      type?: unknown;
+      target?: { url?: unknown };
+      message?: unknown;
+      detail?: unknown;
+    };
+    const bits: string[] = [];
+    if (typeof o.type === "string") bits.push(`type=${o.type}`);
+    const url = (o.target as { url?: unknown } | undefined)?.url;
+    if (typeof url === "string") bits.push(`url=${url}`);
+    if (typeof o.message === "string" && o.message) bits.push(o.message);
+    if (typeof o.detail === "string" && o.detail) bits.push(o.detail);
+    if (bits.length > 0) return `OSRM/network error (${bits.join(", ")})`;
+
+    // Last resort for opaque event/exception objects: dump the own enumerable
+    // fields so the user sees SOMETHING actionable instead of "[object X]".
+    try {
+      const fields: string[] = [];
+      for (const key of Object.keys(o)) {
+        const value = (o as unknown as Record<string, unknown>)[key];
+        if (typeof value === "string" && value.trim()) fields.push(`${key}=${value}`);
+        else if (typeof value === "number") fields.push(`${key}=${value}`);
+      }
+      if (fields.length > 0) return `Network error (${fields.join(", ")})`;
+    } catch {
+      // ignore introspection failures
+    }
+  }
+return String(error);
 }
 
 /**
@@ -994,6 +1054,30 @@ async function generateCorridorRoutes(
   });
   const pinnedIds = await pinnedVehicleIdsForShift(weekStartDate, shiftKey);
 
+  // Vehicles that own active pickup points are 10 PM PRESET vehicles. Under
+  // STRICT shift separation a dynamic (home-address) shift must never borrow
+  // them: a 10 PM vehicle with a fixed pickup sequence silently swallowing
+  // 11 PM / late-night riders is exactly the "forcefully reassigned, main
+  // route changed" symptom. A preset-owning vehicle may only serve a dynamic
+  // shift when it is EXPLICITLY pinned for that shift in Route Setting.
+  const presetOwnerRows = await prisma.pickupPoint.findMany({
+    where: { isActive: true },
+    distinct: ["vehicleId"],
+    select: { vehicleId: true },
+  });
+  const presetOwnerIds = new Set(presetOwnerRows.map((r) => r.vehicleId));
+
+  // STRICT shift separation: a vehicle that owns a preset 10 PM pickup
+  // sequence may serve a corridor (11 PM / 12 AM-6 AM) shift ONLY when it is
+  // explicitly pinned for that shift. This eligible set drives BOTH the office
+  // pool AND planCorridorRoutes' internal all-vehicle fallback, so unpinned
+  // preset owners can never be pulled in no matter the pool state. Corridor
+  // riders therefore get a NEW or free office vehicle, never a vehicle whose
+  // fixed 10 PM route would be changed by the assignment.
+  const corridorEligibleVehicles = allVehicles.filter(
+    (v) => !presetOwnerIds.has(v.id) || pinnedIds.includes(v.id)
+  );
+
   const dayDate = new Date(weekStartDate);
   dayDate.setDate(dayDate.getDate() + dayOfWeek);
   const arrivalMinutes = arrivalMinutesFromLabel(arrivalLabel);
@@ -1001,15 +1085,14 @@ async function generateCorridorRoutes(
   for (const [officeKey, officeSchedules] of employeesByOffice) {
     const office = officeCoordinatesFor(officeKey);
 
-    // Vehicle pool for this office: pinned (exclusive) → 10 PM reuse (late
-    // night) → all office vehicles. When a vehicle is pinned for both shifts,
-    // reuse its completed 10 PM route for 11 PM so the second trip follows
-    // the first instead of treating the vehicle as a fresh assignment.
-    let pool = poolForOffice(officeKey, allVehicles, pinnedIds);
+    // Vehicle pool for this office: pinned (exclusive) → dedicated (non-10 PM)
+    // office vehicles (see corridorEligibleVehicles — preset owners excluded
+    // unless pinned for this shift).
+    let pool = poolForOffice(officeKey, corridorEligibleVehicles, pinnedIds);
     const reuseById = new Map<string, string | null>();
     if (reuse10PM) {
       const completedForOffice = completed10PM.map((plan) => {
-        const vehicle = allVehicles.find((v) => v.id === plan.vehicleId);
+        const vehicle = corridorEligibleVehicles.find((v) => v.id === plan.vehicleId);
         return vehicle && normalizeOfficeLocation(vehicle.officeLocation) === officeKey
           ? { vehicle, previousId: plan.id }
           : null;
@@ -1017,7 +1100,7 @@ async function generateCorridorRoutes(
 
       const reused = pinnedIds.length > 0
         ? completedForOffice.filter((r) => pinnedIds.includes(r.vehicle.id))
-        : completedForOffice;
+        : [];
       if (reused.length > 0) {
         pool = [...new Map(reused.map((r) => [r.vehicle.id, r.vehicle])).values()];
         for (const r of reused) reuseById.set(r.vehicle.id, r.previousId);
@@ -1054,17 +1137,52 @@ async function generateCorridorRoutes(
 
     if (members.length === 0) continue;
 
-    // One OSRM matrix: office + all homes (cached 30 days by pair).
-    const locations: Location[] = [office];
-    for (const m of members) {
-      m.matrixIndex = locations.length;
-      locations.push({
-        lat: m.home.latitude,
-        lng: m.home.longitude,
-        name: m.employee.id,
-      });
+    // One office's transient failure (DB pooler blip, OSRM outage) must never
+    // kill the whole shift — the office is reported and the remaining offices
+    // still map. Availability derailed days for this exact reason before: a
+    // single Neon/OSRM hiccup aborted the ENTIRE day's corridor pass.
+    try {
+      // One OSRM matrix: office + all homes (cached 30 days by pair).
+      const locations: Location[] = [office];
+      for (const m of members) {
+        m.matrixIndex = locations.length;
+        locations.push({
+          lat: m.home.latitude,
+          lng: m.home.longitude,
+          name: m.employee.id,
+        });
+      }
+    let matrix: Awaited<ReturnType<typeof getDistanceMatrix>>;
+    try {
+      matrix = await getDistanceMatrix(locations, locations);
+    } catch {
+      // OSRM outage (table call) — swap in a great-circle matrix (25 km/h, the
+      // same estimate the matrix readers already use for missing legs) so the
+      // whole day stays mappable instead of killing every corridor route for
+      // it. Rounding/precision degrade; availability never does.
+      matrix = {
+        originAddresses: [],
+        destinationAddresses: [],
+        status: "OK",
+        rows: locations.map((from) => ({
+          elements: locations.map((to) => {
+            const km = haversineDistance(from.lat, from.lng, to.lat, to.lng);
+            const minutes = (km / 25) * 60;
+            return {
+              distance: {
+                value: Math.max(1, Math.round(km * 1000)),
+                text: `${km.toFixed(1)} km`,
+              },
+              duration: {
+                value: Math.max(1, Math.round(minutes * 60)),
+                text: `${Math.round(minutes)} min`,
+              },
+              status: "NoSegment",
+            };
+          }),
+        })),
+      };
     }
-    const matrix = await getDistanceMatrix(locations, locations);
     const dMin = (from: number, to: number) =>
       matrixDurationMin(matrix, locations, from, to);
     const dKm = (from: number, to: number) =>
@@ -1135,12 +1253,19 @@ async function generateCorridorRoutes(
         });
       }
     }
-    await warmPolylineCache(warmKeys);
+    // Best-effort cache warm — a routing outage here must NOT block mapping.
+    // Failed legs are fetched lazily later (each with its own fallback), so
+    // the warm is purely a latency optimization.
+    try {
+      await warmPolylineCache(warmKeys);
+    } catch {
+      // silent — precision/availability degrade per-leg, never globally
+    }
 
     const planned = await planCorridorRoutes({
       members,
       pool,
-      allVehicles,
+      allVehicles: corridorEligibleVehicles,
       officeKey,
       office,
       arrivalLabel,
@@ -1160,10 +1285,11 @@ async function generateCorridorRoutes(
         const { order: plannedOrder, vehicle } = planned.routes[planIdx];
         let order = plannedOrder;
 
-        // Replay the learned route pattern (tuned sequence from a previous
-        // finalize of this vehicle + arrival time): pattern riders ride first
-        // in the learned order, new riders (not in the pattern) ride after in
-        // their planned order.
+        // Replay the learned route pattern (tuned sequence AND the finalized
+        // pickup times captured at the previous finalize of this vehicle +
+        // arrival time): pattern riders ride first in the learned order with
+        // their FINALIZED pickup times replayed verbatim; new riders (not in
+        // the pattern) ride after in their planned order.
         const template = await prisma.routeTemplate.findUnique({
           where: {
             vehicleId_arrivalTime: {
@@ -1172,10 +1298,19 @@ async function generateCorridorRoutes(
             },
           },
           select: {
-            stops: { orderBy: { seq: "asc" }, select: { employeeId: true } },
+            stops: {
+              orderBy: { seq: "asc" },
+              select: { employeeId: true, pickupTime: true },
+            },
           },
         });
+        const finalizedMinutes = new Map<string, number>();
         if (template && template.stops.length > 0) {
+          for (const stop of template.stops) {
+            if (!stop.employeeId || !stop.pickupTime) continue;
+            const m = timeStringToMinutes(stop.pickupTime);
+            if (Number.isFinite(m)) finalizedMinutes.set(stop.employeeId, m);
+          }
           const replayed = patternOrderForMembers(
             template.stops.map((s) => s.employeeId),
             order,
@@ -1186,58 +1321,129 @@ async function generateCorridorRoutes(
 
         const previousRoutePlanId = reuseById.get(vehicle.id) ?? null;
 
-        // Leg drive time: a learned average (>= 3 observations) wins over the
-        // raw OSRM duration, keeping the schedule stable once the planner is
-        // trained on how a leg actually runs.
+        // FINALIZE-FIRST TIMING: pickup times come from the FINALIZED route
+        // first — riders captured in the template keep their finalized pickup
+        // times, replayed verbatim. Trained legs (RouteLegLearning) are only
+        // consulted for NEW riders appended after the finalized pattern. No
+        // distance/OSRM estimate fallback: an untrained leg for a new rider
+        // errors THIS route only and the rest of the mapping proceeds.
+        const prefixCount = (() => {
+          let n = 0;
+          while (n < order.length && finalizedMinutes.has(order[n].employee.id)) n++;
+          return n;
+        })();
+        const tail = order.slice(prefixCount);
+        const anchor = tail.length === 0 ? null : order[prefixCount - 1];
+
+        // Leg drive time — trained only, for the tail chain (last finalized
+        // stop → first tail stop, tail stop → tail stop, last tail stop →
+        // office).
         const officeKeyStr = `office:${office.name}`;
         const legMin = (
           from: ClusterMember | null,
-          to: ClusterMember | null,
-          fallback: number
-        ) => {
+          to: ClusterMember | null
+        ): number | null => {
           const f = from ? `addr:${from.home.id}` : officeKeyStr;
           const t = to ? `addr:${to.home.id}` : officeKeyStr;
           const hit = learned.get(`${f}->${t}`);
-          if (hit && hit.sampleCount >= LEARN_MIN_SAMPLES) {
+          if (
+            hit &&
+            hit.sampleCount >= LEARN_MIN_SAMPLES &&
+            Number.isFinite(hit.avgMinutes) &&
+            hit.avgMinutes > 0
+          ) {
             return Math.max(1, Math.round(hit.avgMinutes));
           }
-          return fallback;
+          return null;
         };
+        const memberName = (m: ClusterMember) =>
+          m.employee.fullName || `addr:${m.home.id}`;
 
-        const legs: number[] = [
-          legMin(null, order[0], dMin(0, order[0].matrixIndex)),
-        ];
-        for (let i = 0; i < order.length - 1; i++) {
-          legs.push(
-            legMin(
-              order[i],
-              order[i + 1],
-              dMin(order[i].matrixIndex, order[i + 1].matrixIndex)
-            )
-          );
-        }
-        legs.push(
-          legMin(order[order.length - 1], null, dMin(order[order.length - 1].matrixIndex, 0))
-        );
-
-        const totalTravel = legs.reduce((a, b) => a + b, 0);
-        const departureMinutes = Math.max(0, arrivalMinutes - totalTravel);
-
-        // Back-calculated pickup times on the 5-minute grid: the last pickup
-        // is at least 5 min before arrival, every earlier pickup >= 5 min
-        // before the next — the late-night (11 PM-6 AM) home-to-home spacing
-        // Facilities asked for. Times wrap past midnight for late shifts.
-        // `legs[0]` is office → first pickup (departure only); the chain
-        // back-calc uses stop → next-stop / office legs.
         let pickupMinutes: number[];
-        try {
-          pickupMinutes = backCalculatePickupMinutes(arrivalMinutes, legs.slice(1));
-        } catch {
-          throw new Error(
-            `route from ${order.length} homes takes ${totalTravel} min — more than the ${arrivalLabel} window allows (${arrivalLabel} arrival cannot be kept).`
+        let departureMinutes: number;
+
+        if (tail.length === 0) {
+          // Every rider was finalized: replay their stored pickup times
+          // verbatim — no trained data needed, nothing invented.
+          pickupMinutes = order.map((m) => finalizedMinutes.get(m.employee.id)!);
+          departureMinutes = pickupMinutes[0] ?? arrivalMinutes;
+        } else {
+          // Finalized prefix stays verbatim; the appended tail is back-
+          // calculated from the arrival along its own trained legs.
+          const anchorMember = anchor as ClusterMember;
+          const tailLegs: Array<number | null> = [legMin(anchorMember, tail[0])];
+          const tailLegNames: Array<string> = [
+            `${memberName(anchorMember)} → ${memberName(tail[0])}`,
+          ];
+          for (let i = 0; i < tail.length - 1; i++) {
+            tailLegs.push(legMin(tail[i], tail[i + 1]));
+            tailLegNames.push(`${memberName(tail[i])} → ${memberName(tail[i + 1])}`);
+          }
+          tailLegs.push(legMin(tail[tail.length - 1], null));
+          tailLegNames.push(`${memberName(tail[tail.length - 1])} → ${office.name}`);
+
+          const missing = tailLegNames.filter((_, i) => tailLegs[i] == null);
+          if (missing.length > 0) {
+            throw new Error(
+              `no finalized/taught drive time yet for ${missing.join(
+                "; "
+              )} — the riders before these are replayed from the finalized route; new riders need trained gaps (≥ ${LEARN_MIN_SAMPLES} observations; finalize this route or use \"Teach from manual plan\")`
+            );
+          }
+
+          // Chain is [anchor → t1 → … → tN → office]: the first derived value
+          // is the anchor's own (ignored); indices 1..N are the tail pickups.
+          const derived = backCalculatePickupMinutes(
+            arrivalMinutes,
+            tailLegs as number[]
           );
+          const tailPickups = derived.slice(1);
+          const lastFinalizedPickup = finalizedMinutes.get(anchorMember.employee.id)!;
+          if (
+            tailPickups.length > 0 &&
+            tailPickups[0] <= lastFinalizedPickup + PICKUP_GRID_MINUTES - 1
+          ) {
+            tailPickups[0] = lastFinalizedPickup + PICKUP_GRID_MINUTES;
+          }
+          pickupMinutes = [
+            ...order
+              .slice(0, prefixCount)
+              .map((m) => finalizedMinutes.get(m.employee.id)!),
+            ...tailPickups,
+          ];
+          departureMinutes = pickupMinutes[0] ?? arrivalMinutes;
         }
         const pickupTimes = pickupMinutes.map(minutesToTimeString);
+
+        // Idempotency over previously committed runs (see the 10 PM path): a
+        // FINALIZED/EXECUTED plan for this vehicle+day+shift stays untouched;
+        // older drafts are replaced so re-runs produce a clean sheet. The
+        // (dayDate, vehicleId, arrivalTime) unique key would otherwise reject
+        // the create below.
+        const existingPlan = await prisma.routePlan.findUnique({
+          where: {
+            dayDate_vehicleId_arrivalTime: {
+              dayDate,
+              vehicleId: vehicle.id,
+              arrivalTime: arrivalLabel,
+            },
+          },
+          select: { id: true, status: true },
+        });
+        if (existingPlan) {
+          if (
+            existingPlan.status === "FINALIZED" ||
+            existingPlan.status === "EXECUTED"
+          ) {
+            errors.push(
+              `${arrivalLabel}: vehicle ${vehicle.id} already has a locked ${existingPlan.status} route for this day — skipped (route kept intact)`
+            );
+            continue;
+          }
+          await prisma.routePlan
+            .delete({ where: { id: existingPlan.id } })
+            .catch(() => undefined);
+        }
 
         const routePlan = await prisma.routePlan.create({
           data: {
@@ -1294,6 +1500,12 @@ async function generateCorridorRoutes(
         );
       }
     }
+    } catch (officeError) {
+      errors.push(
+        `${arrivalLabel}: ${officeKey} office failed to map (${errorMessage(officeError)})`
+      );
+      continue;
+    }
   }
 
   return { routesCreated, errors };
@@ -1301,7 +1513,7 @@ async function generateCorridorRoutes(
 
 /**
  * Algorithm B: 11 PM routes — corridor path routing per office, arrive by
- * 11 PM, max 4 per vehicle (pinned vehicles respected).
+ * 11 PM, max 6 per vehicle (pinned vehicles respected).
  */
 export async function generate11PMRoutes(
   weekStartDate: Date,

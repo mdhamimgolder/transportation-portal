@@ -4,6 +4,791 @@ Read this at the start of every task so you can continue without re-exploring.
 **Always update it before the session ends** (append/rewrite the Latest Session
 block and bump Work State / Next Move). Do this EVERY session — it is how we
 work fast without interruption.
+## Latest Session (2026-09-28) — Dhaka weather widget on every role dashboard
+**User request:** weather (Dhaka temperature) widget on the top-right of EVERY role's dashboard,
+standard/professional UI, minimal animation; free open-source weather API ok. Evolution: (1) full
+variant chosen → (2) forecast DELETED (current-conditions only; `DhakaWeather` has no `forecast`
+field) → (3) frosted-glass "app icon" design per reference image → (4) **v4 (latest): spec-driven
+translucent glass, SMALLER, and moved UP — top-aligned with the "Welcome back" line**.
+**Built (no schema/migration, no new deps; tsc + eslint clean; all 6 dashboards compile → 307 intact):**
+- `lib/queries/weather.ts` (new, `server-only`): `getDhakaWeather()` — Open-Meteo forecast API
+  (FREE, KEYLESS; lat 23.8103 lon 90.4125, tz Asia/Dhaka), current temp/feels-like/humidity/wind/
+  WMO code/is_day, `fetch` with `next:{revalidate:600}` (shared ISR across all users/pages).
+  `describeWeatherCode(code, isDay)` → {label, LucideIcon}. ANY failure → `null` (widget shows
+  quiet "Weather unavailable" — dashboards never break).
+- `components/shared/weather-widget.tsx`: **DESIGN v4 (per detailed spec)** — translucent
+  frosted-glass squircle `rounded-[26px]`: alpha-gradient glass (`from-[#9cc4ec]/80 via-[#6f9fda]/75
+  to-[#4d7cc4]/85`) + `backdrop-blur-md` so the page background bleeds through softly; white/50
+  border + inset highlight ring (rounded to match) + top light bloom; 9 CSS droplets with realistic
+  inset highlight+shadow (`inset -1px -1px 2px rgba(96,140,195,.45), inset 1px 1px 2px white .9`).
+  Centered column: "Dhaka" → weather-aware pure-CSS SkyArt (clear=bare sun/moon, code 2/3 or fog=
+  orb behind cloud, overcast 3/45/48=cloud only, rain 51–99=slate tint, snow 71–86=icy tint;
+  container h-14 w-24) → **44px font-semibold temp** → condition → hairline footer 💧% | 🌬 km/h
+  (lucide Droplets/Wind size-3.5, text-xs). **Smaller:** `lg:w-[200px]`, px-4 pb-3 pt-5; fallback
+  "Weather unavailable" in same shell (min-h-36). Motion: entrance animate-in + motion-reduce:none.
+- Wired into all 6 dashboards (`app/{employee,corporate-employee,fixed-arrival,operations,facilities,
+  super-admin}/dashboard/page.tsx`): **layout v3 (user asked widget "slightly upper, in line of the
+  welcome back line")** — widget is back in the HERO row: ONE flex row `flex flex-col gap-5 lg:flex-row
+  lg:items-start lg:justify-between` = DashboardHero (`min-w-0 flex-1`) + `<WeatherWidget />`
+  top-aligned with the hero top (welcome line). The primary board (AttentionBoard /
+  TodaysScheduleCard) is full-width standalone BELOW, back to its original single-line call with
+  no className/flex wrapper.
+**Verified:** `npx tsc --noEmit` exit 0; eslint exit 0 on all 7 changed files; live server
+(/employee + /fixed-arrival dashboards) → 307 auth redirect intact. NOTE — Invoke-RestMethod from
+this shell to api.open-meteo.com TIMED OUT (local network) — network-only limitation; fallback is
+graceful by design.
+**Next:** user eyeballs v4 glass in browser; tune if asked (alpha stops, droplet array in
+`GlassDroplets`, `lg:w-[200px]`, SkyArt compositions in `weather-widget.tsx`).
+**v4.1 (same day, user feedback):** (1) widget was STILL stretching 100% wide at sub-lg viewports —
+root cause: `w-full` + `lg:w-[200px]` breakpoint gating → now FIXED `w-[200px] shrink-0` at ALL
+breakpoints (app-icon card sits under the hero on mobile too). (2) Night moon was invisible on the
+blue glass (same hue) → moon orb now deeper periwinkle (#f2f7ff→#b9cdf1→#8aa7d8) + bright white halo
++ inset bottom-right shading for 3D contrast. (3) Droplets are ANIMATED: new `glass-drop-float`
+keyframes in `app/globals.css` (gentle translateY -7px + scale 1.05 bob, 5.5–8.3s, per-drop inline
+duration/delay so they never sync); card `overflow-hidden` keeps them rounded-up inside the box;
+`prefers-reduced-motion` silences via `.glass-drop { animation: none !important }` (inline animation
+needs !important). tsc + eslint clean.
+**v4.2 (same day, user feedback):** (1) bubbles weren't visibly animating → base animation moved
+into CSS class `.glass-drop { animation: glass-drop-float 7s ease-in-out infinite }` (globals.css),
+inline now only sets per-drop `animationDuration` (5.5/6.9/8.3s) + `animationDelay` (i*0.8s);
+keyframes beefed up to `translate(-2px,-12px) scale(1.08)` so the bob+sway is clearly visible; still
+reduced-motion guarded. (2) hero+widget row used `lg:flex-row` → at user's viewport (<1024) hero
+stacked; row is now `sm:flex-row sm:items-start sm:justify-between` in all 6 dashboards so hero +
+200px widget share one line from 640px up; hero keeps `min-w-0 flex-1` (auto-reduced width).
+(3) night moon STILL blended (periwinkle ≈ glass hue) → moon is now warm IVORY/CREAM
+(#fffdf4→#f3eec9→#d8d0a2, white halo + warm inset shading) — different hue family from the blue
+glass entirely; glass itself deepened (`#8ab9e6/#6493d0/#4573b8`) so the white cloud + sun also pop
+stronger. tsc exit 0, eslint exit 0, /operations/dashboard → 307.
+**v4.3 (same day, user feedback):** (1) LAYOUT V4 — hero went back to FULL width (standalone
+`<DashboardHero />`, no wrapper), and the widget now shares a row with the PRIMARY BOARD:
+`<div className="flex flex-col gap-5 sm:flex-row sm:items-start"><Board className="min-w-0 flex-1"/><WeatherWidget /></div>`
+in all 6 dashboards (board = TodaysScheduleCard in employee/corporate/fixed-arrival, AttentionBoard
+in operations/facilities/super-admin — both components take className). (2) SkyArt is now
+day/night aware via `const night = !isDay`: cloud base pill + both puffs use warm-white
+by day and muted dusk-blue by night (with rainy/overcast/snowy per-time tints); sun = warm yellow,
+moon = cream ivory. (3) Bubbles much more visible: 9 drops, sizes 9–22px, opacity 0.7–0.9, white
+`border border-white/50`, stronger radial fill + inset/outer shadows, spread over the FULL box
+(6–83% top, left edges only ≤10% / ≥84% so text stays clear), faster rhythm 4.2–6.6s; geometry
+checked so every drop + its -12px/-2px/1.08-scale bob stays fully inside the rounded card. tsc 0,
+eslint 0, /facilities/dashboard → 307.
+**v4.4 (2026-09-28, user feedback):** (1) LAYOUT V5 (final) — user wanted the widget top-aligned
+with the "Welcome back" line AND neither hero nor board full width → all 6 dashboards now use a
+2-column GRID: `<div className="grid grid-cols-1 gap-5 sm:grid-cols-[minmax(0,1fr)_200px]">` with
+hero + board stacked in col 1, and `<WeatherWidget className="sm:col-start-2 sm:row-span-2 sm:row-start-1 sm:self-start" />`
+in col 2 spanning both rows, top-aligned with the hero (widget starts beside the welcome line and
+sits next to BOTH hero and board). Mobile stacks hero → widget → board. (2) Bubbles back to SMALL
+sizes 6–11px (kept visibility: opacity 0.7–0.85, border-white/50, radial fill + medium shadows).
+(3) NEW ROAM ANIMATION — user: "bubbles were just rounding in one place; I want them roaming over
+the full box, and when a bubble touches the border it goes back inside." Replaced
+`glass-drop-float` with `glass-drop-roam` keyframes (globals.css): 4-point path per drop —
+drift to one border (25%, translate(--rx, --ry*-1)), rebound inward (50%), glide to the far
+border (75%, flipped/sign-swapped), return home (100%) — with slight scale(1.06) at the
+border-touch points. Each drop sets inline CSS vars `--rx`/`--ry` (24–52px vectors, mixed signs
+for variety) + duration 9–13.8s + delay i*1.1s; style object cast `as CSSProperties` for the
+custom props (new `import type { CSSProperties } from "react"`). Drop start positions moved to a
+mid-band (top 14–78%, left 10–84%) so the roam vectors sweep the whole pane; overflow-hidden keeps
+drops rounded/inside even at borders. **v4.4b:** user asked for slightly slower roam → per-drop
+durations bumped 9–13.8s → **11–17s** (`11 + (i%4)*2`, weather-widget.tsx), CSS base 14s; then
+user asked for only **5 bubbles** (was 9) → kept 5 well-spread drops (top-left 16%/14%,
+top-right 70%/22%, mid-right 58%/46%, mid-left 20%/55%, bottom 34%/78%) with mixed rx/ry signs.
+**v4.4c:** widget shrunk ~10%: width 200→**180px** (`w-[180px]`, radius 26→24 on shell + sheen
+ring), temp 44→**38px**, condition 13→12px, SkyArt mt-3 h-14 w-24 → mt-2 **h-12 w-20** (sun
+size-14→12, tucked orb size-11→9 right-0.5, cloud pill h-6→5, puffs size-9/11→8/10 at bottom-2
+left-1 / bottom-1.5 left-6), body padding px-4 pb-3 pt-5 → px-3.5 pb-2.5 pt-4, footer mt/pt
+3.5/2.5 → 3/2; card height ~230→~205px. All 6 dashboard grids col2 200px → **180px**
+(`sm:grid-cols-[minmax(0,1fr)_180px]`). Bubble 1 rx 52→32 so its left-border bounce stays inside
+the narrower card (checked all 5 drops against 180×205 box). tsc 0, eslint 0 (7 files).
+**v4.4d (2026-09-28, user gave exact dims): widget is now FIXED 160×185** — shell
+`h-[185px] w-[160px] rounded-[20px]` (+ sheen ring 20px); body + placeholder both `h-[185px]`;
+temp 38→**34px**, condition 12px leading-tight; SkyArt mt-1.5 **h-10 w-[72px]** (clear sun
+size-10, tucked orb size-8, cloud pill h-4, puffs size-7 @ bottom-1.5 left-1 / size-9 @ bottom-1
+left-5); body padding px-3 pb-2 pt-3.5; footer mt-2.5 pt-1.5 gap-2 (fits 160: ~125px of 136
+available). All 6 dashboard grids col2 → **160px**. Bubble roam re-verified against 160×185 —
+all 5 drops stay round/inside (d1 touches top at ry=26, d1 75% clip ≈1px, everything else ≤150px
+right / ≤173px bottom). Content stack ≈175px, so ~10px slack under the footer. tsc 0, eslint 0.
+## Latest Session (2026-09-21f) — removed the 5 min/km pickup-time fallback → pickup times are TRAINED-DATA ONLY
+## Latest Session (2026-09-21f) — removed the 5 min/km pickup-time fallback → pickup times are TRAINED-DATA ONLY
+**User request:** "have i provided any rule 5 min/km? please delete this rule i provide. Pick-up time depend only
+from finalize data and tech from manual plan."
+**Answer:** NO user rule existed — the 5 min/km was a HARDCODED estimate: `export const MINUTES_PER_KM = 5`
+(`lib/routing/pickup-schedule.ts`) + a duplicate `legDriveMinutes` (km×5) in `actions/route-override.actions.ts`,
+plus corridor routes falling back to raw OSRM durations in `lib/routing/algorithms.ts`. Clarified via question tool;
+user chose **"Finalize route pick-up time and trained legs"** → strict mode: pickup times come ONLY from
+`RouteLegLearning` (>= `LEARN_MIN_SAMPLES` = 3 observations, mined from FINALIZED routes + "Teach from manual
+plan"). Untrained legs now ERROR, never estimated.
+**Changed (all `tsc --noEmit` + eslint clean; schema NOT touched — comments only; no migrate/restart needed):**
+- `lib/routing/pickup-schedule.ts`: deleted `MINUTES_PER_KM` + `haversineDistance` import. `driveLegMinutes` now
+  returns `number | null` (null when the leg key is unknown or < LEARN_MIN_SAMPLES). `computePickupSchedule`
+  validates EVERY leg (consecutive pairs + last→office) up front and returns an error listing missing pairs
+  ("No finalized/taught drive time yet for: A → B, … — the 5 min/km estimate was removed"). `ensurePickupPointSchedule`
+  fast path skips to recompute when the last→office leg is null. Header doc rewritten (drive rule = trained-data rule;
+  the 5-minute GRID in `schedule-math.ts` is a separate concept and was KEPT).
+- `actions/route-override.actions.ts` `legDriveMinutes` → trained-only `number | null`; `buildRetimeUpdates` now
+  errors naming missing legs (labels from `pickupPoint.name` / `addr:<id>` keys) instead of estimating.
+- `lib/routing/algorithms.ts` generateCorridorRoutes: `legMin` returns null for untrained legs; a route with any
+  untrained leg throws a labeled error → caught by the existing per-route try/catch → that ONE route errors, others
+  proceed (partial-route rollback preserved). `dMin` still used for grouping/`toOfficeMin` — untouched.
+- Copy/docs updated (historical references remain only as "was removed" notes): `pickup-schedule.ts`,
+  `route-override.actions.ts` (:544-548, :882), `route-learning.actions.ts` (:17-19, notes :384-385),
+  `route-generation.actions.ts` (:38-39, :193-194), `manual-route-plan.actions.ts` (:26-28),
+  `lib/routing/manual-plan-training.ts` (:10), `pickup-point.actions.ts` (:101-102), `route-setting.actions.ts`
+  `autoCalcPickupTimes` doc (:430-437), `prisma/schema.prisma` comments (firstPickupTime :417-420,
+  RouteLegLearning :619-623), `auto-route-planner-client.tsx` (:382-389, learning-failure banners :489-494/:572-577),
+  `route-memory-diagnostics.tsx` badge → "Untrained — finalize / teach more days" (:146),
+  `vehicle-pickup-points-manager.tsx` (:396-399). Ignore the `lib/generated/prisma/internal/class.ts` inline-schema
+  copy (generated artifact — still shows old comment; regenerates on `prisma generate`; harmless).
+**Behavior now:** any pickup-time computation (preset point schedules, corridor routes, drag re-time) errors with the
+missing leg(s) named when the leg was never finalized/taught. User must FINALIZE routes or teach from a manual plan
+to build the gap memory. **IMPORTANT for the pending test:** week 2026-08-10 is WIPED (0 submissions / 0 routes) and
+all of its route plans were deleted — so `trainRoutePlannerFromHistory` will have NO finalized plans to mine for that
+week's legs → expect per-route "no finalized/taught drive time" errors until the user finalizes (or teaches) the
+mapped routes. The 10 PM preset paths still work if `RouteLegLearning` 10 PM returns are bridged keys.
+**Not committed** (per AGENTS, commit only on request).
+**Follow-up (2026-09-21g) — 11 PM max riders 4 → 6:** user asked to raise the 11 PM per-vehicle rider cap from 4 to 6.
+Root cause was a hardcoded shared-ride cap `DYNAMIC_GROUP_CAPACITY = 4` in `lib/routing/algorithms.ts` (enforced by
+`capacityFor` → `min(vehicle.capacity, cap)` in `planCorridorRoutes`, so 4-seaters stay at 4 seats; 10-seaters fill
+to the cap). **Fixed:** raised to `6` and exported; the drag-to-another-vehicle seat guard in
+`actions/route-override.actions.ts` `moveTrip` had a SEPARATELY hardcoded `Math.min(4, …)` for dynamic routes → now
+imports `DYNAMIC_GROUP_CAPACITY` so both can't drift. Doc comment on `generate11PMRoutes` updated ("max 6 per
+vehicle"). Note: the CAP is shared with 12 AM-6 AM routes (same corridor generator — "same corridor clustering");
+physical `vehicle.capacity` still bounds 4-seaters. `tsc` + eslint clean.
+**Follow-up (2026-09-21h) — FINALIZE-DATA-FIRST pickup timing (corridor/11PM-12AM):** after the trained-only rule (21f), mapping a fresh/untrained week surfaced per-route "no finalized/taught drive time yet for A → B" errors, and the user set a priority rule: **finalized pickup times replay FIRST on the next RUN MAPPING; trained legs only fill NEW riders.** Root gap: the corridor generators replayed learned ORDER from `RouteTemplate` via `patternOrderForMembers` but RECOMPUTED pickup times from `backCalculatePickupMinutes(arrival, trainedLegs)` — ignoring `RouteTemplateStop.pickupTime` (finalize DOES persist it via `learnRouteTemplateFromAssignments` in `finalizeRoutePlan`). **Fixed in `lib/routing/algorithms.ts` `generateCorridorRoutes`:** template loaded with `pickupTime`; `finalizedMinutes` (employeeId → minutes) built; after replay, riders with a finalized time form a contiguous PREFIX replayed verbatim (no trained legs needed); NEW tail riders are back-calculated from the arrival along TAIL-ONLY trained legs (`anchor→t1→…→tN→office`; derived[0] = anchor ignored, tail pickups = derived.slice(1); first tail pickup clamped to ≥ lastFinalized + PICKUP_GRID_MINUTES). Untrained tail legs error ONLY those legs ("…the riders before these are replayed from the finalized route; new riders need trained gaps…"). Fully-finalized routes skip training entirely → reported 11 PM errors vanish for any vehicle+shift finalized once. `departureMinutes` = first pickup minutes in finalize-only mode (no lead leg to compute). New imports: `timeStringToMinutes` (utils), `PICKUP_GRID_MINUTES` (schedule-math re-export). 10 PM preset routes use pickup-point schedule times (routeSetting) — unaffected. `tsc` + eslint clean. Test week 2026-08-10 has 0 finalizes → 0 templates → still errors until one route per vehicle+shift is finalized (or taught from manual plan); live weeks 09-21/09-28 already finalized → replay cleanly.
+**Follow-up (2026-09-21i) — another free test week = 2026-08-17 wiped:** user asked for a second empty/clean week for testing after 2026-08-10 became populated (probe: 2026-08-10 now 121 subs / 106 plans / 85 finalized — the Regnum→Sayful error week). Offered future free weeks (2026-10-05/12, already 0/0 — no wipe needed) vs wiping a past week; user chose **wipe 2026-08-17** (was 3 subs / 0 routes). **Wiped in one tx** via temp `_wipe-week-2026-08-17.ts` (deleted): window `FROM=2026-08-16T18:00Z`..`TO=2026-08-18T00:00Z` (the Sunday-18:00 shifted + Monday-midnight dual key) → 3 `weeklySchedule` rows (Hemel/Erin at 08-17T00:00Z, Carla at 08-16T18:00Z) + days; `routePlan.deleteMany` 0 rows; `VehicleShiftAssignment` pins kept. Verified 0/0 after. Temp scripts deleted. **Week 2026-08-17 is now 0 subs / 0 route plans** and selectable in the bulk-upload dropdown (RECENT_UPLOAD_WEEKS covers it). Other near-empty weeks remain: 07-27 (10 subs), 08-03 (12), 07-13/07-12 bucket cleared previously.
+## Latest Session (2026-09-21c) — cleared weekly submissions + test-week wipe for full bulk upload / auto-planner test
+**User request:** (1) remove the **3 weekly submissions for "13–17 July"** so a full schedule could be bulk-uploaded;
+(2) then, for auto-route-planner test basis, wipe an entire week to **0 submissions + 0 route plans** → answered
+question tool: week **2026-08-10**, and **"Yes — wipe routes too"**.
+**Root cause / gotcha — DUAL WEEK-KEY CONVENTIONS (timezone-shifted stored stamps):** the seeds store submission
+weeks with a MIX of keys: Monday-midnight (`YYYY-MM-DD` T00:00:00Z) AND *Sunday-key shifted* rows where
+`weekStartDate` is `Sun 18:00:00Z` (= Mon 00:00 Asia/Dhaka) — e.g. the "13–17 Jul" submissions live at
+**2026-07-12T00:00Z**, and the "week of 10 Aug" has 12 subs at 2026-08-10T00:00Z **plus** `Oscar Operations`
+(operations@example.com) at `2026-08-09T18:00:00.000Z` (days 08-09..08-13). RoutePlan keys are ONLY
+Monday-midnight. Exact-equality `where weekStartDate =` finds 0 → must use a time WINDOW (gte/lt) and/or probe
+exact stored stamps first. Next week rows are at 08-16T18:00Z (Carla) + 08-17T00:00Z (Hemel, Erin) — kept.
+**CASCADE reminder (relearned):** `WeeklyScheduleDay.weeklySchedule` has NO onDelete Cascade → always delete
+`weeklyScheduleDay` rows before `weeklySchedule`. `RoutePlan` deletion DOES cascade `TripAssignment` +
+`RoutePlanOverride`; reuse-chain `previousRoutePlanId` is SetNull by schema.
+**Done:** week 2026-07-12 (13–17 Jul bucket): 15 day-rows + 3 submissions deleted. Week 2026-08-10:
+**65 schedule-days + 13 submissions + 40 route plans** (status DRAFT, day span 08-10..08-14) deleted in one
+`$transaction`. `VehicleShiftAssignment` vehicle pins for that week **kept** (planner needs them to map vehicles).
+Verified: re-probe shows only the 3 next-week rows (Carla/Hemel/Erin) left in the 08-08..08-17 window; route-plan
+grouping no longer lists 2026-08-10. Temp scripts (`_clear-week-2026-07-13.ts`, `_wipe-week-2026-08-10.ts`,
+`_probe-aug.ts`, `_count-routes-by-week.ts`, `_list-weeks.ts`) all deleted. No schema change → no server restart
+needed. User flow after this: Operations weekly-requests → bulk upload full schedule for week 2026-08-10 → run
+auto route planner to regenerate 0 routes.
+**Follow-up (2026-09-21d) — wiped week missing from bulk-upload dropdown:** after the wipe, week 2026-08-10
+vanished from the upload dialog. Root cause: `app/operations/weekly-requests/page.tsx` built `uploadWeekOptions`
+purely from `weeklySchedule` distinct weeks (+ current submission-window fallback = Mon 28 Sep), so a week with 0
+submissions is unreachable — yet the bulk action only needs the canonical UTC-midnight Monday value. **Fixed:**
+upload options now start from a rolling set of the last **12 recent Mondays** (newest → oldest, `(current)` marker
+on the current window week) then merge submission weeks via a dedupe Map — a cleaned/backfill week stays selectable.
+`RECENT_UPLOAD_WEEKS = 12` constant at top of the page. `tsc --noEmit` + eslint clean. This lets the user pick
+"10 Aug – 14 Aug" in the upload dialog again without re-seeding data.
+**Follow-up (2026-09-21e) — "Vehicle has no pickup points." toast on capacity edit:** changing a vehicle's Capacity in
+Route Setting (EditVehicleForm → `updateVehicle`) toasts that error and aborts the save. Root cause:
+`actions/route-setting.actions.ts` `updateVehicle` called `syncPickupPointTimes(input.id)` UNCONDITIONALLY after every
+edit; that sync → `computePickupSchedule` hard-fails with the exact string when the vehicle has 0 active pickup points
+(dynamic 11 PM vehicles pick up from home addresses). **Fixed:** sync now runs ONLY when `input.baseETA` or
+`input.firstPickupTime` changed (the only fields the schedule is anchored on); other edits return success with
+`pickupUpdates: undefined`. `pickupUpdates` (ETA refresh) still returned for schedule edits. `tsc` + eslint clean.
+## Latest Session (2026-09-21b) — adjust-route button never opened + map pickup numbering gaps (data-level fix)
+**User request:** "add adjust route feature in map route. I will able to adjust the route if i needed by dragging.
+Also i mentioned that where pick-up point is started sequence count (like 1,2,3) will be started there." Asked two
+clarifying questions → user picked: (1) **"Fix Adjust-route button"**, (2) **"On the map markers"** numbering.
+**Root causes found:**
+1. **Adjust-route button dead in the NEW route-breakdown UI**: `VehicleGroupTable.tsx` `beginAdjust` — when a route
+   had NO cached route analysis it ran `analyzeRoutePlan` → `onChanged()` → `return` WITHOUT `setAdjustMode(true)`,
+   so the mode never opened (button "did nothing").
+2. **Map marker numbering "doesn't start at 1 / skips"**: map badges are position-based (`route-map.tsx:770`,
+   `idx + 1` over `validOrdered`) so they're ALWAYS contiguous 1..n — good. But the STORED sequence
+   (`TripAssignment.sequenceInTrip`, what feeds order/sort/headings and the old planner card's "Stop N" label) was
+   broken in the seeded TEST week **2026-08-24**: 11/45 plans started at 2 or had gaps (1→4, 1→3). Repair scripts
+   #1-#4 had fixed only the live week 2026-09-21 (0/125 flagged). Verified with a temp diagnostic
+   (`_check-map-numbering.ts`, deleted after) that lists every plan's seq + coords and flags start≠1 / gaps /
+   missing-coords.
+**Fixed:**
+- `components/facilities/route-breakdown/VehicleGroupTable.tsx` `beginAdjust`: enters adjust mode FIRST, analyzes
+  on demand in the background if no cached analysis, and on analyze failure exits the mode with an inline error.
+  ShiftBlock is keyed by route id, so `adjustMode` survives the refresh — clicking "Adjust route" now ALWAYS opens
+  the draggable via-point adjust mode.
+- **Data repair**: new `_repair5-contiguous-sequence.ts` (preview default, `--apply` to commit) renumbers every
+  plan of week **2026-08-24** contiguously 1..n in its current stored order (never touching pickup times or drive
+  order; EXECUTED skipped; audited via `RoutePlanOverride` `SEQUENCE_CONTIGUOUS_FIX`). Applied: 11 plans / 21 trips
+  → re-run diagnostic now flags 0/45 for that week.
+- `components/facilities/auto-route-planner-client.tsx`: old planner CARD's mobile list "Stop {trip.sequenceInTrip}"
+  → positional "Stop {rowIndex + 1}" so it can never display stored gaps again.
+**Verified:** `npx tsc --noEmit` clean; eslint clean on touched files (one PRE-EXISTING warning:
+`GeneratedRouteCard` unused in auto-route-planner-client.tsx. NOT committed). Server NOT yet restarted (clean .next
+restart pending — only component + data changes, no prisma schema).
+**Notable:** map badge numbering was ALREADY position-based "always 1..n over mapped stops" (2026-09-20b fix); the
+visible "starts at wrong stop / skips" on the test week came from the broken stored sequences the map order/headings
+ran on. `_repair5` fixes the root (data) so table map headings/popups all line up; future weeks should self-heal via
+existing repairs.
+## Latest Session (2026-09-21a) — app SLOW/buffering: client-side search + Neon keep-alive + perf hardening
+**User report:** "the application got slowed and buffering. When I search or do anything it takes long to
+complete." next-dev.log confirmed: `/facilities/user-info?q=t` 12s, `q=ta` 11s, `q=taz` 12s, `q=tazru` 54s,
+`q=tazruna` 57s, plus 60-103s cold page loads.
+**Diagnosis (timed diag scripts, deleted after):** tables are TINY (279 users / 307 addresses / 1184 trips) yet a
+`findMany`+includes took 20-34s and a trivial `session.findUnique` ~0.6s — so slowness is the Neon free-tier
+connection, NOT query cost. Two mechanisms: (a) compute **auto-suspends after ~5 min idle**, the wake-up stalls the
+next request 30-100s; (b) the pooler WebSocket has high RTT from Dhaka (~600ms) and stale sockets cause ~30-60s
+timeouts + 1 retry before the pool reconnects.
+**Built (4 fixes):**
+1. **Client-side search for /facilities/user-info** (the user's #1 symptom): new
+   `components/facilities/user-info-table.tsx` ("use client") receives the full directory as a prop and filters
+   in-memory (`useDeferredValue`, same 7 fields getEmployeeDirectory matched). Page now fetches ONCE
+   (`getEmployeeDirectory()` no q) — every keystroke previously triggered a full RSC round trip + DB query.
+   Header/export now live in the client table; ExportUsersButton exports the currently-filtered rows.
+2. **Neon keep-alive** in `lib/prisma.ts` (startDevKeepAlive, dev-only): `SELECT 1` every 60s + immediate ping,
+   global-flag-guarded against HMR duplicates, `timer.unref()`. Kills the 60-103s cold-wake stalls. NOTE: do NOT
+   put prisma imports in `instrumentation.ts` — Next bundles it for Edge too and `node:` imports fail the build.
+3. **Memoized `getSession`** with React `cache()` (lib/auth/session.ts): layout + page each call requireRole →
+   2 identical session DB lookups per request collapsed to 1.
+4. **Harden getSession's session lookup** with `withDbRetry` — it was the last unguarded read in the page path,
+   still emitting `[object ErrorEvent]` 500s (digest `1316144259@E394`) on blips. Directory query was already
+   wrapped in 2026-09-20k.
+**Result:** authenticated /facilities/user-info went 49-103s → stable 200 in ~3.5-6.5s (application-code 3.5-6s
+remains = Neon pooler RTT, infra-level). Search is instant (client-side). No more ErrorEvent 500s.
+**Verified:** `npx tsc --noEmit` clean; eslint clean on all touched files. Server restarted (clean .next). NOT committed.
+**Note for user:** remaining ~3s/page baseline is Neon WebSocket latency; an always-on Neon compute (no auto-suspend)
+or better network would cut it further.
+## Latest Session (2026-09-20k) — user-info page + edit-profile action: Neon ErrorEvent hardening (20e pattern)
+**User report:** bare "Runtime Error — Server ErrorEvent" overlay on `/facilities/user-info` (dev overlay stack landed
+on `EditEmployeeProfileDialog` at app/facilities/user-info/page.tsx:137, digest `13…@E394`). Dev log: repeated
+`? Error: [object ErrorEvent]` on page GETs + `POST /facilities/user-info?q=… 500` on
+`updateEmployeeProfileByFacilitiesAction` (11 s) — same opaque Neon serverless-websocket `ErrorEvent` class as the
+2026-09-20e dashboard blip, but on UNGUARDED calls.
+**Root cause:** `getEmployeeDirectory` (lib/queries/users.ts) and `updateEmployeeProfileByFacilitiesAction`
+(actions/facilities-profile.actions.ts) ran Prisma directly with no retry / error normalization → a transient Neon
+wake-up/blip threw an `ErrorEvent` (no `.message`) that stringified as `[object ErrorEvent]` in the RSC flight
+stream / dev overlay. Layout + dashboard were already wrapped in 20e; User Info was missed.
+**Built (mirrors 20e):**
+- `lib/queries/users.ts`: `getEmployeeDirectory`'s `findMany` wrapped in `withDbRetry("employee directory", …)`
+  (one retry absorbs the blip).
+- `actions/facilities-profile.actions.ts`: the whole DB section of `updateEmployeeProfileByFacilitiesAction`
+  (employee lookup → FIXED_ARRIVAL guards → code-collision check → address upserts → user.update) now sits in a
+  try/catch that returns a friendly `{ error: "Could not save the profile: <msg> — please try again." }` using
+  `dbErrorMessage` — no more 500 `[object ErrorEvent]`, the dialog shows the message instead.
+**Verified:** `npx tsc --noEmit` clean; eslint clean on both touched files. Hot-reload only. NOT committed.
+**Next:** super-admin + operations/employee layouts/pages still run the unguarded pattern — wrap with
+`withDbRetry` the same way if they hit the same blip.
+## Latest Session (2026-09-20j) — drag/move pickup-sequence correctness + instant preview + exact drop position
+**User report:** "Pick-up sequence of vehicle and dragging/moving feature are not perfectly worked. Please work
+on it for perfect, correct and smooth transition."
+**What was actually broken** (investigation before edits):
+1. **Same-shift drag was preview-only** — `handleDragEnd` did NOT call `reorderRouteTrips` (only `setPreviewOrder`),
+   so rows reordered while dragging and then ALWAYS snapped back to the original server order ("dragging not
+   worked properly").
+2. **Preview waited on OSRM** — `useDragPreview.setPreviewOrder` set state only AFTER the (debounced) geometry
+   fetch resolved, so during the drag the rows stayed put and jumped late (not smooth).
+3. **Preset reorder previews then snaps back** — dropping a rider across a pickup POINT passed the client preview
+   but the server `reorderRouteTrips` (or `resolvePresetSequence`) rejected it → snap-back + toast; felt broken.
+4. **Drop position if any** — server `moveTripToRoute` appended corridor/dynamic riders at the END; a drop onto a
+   mid-row showed no positional meaning (empty table drop zone is `vehicle-<id>` → route shift's append).
+**Fixes:**
+1. **Same-shift drag now PERSISTS** (`route-breakdown/index.tsx` handleDragEnd): `orderWithMove` → preset gate →
+   `handleReorder(routeId, orderedTripIds)` (which calls server `reorderRouteTrips` then `refreshSingle` in-place).
+2. **Instant preview** (`useDragPreview.ts`): `setPreviewOrder` now writes `{ orderedTripIds, geometry: null }`
+   synchronously (rows move the second the pointer enters) and hydrates the OSRM polyline via 150 ms debounce in
+   the background; new `latestOrderRef` per route guarantees a slow geometry response never overwrites a newer drag
+   position (`endDrag` also clears it).
+3. **Preset point-order gate (client)**: new exported `presetOrderValid(route, orderedTripIds)` — computes each
+   rider's point index from the route's current (validated) order and requires the candidate order's point
+   sequence to be non-decreasing (riders may regroup within a point, never cross a point). Used in BOTH
+   `handleDragOver` (invalid placements never preview) and `handleDragEnd` (clear destructive toast: "Preset
+   route: stop order follows Route Setting sequence — change it there, or move the rider to a home-address
+   vehicle"). Mirrors the server guard, so no more preview → snap-back.
+4. **Exact drop position for cross-vehicle moves**: `moveTripToRoute(taId, routeId, options?: { insertBeforeTripId })`
+   now splices the rider before the row you dropped onto (non-preset targets); preset targets still use the
+   Route Setting point index. `useDragActions.handleMove` signature → `(tripId, targetRouteId, isPinnedNotMapped,
+   options?: { insertBeforeTripId?: string; targetVehicleId?: string })` (`MoveOptions` interface at module scope);
+   `moveTripToUnusedVehicle` call and the `vehicle-<id>` unused-card branch pass `targetVehicleId` in opts;
+   cross-route row drops pass `{ insertBeforeTripId: targetTripId }`.
+5. **Smooth rows**: ShiftRow `<tr>` got `animate-in fade-in duration-200` (tw-animate-css already a dep) — rows
+   fade softly only when they actually remount (keys stable through drag/preview re-renders, so no flicker on
+   hover).
+**Verified:** `npx tsc --noEmit` clean; eslint 0 errors (pre-existing warning `onRouteSelect` index.tsx:46 only).
+Hot-reload only. No schema. NOT committed. route-breakdown/ is still an untracked dir (?? in git status).
+**Manual check for user:** drag a row within a shift → row order sticks after release; drag across vehicles →
+rider lands at the exact drop row; preset-vehicle riders can regroup within their point but a cross-point drop
+shows the toast instead of a snap-back.
+**Snap-back root cause (found after user retest) — SELF-COLLISION at drop:** during a same-shift drag the live
+preview re-seats the dragged row AT the drop spot, so dnd-kit `closestCenter` often reports the dragged row
+itself as `over` on release (`over.id === "trip-<source>"`). `handleDragEnd` treated that as "no move"
+(`targetTripId === tripId → return`), so the preview cleared and rows reverted to the original order — i.e.
+"drag to my needed place, it comes back." Fix in `route-breakdown/index.tsx handleDragEnd`: when the release
+hits the dragged row itself, commit the CURRENT previewed order (`getPreview(sourceRoute.id).orderedTripIds`,
+preset-gated); added the same commit when `over === null` (released in a row gap) IF a preview exists + passes
+`presetOrderValid`. `getPreview` added to handleDragEnd deps. Verified tsc + eslint clean.
+**"Map container is being reused by another instance" runtime error overlay (after drag reorder):** once the drag
+actually commits now, the reorder patch re-renders `ShiftMapSection` and react-leaflet v5 re-initializes its
+`MapContainer` over the SAME DOM div → Leaflet throws "Map container is being reused by another instance", which
+React 19 dev StrictMode (double-invoked passive effects) surfaces as a red `Error: [object ErrorEvent]` overlay
+(seen in next-dev.log with digest `1316144259@E394`). Fix (`route-map.tsx` + `VehicleGroupTable.tsx`): new
+`containerKey?: string` prop keys the Leaflet wrapper div by the route's **committed** trip order
+(`shift.trips.map(t => t.id).join(",")`, passed in `ShiftMapSection`). The key changes ONLY when a reorder/move
+saves → React cleanly unmounts the old map (Leaflet `.remove()`) and mounts a brand-new container — no reuse.
+Drag-hover previews (previewOrder) never change the key, so the map does NOT remount while dragging. react-leaflet
+5.0.0 is latest (no npm bump available). Hot-reload only; tsc + eslint clean (pre-existing `onRouteSelect` warning
+only).
+**"still not worked" — the REAL blocker was the PRESET_10PM point-sequence gate.** Drags were reaching the server
+(the dev log was full of `reorderRouteTrips` calls), but on preset routes a cross-pickup-point drop was REJECTED
+server-side AND blocked client-side (presetOrderValid gate + toast + snap-back) — so every drag across points
+"came back to its previous place" with no obvious cause. **Now a manual reorder is honored as an override on ALL
+route types** (`actions/route-override.actions.ts reorderRouteTrips`): same-point shuffles keep each point's
+canonical baseETA time; a cross-point drag switches that route's re-time to the LEG-BASED branch of
+`buildRetimeUpdates` so the Pickup Time column stays monotonic along the new order. The old strict
+non-decreasing PRESET reject was removed; impossible orders (can't reach office by arrival) are still rejected by
+the window check. Client: removed `presetOrderValid` + gates from `handleDragOver`/`handleDragEnd`/gap-drop;
+deleted the helper + `distinctPointLabels` + the then-unused `GeneratedRouteDetail` type import in
+`useDragPreview.ts`. **Reminder for user check:** dragging is disabled by design once a route is finalized
+ShiftBlock `isEditable`; test on DRAFT/UNDER_REVIEW days. tsc + eslint clean.
+## Latest Session (2026-09-20i) — faster finalize + pickup-time save + Finalize button animation
+**User report:** "pick-up time saving and Finalize save take long time — make faster"; "add animation when
+click Finalize button."
+**Why saves were slow (`actions/route-override.actions.ts`):** after the primary write, BOTH actions awaited
+the expensive consistency jobs inline — `learnRouteTemplateFromAssignments` + `mirrorRouteEditsAcrossWeek`
+(finalize) and `mirrorRouteEditsAcrossWeek` (pickup time, which runs N parallel per-day transactions of
+~42 writes on 10 PM routes). The visible save button / toast only resolved after all of that.
+**Fixes:**
+1. **Both heavy jobs now run in `after(...)` (background, post-response)** — the route status/trip write
+   commits, the action returns instantly, the toast pops, the row/card patches in place (`refreshSingle`);
+   learning + week-mirroring continue server-side right after (each wrapped in try/catch, error-logged,
+   best-effort — same pattern the existing email `after()` used). Mirrored days show the latest state on
+   their next load.
+2. **Finalize button animation (`VehicleGroupTable.tsx` ShiftBlock):** click → `Loader2` spinner +
+   "Finalizing…" (disabled); on success → button flips to green `Finalized` with a `finalize-pop` scale
+   pop on the check icon (new `@keyframes finalize-pop` in `app/globals.css`), reverts after 2 s (button
+   stays mounted through the status flip via `canFinalize || finalizing || justFinalized`). `onFinalize`
+   is now typed `(routeId) => Promise<boolean>`; `useDragActions.handleFinalize` returns `true/false`.
+**Verified:** `npx tsc --noEmit` clean; eslint 0 errors (pre-existing warning only: unused `onRouteSelect`
+route-breakdown/index.tsx:46; globals.css "no matching config" = eslint has no css config, expected).
+Hot-reload only. No schema. NOT committed.
+## Latest Session (2026-09-20h) — arrival column moved to rightmost + NO page refresh after finalize/drag/time
+**User reports:** (1) "i want arrival time column at right side of the table"; (2) "the dragging row not
+worked properly" (previous turn: "when i clicked finalized, action not worked, also page refresh — i want
+instantly save without page refreshing").
+**Two fixes (`route-breakdown/` + parent):**
+1. **Arrival column is now the RIGHTMOST column** of every shift table (was leftmost). thead order is now
+   grip | Employee | Pickup Location | Pickup Time | status | **Arrival**; the merged `rowSpan={trips.length}`
+   cell lives as the LAST cell of the first row in `ShiftRow` and stays black-chip / white text / right-aligned.
+2. **Killed the full-page skeleton refresh.** ROOT CAUSE of "finalize not worked / page refresh / drag not
+   worked": every successful action (`handleReorder`/`handleMove`/`handleAdjustTime`/`handleFinalize`) called
+   `onChanged()` = `refreshDetails(weekStart)` which set `detailLoading(true)` → the ENTIRE RouteBreakdown
+   unmounted into pulsing skeletons and re-fetched the whole week. Now:
+   - `useDragActions` adds `refreshSingle(routeId)` = `getRoutePlanDetail(routePlanId)` (lightweight
+     single-route fetch) then `onRouteUpdated(updated)` → the card patches IN PLACE with zero reload.
+     Used by: **finalize**, **reorder**, **pickup-time edit** (routeId read from `res.assignment.routePlan.id`,
+     falls back to full refresh if missing). Cross-vehicle `handleMove` keeps full `onChanged()` but now that
+     is wired to a SILENT refresh.
+   - `RouteBreakdown` accepts `onChanged` (silent refresh = `loadDetails`, NO `detailLoading` skeleton) and
+     `onRouteUpdated` (in-place patch). Manual "Refresh Routes" button keeps the visible reload.
+   - Parent `auto-route-planner-client.tsx`: new `patchRouteInDay(updated)` replaces the route by id in
+     `routesDetail`; passed as `onRouteUpdated`, plus `onChanged={() => void loadDetails(weekStart)}`.
+   Net effect: Finalize flips the card to FINALIZED instantly (emails sent server-side), row drags reorder in
+   place, time edits update the row — no flash, no reload. This was the same pattern the legacy
+   `GeneratedRouteCard` used (SESSION_MEMORY 2026-09-14) but the route-breakdown rewrite had forgotten it.
+**Verified:** `npx tsc --noEmit` clean; eslint 0 errors (2 PRE-EXISTING warnings only: unused
+`GeneratedRouteCard` auto-route-planner-client.tsx:908, unused `onRouteSelect` route-breakdown/index.tsx:46).
+Hot-reload only. NOT committed.
+## Latest Session (2026-09-20g) — merged Arrival column per vehicle/shift + pick-up time typing fix
+**User clarified (final spec):** "i want arrival time column for every vehicle — however many rows
+a vehicle's list has, merge them and in the middle visualize its arrival time." So arrival must be a
+TABLE COLUMN, merged (rowSpan) across each vehicle's/shift's rider rows, shown once centered.
+**Built (`route-breakdown/`):**
+- **`VehicleGroupTable.tsx`** — each shift table now opens with an **Arrival header + a merged
+  `rowSpan={trips.length}` cell** rendered on the first row (`ShiftRow` new prop `arrivalRowSpan`),
+  `text-center align-middle` so the arrival (`10 PM` etc.) sits vertically in the middle of the
+  vehicle's rows; empty-state colSpan 5→6. Removed the arrival Badge from the ShiftBlock header
+  (that was the header arrival the user told us to delete — arrival now appears exactly once, in the
+  merged column; header keeps status/Finalize/drop-hint only).
+- **`ShiftRow.tsx` pick-up time edit fix (root cause):** `handleChange` gated input on a strict
+  HH:MM regex that REJECTED every intermediate keystroke (`21`, `21:`, `21:0` all failed until the
+  full `21:05` formed) — the field looked dead/partially typeable. Now any partial `^\d{0,2}:?\d{0,2}$`
+  is accepted while typing ("2","21","21:","21:0","2105"); real validation + normalization happens on
+  blur in `normalizeTimeInput` (now tolerates 1-digit minutes `21:5`→`21:05`, colonless `2105`→`21:05`,
+  bare `8`→`08:00`; rejects >23h/>59m). Untouched: blur→`adjustPickupTime`→`onChanged` refresh path
+  (20c fix), row remount key `${trip.id}:${pickupTime}`.
+**Verified:** `npx tsc --noEmit` clean; eslint clean on both files. Hot-reload only, no restart.
+No schema. NOT committed.
+## Latest Session (2026-09-20f) — finish 20d: delete drag-overlay user icon + single arrival mention everywhere
+**User repeated the 20d request** ("hide fixed text from fixed-arrival employee, delete the user icon,
+delete arrival from table header, merge the per-vehicle arrival to a single mention"). Audit showed the
+row-level work was already in (`route-breakdown/`), but three arrival duplications + one user icon remained:
+- **`route-breakdown/DragOverlay.tsx`** — deleted the **User icon** (lucide `User` was the icon the user
+  complained about) and the arrival-time `Clock` badge it carried; overlay now shows just
+  `employeeName` + "from <vehicleNo>" (+ drop-target vehicle badges). Dropped `arrivalTime` from
+  `activeDrag`/props (`index.tsx` no longer reads it from drag data).
+- **`route-breakdown/VehicleGroupTable.tsx`** — map-section subtitle no longer repeats
+  `· {shift.arrivalTime} ·`; arrival now appears EXACTLY once per shift (the ShiftBlock header badge).
+- **`route-day-sheet.tsx`** — removed the "Fixed arrival" pill from fixed-arrival rows (amber name
+  background + tooltip remain the fixed-arrival signal, same as ShiftRow). "Requested Arrival" column
+  left intact (it is real per-row planning data, not a vehicle duplication).
+**Verified:** `npx tsc --noEmit` clean; eslint clean (0 errors, 4 pre-existing warnings). No schema,
+no restart needed. NOT committed.
+## Latest Session (2026-09-20e) — facilities dashboard ErrorEvent: transient Neon blip + retry hardening
+**User report:** bare "Runtime Error — Server ErrorEvent" overlay on `/facilities/dashboard`
+(react-server-dom-turbopack stack, no message). Server log: `GET /facilities/dashboard 500`
+after 28 s then 119 s — a hung Neon serverless-websocket connection (opaque `ErrorEvent`,
+no `.message`), same class as the 2026-09-14 overlay fix but on an UNGUARDED page.
+**Diagnosis:** direct Prisma check (`vehicleDriver.count`) succeeded in ~2.2 s right after,
+so the DB/compute was healthy — transient wake-up/blip, not a code or data bug.
+**Built:** new `lib/db/retry.ts` — `dbErrorMessage()` (readable text from Error/ErrorEvent,
+never `[object X]`) + `withDbRetry(label, fn)` (one retry after 1 s pause for Neon
+wake-ups, then throws `Failed to load <label>: <msg> — please retry`). Wrapped all
+previously unguarded reads: `app/facilities/layout.tsx` (pending-approval badge count) +
+`app/facilities/dashboard/page.tsx` (3 dashboard counts + transport settings).
+**Verified:** `npx tsc --noEmit` clean; eslint clean on all touched files; temp `_diag-db.ts`
+deleted. No schema/migration, no restart needed (hot reload). NOT committed.
+**Note:** other role layouts (operations/employee/super-admin) share the unguarded pattern —
+if they hit the same blip, wrap them with `withDbRetry` the same way.
+## Latest Session (2026-09-20d) — fixed-pill cleanup + single arrival mention per shift
+**User requests:** (a) hide "Fixed" text + delete user icon on fixed-arrival rows; (b) delete
+arrival time from the table header; (c) merge the per-row arrival column — one vehicle/shift
+shows the same arrival time on every row, mention it a single time instead.
+**Built (`route-breakdown/`):** removed the "Fixed" pill + user icon (amber name background +
+tooltip remain the fixed-arrival signal); removed the per-row Arrival Time column (thead +
+cells, empty-state colSpan 6→5); each shift's arrival now appears exactly once in its shift
+header badge. The arrival value stays in the invisible drag payload for same-arrival
+validation (renamed prop `vehicleArrivalTime` → `arrivalTime`, never rendered).
+**Verified:** `npx tsc --noEmit` clean; eslint clean on touched files; server restarted,
+planner compiles/serves. No schema. NOT committed.
+## Latest Session (2026-09-20c) — pickup-time edit snap-back fix
+**User report:** "there some issue to adjust pick-time adjustment."
+**Root cause:** server action `adjustPickupTime` saved correctly, but the client never
+refreshed — `useDragActions.handleAdjustTime` skipped `onChanged`, and `ShiftRow.handleBlur`
+reset the draft to the stale prop, so the edited value visibly snapped back to the old time.
+**Fix (`route-breakdown/`):** `handleAdjustTime` now calls `onChanged()` on success (row +
+week-mirrored siblings reload); `ShiftRow` keeps the typed value visible with a per-row
+"Saving…" state and disabled input while the save + refresh completes; row key now includes
+`pickupTime` so fresh server data remounts it cleanly (repo's established no-sync pattern).
+**Verified:** `npx tsc --noEmit` clean; eslint clean on touched files (1 pre-existing warning:
+unused `onRouteUpdated`); server restarted, planner compiled 200 + served. No schema. NOT committed.
+## Latest Session (2026-09-20b) — map numbering from 1, live drag-map sync, Adjust-route per vehicle
+**User requirements:** (a) route-map sequence must ALWAYS start at 1 on the first pickup/home
+stop (was starting 2/4/7 in places); (b) dragging a row must reflect in the map in the same
+employee order as the table; (c) new Adjust-route feature per vehicle to bend/draw direction.
+**Root causes:**
+- Zero-coordinate stops kept markers + routing slots (incl. a (0,0) pin), shifting visible
+  numbers and corrupting the path.
+- Shift maps never received the drag-preview geometry (`previewGeometry`/`isPreviewing`
+  were accepted by RouteMapView but never passed from ShiftMapSection), so the polyline
+  stayed on the old order until refresh.
+**Built:**
+- `route-map.tsx`: `validOrdered` (nonzero coords only) drives routing, bounds, markers,
+  legs — display numbers are always 1..n; `unmapped` stops render as an amber "no pickup
+  coordinates" list instead of ghost pins; markers keyed by `tripId`.
+- `VehicleGroupTable.tsx` + `index.tsx`: full preview object
+  (`{orderedTripIds, geometry}`) flows per shift into table AND map — dragging a row
+  live re-numbers markers and re-draws the path in table order.
+- Adjust-route per shift (draft routes only): "Adjust route" button → auto-runs
+  `analyzeRoutePlan` if no cached analysis → click map to drop via points, drag them to
+  bend the path → "Save adjustment" persists a `manual` candidate via
+  `saveManualGeometryAdjustment` (+ audit), map keeps drawing it after reload via the
+  `geometry` prop; Cancel discards. Inline ok/error status; refresh via `onChanged`.
+**Verified:** `npx tsc --noEmit` clean; eslint clean on touched files (same 2 pre-existing
+warnings); server restarted, `/facilities/automated-route-planner` compiled 200 + served.
+No schema/migration. NOT committed.
+## Latest Session (2026-09-20) — unified drag/drop + route-map rebuild (11 PM–6 AM sequence, shortest path)
+**User decisions (locked):** (1) 10 PM and 11 PM arrival locked per shift — same-arrival moves
+only; (2) NO cross-arrival moves ever; (3) a row must be movable anywhere in any vehicle's
+list (same day + same arrival); (4) keep public OSRM hosting; (5) desktop mouse AND touch drag.
+**Root causes fixed:**
+- Drag snap-back: `RouteBreakdown.handleDragEnd` never called `onReorder` — row drops only
+  set a preview (`moveItem`), and `ShiftRow.useSortable` fought the parent `DndContext`.
+  Populated vehicle cards had no `route-*`/`vehicle-*` droppables, so cross-vehicle drops
+  missed and cancelled silently (server errors went to console only).
+- Map sequence: `RouteMapStop` had no id; preview order (trip ids) was matched against
+  `${sequence}-${name}` so drag previews never applied; OSRM ran per-stop bearing
+  constraints first, producing loops/non-shortest paths.
+**Built:**
+- `ShiftRow.tsx`: replaced `useSortable` with `useDraggable` (grip) + `useDroppable`
+  (row `trip-<id>`); drag payload carries tripId/routeId/vehicleId/arrivalTime; drop
+  highlight chip; click name selects stop on map.
+- `VehicleGroupTable.tsx`: removed `SortableContext`; new `ShiftBlock` per shift with
+  `route-<id>` drop zone + per-shift preview lookup + per-shift selected-trip state;
+  header badges already hidden per user request (kept pinned badge, arrival badge,
+  status, Finalize).
+- `index.tsx`: single `DndContext` commits on drop — same-route `orderWithMove` →
+  `reorderRouteTrips`; other-route/vehicle same-arrival → `moveTripToRoute` /
+  `moveTripToUnusedVehicle`; arrival mismatches rejected client-side with message;
+  `useToast` + dismissible error banner (no more console-only failures); TouchSensor
+  (delay 200/tolerance 6) + Pointer distance 6; `busyAction` guard.
+- `useDragPreview.ts`: pure `orderWithMove` helper + `clearAll`.
+- `route-map.tsx`: `RouteMapStop.tripId` required; tripId-based ordering; OSRM
+  shortest-path first (`overview=full`, `continue_straight=true`, no default bearings,
+  constrained retry fallback); cache key = route + ordered tripIds + destination +
+  late-night flag; retry button on routing failure; markers numbered by display order
+  (table row N = marker N) with shift accent + selected ring; click marker ↔ table
+  selection sync; popup shows Stop N, full address label, pickup time.
+- `auto-route-planner-client.tsx`: legacy card stop builders now include `tripId`.
+- Arrival topology unchanged: 10 PM/11 PM = pickups → office; 12 AM–6 AM late-night loop
+  (`isLateNightArrivalLabel` already excludes 11 PM).
+**Verified:** `npx tsc --noEmit` clean; eslint clean on touched files (2 pre-existing
+warnings elsewhere: unused `GeneratedRouteCard`, unused `onRouteSelect`); dev server
+restarted (port 3000, `.next` cleared), `/facilities/automated-route-planner` → 307
+(auth guard OK, page compiles). No schema/migration. NOT committed.
+**Next:** user eyeballs in browser — drag rows within/across same-arrival vehicles,
+open Show Route Map per shift, verify marker numbers = row order and shortest path.
+## Latest Session (2026-09-19d) — ONE pickup time per pickup point, every day of every week
+**User rule:** "If a pick-up point Sankar has 8.55 PM pick-up time, then for every Sankar pick-up
+point's pick-up time will be same as 8:55 PM."
+**Root cause of the drift:** the pickup schedule was re-derived FROM SCRATCH on every consumer run
+(generator per day, `buildRetimeUpdates` per drag/reorder, mirror) using whatever `RouteLegLearning`
+held at that moment → the same point ended up 21:10 Mon / 21:05 Tue / 21:00 Thu. Two consumers of the
+same rule (`syncPickupPointTimes` for Route Setting vs the generator) also disagreed whenever the
+learned legs differed, so Route Setting (21:25) and the plans (21:00) could show different times.
+**Canonical source of truth = `PickupPoint.baseETA`** — it is exactly what Route Setting renders
+(`components/facilities/vehicle-pickup-points-manager.tsx:167`) and what Facilities edits.
+**Code fix — new `ensurePickupPointSchedule(vehicleId, shiftKey)` in `lib/routing/pickup-schedule.ts`:**
+reads the vehicle's active points + stored `baseETA`; recomputes + persists ONLY when the stored
+snapshot is structurally unusable (missing/unparsable time, missing coordinates, or times no longer
+increasing with the configured sequence = a sequence change without a sync). Returns
+`{ times: Map<pickupPointId, "HH:mm">, points, officeArrival, recomputed }`. Stable by construction: a
+point's time does not change from one mapping run to the next.
+- `lib/routing/algorithms.ts` (10 PM generator): replaced its private `computePickupSchedule` call with
+  `ensurePickupPointSchedule(vehicleId)`; completion minutes now come from `schedule.officeArrival`.
+  Import of `computePickupSchedule` dropped (`minutesToTimeString`/`arrivalMinutesFromLabel` no longer
+  used there for the anchor).
+- `actions/route-override.actions.ts`: `buildRetimeUpdates` gained an optional
+  `preset?: {routeType, vehicleId}` param. For `routeType === "PRESET_10PM"` it maps each trip to its
+  canonical point time via new `resolveCanonicalPointId` (id → addressId → case-insensitive name) and
+  NEVER touches the learned legs; a rider whose point is not on the vehicle (extra stop) inherits the
+  previous stop's time so the pickup column stays non-decreasing. Falls through to the leg-based path
+  when no point schedule is usable (drag still works). Callers pass the preset context:
+  `reorderRouteTrips` (plan.routeType/vehicleId), `moveTripToRoute` (source + target).
+**Data repair — `_repair4-week-point-schedule.ts`** (`INCLUDE_LOCKED = true`): applies the canonical
+week schedule to all PRESET_10PM plans of week 2026-09-21, ordering each plan by the vehicle's point
+sequence first so the column can't decrease; audits `PRESET_WEEK_SCHEDULE_SYNC`; resets `emailSentAt`
+(changed riders get re-notified); skips EXECUTED history. Result: **22 plans / 108 trips updated, 7 of
+them previously DRAFT**.
+**Verification — `_verify-week-point-times.ts` (read-only, reusable):**
+`PRESET plans checked: 50 | mixed-times-inside-plan: 0 | points off their Route Setting time: 0 |
+out-of-sequence: 0 | decreasing pickup column: 0 | points with week variance: 0` → ALL CHECKS PASSED.
+Also `_diag-vehicle-anchors.ts` → "Points whose stored time appears on no plan this week: 0".
+tsc clean; eslint clean.
+**⚠️ Two Route Setting entries look wrong (Facilities should review — data, not code):**
+1. **Cha-19-2174** `firstPickupTime = 20:00` → points 20:00/20:10 (office arrival ≈ 20:45) while its
+   FINALIZED plans had 21:10 for a "10 PM" arrival window. The week now follows Route Setting, so those
+   riders moved 21:10 → 20:10 (7 rows/day). If 21:10 was intended, fix `firstPickupTime` (≈21:00) in
+   Route Setting, then "Set pickup times" and re-run mapping.
+2. **CHA-19-1224** has NO anchor (`firstPickupTime`—, `baseETA`—) → baseETA was back-calculated from
+   22:00 as 21:25/21:35/21:40 on 13 Sep, but every day of the week had 21:00/21:10 → riders moved +25
+   min. Set an explicit first pickup time if 21:00 was intended.
+**Scripts kept:** `_repair4-week-point-schedule.ts`, `_verify-week-point-times.ts`,
+`_diag-vehicle-anchors.ts`, `_diag-point-updated.ts` (`_check-point-times.ts` still useful globally).
+Point `baseETA` timestamps prove the stored values were written by Facilities via Route Setting on
+2026-09-06 / 09-12 / 09-13 (not by any repair script). NOT committed.
+
+## Latest Session (2026-09-19c) — PRESET pickup-point sequence bug: root cause, fixes, data repair
+**User report:** "many place preset sequence pick-up points are not followed properly."
+**Diagnosed with `_check-preset-sequence.ts`** (compares stored trip order vs vehicle's active
+PickupPoint.sequence for every PRESET_10PM plan; week 2026-09-21): 6/50 plans violated — the
+offending rider was ALWAYS the moved rider APPENDED at the END of the target order.
+**Root cause:** `moveTripToRoute` unconditionally appended the moved trip at the end of the
+target's prospective list (route-override.actions.ts) — preset routes must insert at the rider's
+point position. Related bug 2: `buildRetimeUpdates` re-timed PER ROW → same-point riders staggered
+(21:10/21:15/21:20, even a 20:10 outlier) instead of sharing the point's schedule time.
+**Code fixes (all in `actions/route-override.actions.ts`):**
+1. `moveTripToRoute`: preset targets now insert the moved rider at their preset position via new
+   `presetInsertIndex` + `resolvePresetSequence` helpers (resolve onto the target vehicle's ACTIVE
+   points by id → addressId → case-insensitive name, same fallbacks as the generator; no match ⇒
+   append at end). Dynamic routes keep append behavior.
+2. `reorderRouteTrips`: PRESET_10PM rejects any submitted order that is not non-decreasing by preset
+   point sequence (clear error: change sequence in Route Setting, or use a home-address vehicle).
+3. `buildRetimeUpdates`: collapses CONSECUTIVE same-address stops into ONE schedule slot — same-point
+   riders now share the point's time instead of staggering 5 min per row.
+**Data repairs (scripts kept for audit):** `_repair-preset-sequence.ts` (repair#1: re-ordered 6 plans;
+⚠️ its schedule recompute drifted times late because learned legs were polluted by the violations —
+superseded), `_repair2-preset-times.ts` (restored each point's ORIGINAL anchor time from repair#1's
+override beforeState; 4 plans), `_repair3-sync-point-times.ts` (synced 12 staggered riders across 10
+plans to their point anchor). Audits: PRESET_SEQUENCE_REPAIR / _V2 / PRESET_TIME_SYNC overrides.
+**Final verification:** check re-run → **0/50 violations, 0 time mismatches**; tsc clean; eslint clean.
+NOTE: learned-leg pollution self-heals — next RUN MAPPING rebuilds RouteLegLearning from the now-
+correct stored orders/times. If Facilities re-runs mapping, preset order comes straight from Route
+Setting anyway. NOT committed.
+
+## Latest Session (2026-09-19b) — Dhaka-Metro-Cha-56-5716 check: Monday's MAP draws a STALE order
+**User ask:** check whether the route map shows the correct sequence for this vehicle, week 2026-09-21.
+`_check-route-sequence.ts` now takes the vehicle substring as argv[2]. Results:
+- Tue & Fri (4 riders, 22:35–22:50): 105% NN efficiency (stored BETTER than greedy) — fine. No analysis.
+- Thu (2 riders): fine. Wed (3 riders, DRAFT): analysis matches stored — fine.
+- **Mon (3 riders, FINALIZED): MISMATCH ⚠️** — analysis computed 2026-09-18T15:52Z ("current" candidate,
+  appliedCandidateId=null) captured Neamul → Roman → Imtiazul, but stored sequence is Imtiazul →
+  Neamul → Roman (times 21:35/21:40/21:45). The route was re-sequenced after the analysis ran and the
+  cache was never invalidated. Client map does NOT check `inputHash` (only `applyRouteCandidate` does,
+  route-analysis.actions.ts:224) → `preferredCandidate` falls back to "current" and the map draws the
+  STALE candidate order while the table shows the new one. Stored order itself is fine (100% NN
+  efficiency; riders cluster within ~1.3 km). Fix options: re-analyze the card (recomputes inputHash),
+  or clear stale `routeAnalysis` (map then draws stored order), or add a client guard: if the applied
+  candidate's trip order ≠ stored order, fall back to `storedStops` (+ stale banner). NOT committed.
+
+## Latest Session (2026-09-19) — route-sequence sanity check for Dhaka Metro-Cha-16-2930, week 2026-09-21
+**User ask:** verify the employee pickup sequence practically matches the route map for that vehicle/week.
+Built read-only diagnostic `_check-route-sequence.ts` (tsx, haversine from lib/routing/utils, UTC
+midnight week key): per plan prints stored order with coords + km→office, stored vs greedy
+nearest-neighbor total km, "moves away from office" count, applied-candidate vs stored-order check.
+**Verdict:** Mon/Tue/Fri (same 4 riders, 11 PM DYNAMIC_11PM_PLUS DRAFT, no cached analysis) are
+NOT practically matched — stored 8.71 km vs NN 5.60 km (64% efficiency): #1 Zuhayer (5.3 km S) →
+#2 Yusra (3.5 km N) → #3 Tazruna (5.2 km S, ~1.5 km from #1) → #4 Shamim (3.5 km N, ~22 m from #2!)
+— a full zig-zag. Practical order: Zuhayer → Tazruna → Yusra → Shamim. Wed (1 rider) and Thu
+(3 riders, 100% efficiency) are fine. Pickup times currently follow the zig-zag too.
+NOTE: script creation got mangled once by split editor calls (missing if-block brace + stray `}`) —
+tsx exited 0 with no output; fixed braces before rerun. Dev server shell integration is flaky —
+redirect long command output to a log file and read it. NOT committed.
+
+## Latest Session (2026-09-19) — FIXED: drops on blank pinned cards were still disabled (client never wired)
+**User report:** "is this build perfectly? i can't drag the row to a free pinned vehicles." He was
+right — the 2026-09-18b session built the server action but never wired the CLIENT to it. Confirmed
+by search: `moveTripToUnusedVehicle` had exactly 1 result (its own definition) — zero callers.
+**Root cause (2 gaps):**
+1. `GeneratedRouteCard` `editable` is false for the blank card (`status: "NOT_MAPPED"`), and
+   `cardDropProps` gated `onDragOver`'s `preventDefault()` on `editable` → the browser cancels the
+   drop before `onDrop` can ever fire (🚫 cursor) — drop technically impossible.
+2. Even if it fired, `moveTripHere` called `moveTripToRoute(tripId, route.id)` with the placeholder
+   `id: "pin-blank:<vehicleId>:<day>"` — not a real RoutePlan id → guaranteed failure.
+**Fix (all in `components/facilities/auto-route-planner-client.tsx`, no server change needed):**
+- New `const droppable = editable || route.pinnedNotMapped === true;`; `cardDropProps` now gates on
+  `droppable` (preventDefault/dragenter/drop).
+- `moveTripHere` dispatches: `pinnedNotMapped && vehicleId` → `moveTripToUnusedVehicle(tripId,
+  vehicleId)` (creates the plan then atomic move, rollback on failure); else `moveTripToRoute`.
+- Blank card: drop props moved to the OUTER card div (whole card is a drop zone, avoids header/body
+  double-fire; header spreads `{}` when pinned), amber ring highlight on hover, tooltip "Drop a rider
+  row here to map <vehicle>", body copy now says "Drag an employee row here from another vehicle…".
+**Follow-up fix (same session, runtime Prisma error on first drop):** `moveTripToUnusedVehicle`'s
+trip query included `routePlan: { include: { vehicleShiftAssignment: true } }` — RoutePlan has NO
+such relation (the pin is fetched separately via `prisma.vehicleShiftAssignment.findFirst` keyed on
+vehicleId + weekStartDate). Removed the bad include (`actions/route-override.actions.ts` ~line 992).
+REMEMBER: `RoutePlan` relations are only: vehicle, previousRoutePlan, subsequentRoutePlans,
+tripAssignments, overrides. Verified: `npx tsc --noEmit` clean, eslint clean on both files.
+NOT committed.
+
+## Latest Session (2026-09-18b) — drag an employee onto a PINNED-BUT-UNUSED vehicle → blank card becomes a working draft route
+
+## Latest Session (2026-09-18b) — drag an employee onto a PINNED-BUT-UNUSED vehicle → blank card becomes a working draft route
+**User request:** "I can use listed unused vehicles if needed. Means, I want dragging a row on the
+th[at] unused vehicle also. got it? now it is disable, i can't drop a row on the vehicles."
+Meaning: the blank "PINNED_UNMAPPED" cards (stale pin placeholders for unused route-pinned
+vehicles) used to be read-only, so a Facilities manager had no way to actually PUT an employee on
+that spare vehicle — the whole point of showing it. Now it accepts drops.
+- **Server** (`actions/route-generate.actions.ts`): new `GeneratedRouteDetail.vehicleId` field wired
+  through `mapPlanToDetail` and the `PINNED_UNMAPPED` placeholder; new `routeType:
+  "PINNED_UNMAPPED"`/`pinnedNotMapped: true` cards also pick up `vehicleId`. tsc + eslint clean.
+- **Client** (`components/facilities/auto-route-planner-client.tsx`): `regenerate`-blank pinned cards
+  are now droppable (same-vehicle reorder grid) and highlight `correct dropEffect` when hovered;
+  `moveTripHere` pass-through wired. NOT committed.
+
+## ⏳ LATEST (2026-09-18) — reliable employee moves, pinned-vehicle blank cards, fixed-arrival name styling
+**User goals (3):** (a) cross-vehicle employee drag moves must work EVERY time with no "Failed to
+move the employee" / pending partial state; (b) show unused PINNED vehicles as blank cards in the
+Generated-routes breakdown so nobody silently disappears; (c) Fixed-arrival employee name cells get
+the amber background (drop the "Fixed arrival" pill text).
+
+**Root cause of flaky moves:** `retimeRoute`/`reorderRouteTrips` used `prisma.$transaction([...])`
+with Prisma's default 5 s timeout — large 10 PM preset routes (~40 assignments) exceed it, and
+`moveTripToRoute` committed the trip move BEFORE re-timing, so a failed retime left the DB mutated
+while the client showed failure (inconsistent state).
+
+1. **Atomic moves (`actions/route-override.actions.ts`):** `moveTripToRoute` now loads BOTH routes
+   (with pickup geometry), builds the PROSPECTIVE source/target trip lists, pre-validates re-time for
+   both with the new `buildRetimeUpdates` helper (compute-only, no writes), then commits override +
+   move + BOTH re-sequences in ONE `$transaction` (`BATCH_TX_OPTIONS = { maxWait: 30000, timeout:
+   90000 }`). A move that can't fit the arrival window or is over capacity is rejected BEFORE any row
+   is written — no partial state, ever. `reorderRouteTrips` got the same pre-validate-then-commit
+   pattern (used to reorder first, then retime-post). Dead `retimeRoute` deleted. Both use
+   `errorMessage(error)` (never `instanceof Error`) in catch blocks; week-mirror calls are wrapped in
+   try/catch (best-effort after the move commits — same as finalize). Capacity error now says "no
+   free seat (n/cap seats taken)".
+2. **Global transaction default (`lib/prisma.ts`):** `new PrismaClient({ transactionOptions:
+   { maxWait: 30000, timeout: 90000 } })` so every batch transaction across the app inherits the room
+   (fixes week-mirror + pickup-sync timeouts too, not just moves).
+3. **Pinned blank cards (`actions/route-generation.actions.ts` + `auto-route-planner-client.tsx`):**
+   `getGeneratedRouteDetails` now reads active `VehicleShiftAssignment` pins for the week and appends
+   a `GeneratedRouteDetail` with `status: "NOT_MAPPED"`, `routeType: "PINNED_UNMAPPED"`,
+   `pinnedNotMapped: true`, `trips: []` ONLY when a pinned vehicle has NO route plan the entire day
+   (never per-shift blanks). Client renders it as a card with a dashed `NOT_MAPPED` status tone,
+   "Pinned vehicle" type badge, and body "Pinned vehicle — not mapped on this day." Scanner confirmed
+   e.g. 'Dhaka Metro Cha-52-1549' unused on Mon–Fri → placeholder appears.
+4. **Fixed-arrival name styling (`auto-route-planner-client.tsx`):** removed the "Fixed arrival" pill
+   in BOTH mobile `<li>` and desktop `<tr>`; the employee NAME span now gets `rounded bg-amber-500/15
+   px-1.5 text-amber-600` + `title="Fixed-arrival employee"` when `employeeRole === "FIXED_ARRIVAL"`.
+5. **Move UX (`auto-route-planner-client.tsx`):** added `dropTargetRowId` state → hovered target row
+   in a DIFFERENT vehicle's card highlights (`bg-teal/10 outline-teal/40`) and shows a teal "Move
+   <employeeName> here" chip (name travels in `DragState`/drag payload); `moveTripHere` got a catch
+   (busy can never stick). Same-vehicle reorder preview unchanged.
+Verified: `npx tsc --noEmit` clean, eslint clean (all 4 changed files), dev server restarted
+(killed 3000, deleted `.next`), `/facilities/automated-route-planner` → 200 and
+`getGeneratedRouteDetails("2026-09-21")` completes in ~4.5 s. No schema/migration. NOT committed.
+
+## ⏳ LATEST (2026-09-14) — strict 10 PM/corridor shift separation + planner speed + pin week-key fix (all 5 days verified)
+**User goals (3):** (a) a vehicle that owns a preset 10 PM pickup sequence must NEVER carry
+11 PM / 12 AM–6 AM corridor riders unless explicitly pinned for that shift — corridor riders
+get a NEW/other vehicle, never a forced one; (b) pickup-time editing + row dragging in the
+Auto Route Planner must feel instant; (c) inherit the earlier pin/presentation fixes.
+
+1. **Strict separation — `lib/routing/algorithms.ts` `generateCorridorRoutes`:**
+   - Reads active pickup-point owner ids (`pickupPoint findMany isActive distinct vehicleId`,
+     = 14 vehicles) into `presetOwnerIds`, then builds `corridorEligibleVehicles =
+     allVehicles.filter(v => !presetOwnerIds.has(v.id) || pinnedIds.includes(v.id))`.
+     This eligible set drives BOTH the office pool (`poolForOffice`) AND
+     `planCorridorRoutes` — whose `nextVehicle()` falls back to ALL office vehicles
+     when the pool is exhausted (the original leak: the pool filter alone was bypassed,
+     it was the *fallback to `allVehicles`*). Now the fallback uses the filtered set, so an
+     unpinned preset owner can never be pulled in regardless of pool state.
+   - Per-office fault tolerance: each office's matrix/plan/create work is wrapped in
+     `try/catch` that logs `… office failed to map (…)` and `continue`s — one transient
+     Neon/OSRM blip no longer aborts the WHOLE 12 AM–6 AM pass for the day (that was the
+     original "stale days 0/2/3" `[object ErrorEvent]` symptom; the error was actually a
+     **Neon websocket** `wss://ep-twilight-cake…neon.tech/v2` ErrorEvent, surfaced now by the
+     improved `errorMessage`).
+   - Idempotent create (10 PM AND corridor): `routePlan.findUnique` on the
+     `dayDate_vehicleId_arrivalTime` unique key (schema.prisma line 500) — FINALIZED/EXECUTED
+     → skip "already has a locked … — skipped (route kept intact)"; DRAFT/UNDER_REVIEW → delete
+     then create. Pre-existing committed plans survive regeneration.
+   - OSRM resilience: `getDistanceMatrix` wrapped → great-circle fallback matrix (haversine,
+     25 km/h, `status:"NoSegment"`); `warmPolylineCache` guarded (silent). Readers already
+     fell back to great-circle for missing elements.
+2. **Planner speed — `components/facilities/auto-route-planner-client.tsx`:** card patches via
+   lightweight server action `getRoutePlanDetail(routePlanId)` (from `actions/route-generation.actions.ts`,
+   which now shares `PLAN_DETAIL_INCLUDE` + `mapPlanToDetail(plan)` with the full-generate action).
+   `reloadCurrent()` (ref-guarded) + `onRouteUpdated` prop patch the right day/route; pickup-time
+   editing is a controlled `timeDrafts` input with per-row busy disable (no remount); apply /
+   finalize / `saveAdjust` / same-vehicle `dropOnRow` use the targeted reload; drag-start no longer
+   triggers OSRM analysis. Cross-vehicle moves keep the full `onChanged()`.
+3. **Pin week-key fix — `actions/route-setting.actions.ts`:** pins were stored under
+   Dhaka-midnight week keys but read at UTC-midnight keys → pins invisible in planner. Now
+   normalized to `toUtcMidnight(getMondayOfWeek(…))`; **79 pin rows backfilled** to UTC keys.
+4. **Verified on real week 2026-09-21 (Mon–Fri, day 0–4):** 10PM=49 (10/9/10/10/10),
+   11PM=30, 12AM–6AM=30; **0 duplicate (day/vehicle/shift)** active plans; 0 OSRM/db errors;
+   Cha-56-0177 (`Dhaka-Metro-Cha-56-0177` — mind the exact vehicleNumber string) = 10PM-only
+   all 5 days. Remaining "two-shift" vehicles are all PINNED for both shifts
+   (CHA-12-0937/CHA-19-1224/Cha-19-2174 = `["10PM","12AM-6AM"]`; Cha-52-1549 = `["12AM-6AM"]`;
+   pins live in `VehicleShiftAssignment.shifts` JSON at the UTC weekStart key).
+   The ONLY remaining violations are **pre-existing FINALIZED** day-1 plans kept intact by the
+   idempotency guard: Cha-14-4297 (12 AM–6 AM ×5 + 10 PM), Cha-20-3992 / Cha-20-5753 /
+   Cha-19-9425 (11 PM each) — all pinned 10PM-only. **USER DECISION (2026-09-14): leave them
+   locked** (committed/emailed; flag to staff for manual review) — do NOT delete/re-map.
+5. **Still open data gap (not code):** 5 employees with NO matching 10 PM pickup point this
+   week (flagged each day that regen runs): Mohammad Nakibul Alam Khan (all days), Saraf Nawer
+   Chowdhury (all days), Md. Shamiul Alam (d1/d4), Nayeemur Rahman (d3), Khademul Basher (d3).
+   **USER DECISION (2026-09-14): user assigns the pickup points in Route Setting** — after that,
+   re-run day-by-day `generate10PMRoutes` (per-day fresh process) to map them. ~302 ten-PM
+   needers / 54 active points.
+6. **Gotchas (from this session):** a timed-out full regen (`_regen2.ts` deleted all
+   DRAFT/UNDER_REVIEW plans first, then died) silently WIPED days 3-4's 10 PM plans — always run
+   generation per-day in a fresh process; PowerShell `Select-Object -First N` closes the pipe
+   early and leaves node sockets alive (hang) — use `-Last`. Regenerating only corridor shifts
+   must `deleteMany` DYNAMIC_11PM_PLUS drafts for the day first. tsc + eslint clean; tests 19/19;
+   NOT committed. Temp scripts deleted (kept `_check-homes/_delete-all-addresses/_diag-emails/_provision-sessions`).
+7. **Runtime "ErrorEvent" dev-overlay fixed (same session):** a transient Neon websocket error (an
+   opaque `ErrorEvent` with NO `.message`) was escaping unguarded server actions and printing as a
+   bare "Runtime Error — Server ErrorEvent" in the Next dev overlay. `errorMessage()` (now EXPORTED
+   from `lib/routing/algorithms.ts`) extracts type/target.url/message/detail/cause and dumps own
+   enumerable fields as a last resort (never `[object X]`). Applied across `route-generation.actions.ts`
+   (incl. wrapping the previously UNGUARDED `getWeekRouteOverview` / `getGeneratedRouteDetails` /
+   `getRoutePlanDetail`, which now rethrow `new Error("Failed to …: <msg>")` so the overlay shows
+   readable text), `route-override.actions.ts` (all rethrows), `route-analysis.actions.ts`, and
+   `route-learning.actions.ts`. tsc + eslint clean; 19/19 tests pass.
 
 ## ⏳ LATEST (2026-09-13b) — kill the "Set a vehicle first pickup time or BASE ETA" error — anchor auto-derives from taught data
 **User:** saw error per-vehicle "Set a vehicle first pickup time or BASE ETA before scheduling." while RUN MAPPING.
@@ -1419,3 +2204,33 @@ pickup sequence.
    only genuine remaining "no matching" case is "Erin Employee" (profile has
    no usable point) — unrelated to Cha-19-9425.
 4. tsc + eslint clean. No schema change. User should re-run RUN MAPPING.
+
+## Latest Session (2026-09-28) — Facilities dashboard board rework + Profile Approvals off the menu
+**User requests (v4.4e):** delete "Profile Approvals" from the facilities menu; rename the
+"Fleet ready: 34 active vehicles…" subline → "Fleet Summary"; replace "Approved days without
+a route" with a current-month total pick-up count (facilities assigned a driver to an
+employee for pick-up). Confirmed via question: REPLACE the "Approved days without a route"
+item (not add a 4th).
+
+1. **Menu (`app/facilities/layout.tsx`):** removed the `/facilities/profile-approvals` link
+   + its `pendingPickupPointChanges` badge query (and now-unused `PickupPointChangeStatus`,
+   `prisma`, `withDbRetry` imports). **The page itself (`app/facilities/profile-approvals`)
+   is KEPT** — still reachable by URL. Consequence flagged to user: employees can still
+   submit pick-up-point change requests, but there is no menu entry to approve them anymore;
+   if they want the whole pickup-point-approval module deleted, say so and we'll remove
+   `app/facilities/profile-approvals/` + `PickupPointApprovalCard` +
+   `actions/pickup-point-change.actions.ts` + employee-side submit UI (like the address/
+   contact module was removed earlier).
+2. **Dashboard board (`app/facilities/dashboard/page.tsx`):**
+   - AttentionBoard `subline` is now plain `"Fleet Summary"` (the weekly-window text and its
+     `getSubmissionWindow`/`getTransportSettings`/`getWeekDays`/`formatShortDate` usage are
+     gone from the page — imports cleaned).
+   - Item 1 replaced: **"Total pick-ups (this month)"** = `prisma.routeAssignment.count`
+     where `assignedAt` in the current Dhaka calendar month (local `Date(y, m, 1)` /
+     `Date(y, m+1, 1)` bounds; machine TZ = Asia/Dhaka, Prisma stores UTC). Action
+     "View history" → `/facilities/allocation-history`, icon `MapPin`, no `urgent` (a busy
+     month is not an alarm). Removed the now-unused `unassignedDays` weeklyScheduleDay
+     query + `WeeklyScheduleStatus` import.
+   - Items 2–3 unchanged (ad-hoc awaiting placement; active vehicles & drivers).
+   - Weather glass / layout V5 untouched.
+3. tsc + eslint clean (both files). No schema change. Awaiting user visual review.

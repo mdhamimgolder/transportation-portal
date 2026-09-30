@@ -10,6 +10,7 @@ import {
   computeRouteAnalysis,
   loadAnalysisInput,
 } from "@/lib/routing/route-analysis";
+import { errorMessage } from "@/lib/routing/algorithms";
 import type {
   CandidateId,
   RouteAnalysis,
@@ -67,7 +68,7 @@ export async function analyzeRoutePlan(
   } catch (error) {
     return {
       success: false,
-      error: error instanceof Error ? error.message : "Route analysis failed.",
+      error: errorMessage(error),
     };
   }
 }
@@ -181,8 +182,7 @@ export async function saveManualGeometryAdjustment(
   } catch (error) {
     return {
       success: false,
-      error:
-        error instanceof Error ? error.message : "Failed to save the route adjustment.",
+      error: `Failed to save the route adjustment: ${errorMessage(error)}`,
     };
   }
 }
@@ -392,7 +392,7 @@ export async function applyRouteCandidate(
   } catch (error) {
     return {
       success: false,
-      error: error instanceof Error ? error.message : "Failed to apply the route candidate.",
+      error: `Failed to apply the route candidate: ${errorMessage(error)}`,
     };
   }
 }

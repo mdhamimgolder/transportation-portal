@@ -8,6 +8,7 @@ import {
   type TodaysScheduleEntry,
 } from "@/components/employee/todays-schedule-card";
 import { DashboardHero } from "@/components/shared/dashboard-hero";
+import { WeatherWidget } from "@/components/shared/weather-widget";
 import { CalendarDays, Clock } from "lucide-react";
 
 const ARRIVAL_TIME_LABELS = Object.fromEntries(
@@ -60,13 +61,22 @@ export default async function FixedArrivalDashboardPage() {
 
   return (
     <div className="space-y-7">
-      <DashboardHero
-        eyebrow={`${ROLE_LABELS[Role.FIXED_ARRIVAL]} · ${todayLabel}`}
-        title={<>Welcome back, {firstName}.</>}
-        subline="Your fixed arrival time and today's ride, in one place."
-      />
-
-      <TodaysScheduleCard entries={entries} title="Today's ride" />
+      {/* Hero + board share the left column; the weather glass spans both
+          rows at top right, its top edge aligned with the welcome line —
+          so neither the hero nor the board goes full width. */}
+      <div className="grid grid-cols-1 gap-5 sm:grid-cols-[minmax(0,1fr)_160px]">
+        <DashboardHero
+          eyebrow={`${ROLE_LABELS[Role.FIXED_ARRIVAL]} · ${todayLabel}`}
+          title={<>Welcome back, {firstName}.</>}
+          subline="Your fixed arrival time and today's ride, in one place."
+        />
+        <WeatherWidget className="sm:col-start-2 sm:row-span-2 sm:row-start-1 sm:self-start" />
+        <TodaysScheduleCard
+          className="min-w-0"
+          entries={entries}
+          title="Today's ride"
+        />
+      </div>
 
       <div className="rounded-xl border bg-card p-5">
         <div className="mb-3 flex items-center justify-between gap-3">

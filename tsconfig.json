@@ -37,7 +37,9 @@
   ],
   "exclude": [
     "node_modules",
-    "_archived-fastapi-scaffold-2026-07-27",
-    "frontend"
+    ".next",
+    // Agent scratch / worktrees contain stale copies of this repo, not source.
+    ".claude",
+    ".kilo"
   ]
 }

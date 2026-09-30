@@ -22,6 +22,10 @@ const ARRIVAL_TIME_LABELS = Object.fromEntries(
   ARRIVAL_TIME_OPTIONS.map((o) => [o.value, o.label])
 );
 
+// Extra recent Mondays offered in the bulk-upload week dropdown even when they
+// have zero submissions yet (fully-cleaned test week / backfill).
+const RECENT_UPLOAD_WEEKS = 12;
+
 export default async function WeeklyRequestsPage({
   searchParams,
 }: {
@@ -93,20 +97,28 @@ export default async function WeeklyRequestsPage({
     dateLabel: formatShortDate(date),
   }));
 
-  const onBehalfWeekDateString = onBehalfWindow.weekStartDate.toDateString();
-  const uploadWeekOptions: WeekOption[] = weekOptions.some(
-    (w) => new Date(w.value).toDateString() === onBehalfWeekDateString
-  )
-    ? weekOptions
-    : [
-        {
-          // Canonical UTC-midnight value — the bulk-upload action normalizes
-          // to this key, so the option value must match.
-          value: toUtcMidnight(onBehalfWindow.weekStartDate).toISOString(),
-          label: `${onBehalfWeekLabel} (current)`,
-        },
-        ...weekOptions,
-      ];
+  const currentWeekValue = toUtcMidnight(onBehalfWindow.weekStartDate).toISOString();
+  const uploadWeekOptions: WeekOption[] = (() => {
+    // Rolling set of recent Mondays (newest -> oldest) so a fully-cleaned or
+    // backfill week stays uploadable even when it currently has 0 submissions
+    // (a wiped test week never appears in distinctWeeks). The bulk-upload
+    // action normalizes to the canonical UTC-midnight Monday key, so option
+    // values must match that key.
+    const byValue = new Map<string, WeekOption>();
+    const currentWeekMs = toUtcMidnight(onBehalfWindow.weekStartDate).getTime();
+    for (let i = 0; i < RECENT_UPLOAD_WEEKS; i++) {
+      const start = new Date(currentWeekMs - i * 7 * 24 * 60 * 60 * 1000);
+      const days = getWeekDays(start);
+      byValue.set(start.toISOString(), {
+        value: start.toISOString(),
+        label: `${formatShortDate(days[0])} – ${formatShortDate(days[4])}${
+          start.toISOString() === currentWeekValue ? " (current)" : ""
+        }`,
+      });
+    }
+    for (const w of weekOptions) byValue.set(w.value, w);
+    return [...byValue.values()];
+  })();
 
   const rows: WeeklyRequestRow[] = filteredSchedules.map((schedule) => {
     const days = Array.from({ length: 5 }, (_, i) => {

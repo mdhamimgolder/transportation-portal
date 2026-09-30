@@ -1,5 +1,6 @@
 import "server-only";
 import { prisma } from "@/lib/prisma";
+import { withDbRetry } from "@/lib/db/retry";
 import type { Role } from "@/lib/constants/enums";
 
 export type UserRow = {
@@ -62,15 +63,18 @@ export type EmployeeDirectoryRow = {
   isActive: boolean;
   role: Role;
   fixedArrivalTime: string | null;
+  fixedArrivalActive: boolean;
 };
 
 /** Read-only employee directory, used by Facilities' "User Info" page. */
 export async function getEmployeeDirectory(q?: string): Promise<EmployeeDirectoryRow[]> {
-  const users = await prisma.user.findMany({
-    where: { role: { in: ["EMPLOYEE", "FIXED_ARRIVAL" as Role] } },
-    orderBy: { fullName: "asc" },
-    include: { homeAddress: true, pickupAddress: true },
-  });
+  const users = await withDbRetry("employee directory", () =>
+    prisma.user.findMany({
+      where: { role: { in: ["EMPLOYEE", "FIXED_ARRIVAL" as Role] } },
+      orderBy: { fullName: "asc" },
+      include: { homeAddress: true, pickupAddress: true },
+    })
+  );
 
   const rows: EmployeeDirectoryRow[] = users.map((u) => ({
     id: u.id,
@@ -89,6 +93,7 @@ export async function getEmployeeDirectory(q?: string): Promise<EmployeeDirector
     isActive: u.isActive,
     role: u.role as Role,
     fixedArrivalTime: u.fixedArrivalTime,
+    fixedArrivalActive: u.fixedArrivalActive,
   }));
 
   const needle = q?.trim().toLowerCase();

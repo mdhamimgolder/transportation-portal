@@ -16,6 +16,7 @@ import {
 } from "@/components/employee/todays-schedule-card";
 import { ThisWeekScheduleCard } from "@/components/employee/this-week-schedule-card";
 import { DashboardHero } from "@/components/shared/dashboard-hero";
+import { WeatherWidget } from "@/components/shared/weather-widget";
 import { Button } from "@/components/ui/button";
 import {
   WeeklyScheduleTable,
@@ -106,31 +107,32 @@ export default async function EmployeeDashboardPage() {
 
   return (
     <div className="space-y-7">
-      <DashboardHero
-        eyebrow={`${ROLE_LABELS[Role.EMPLOYEE]} · ${todayLabel}`}
-        title={
-          <>
-            Welcome back, {firstName}.
-          </>
-        }
-        subline="Your rides for today and this week, at a glance."
-        actions={
-          <Button
-            asChild
-            size="lg"
-            className="rounded-full text-ink"
-            style={{ background: "var(--role-accent)" }}
-          >
-            <Link href="/employee/adhoc">Request ad-hoc transport</Link>
-          </Button>
-        }
-      />
-
-      {/* Today's rides — the hero. */}
-      <TodaysScheduleCard
-        entries={todaysScheduleEntries}
-        title="Today's rides"
-      />
+      {/* Hero + board share the left column; the weather glass spans both
+          rows at top right, its top edge aligned with the welcome line —
+          so neither the hero nor the board goes full width. */}
+      <div className="grid grid-cols-1 gap-5 sm:grid-cols-[minmax(0,1fr)_160px]">
+        <DashboardHero
+          eyebrow={`${ROLE_LABELS[Role.EMPLOYEE]} · ${todayLabel}`}
+          title={<>Welcome back, {firstName}.</>}
+          subline="Your rides for today and this week, at a glance."
+          actions={
+            <Button
+              asChild
+              size="lg"
+              className="rounded-full text-ink"
+              style={{ background: "var(--role-accent)" }}
+            >
+              <Link href="/employee/adhoc">Request ad-hoc transport</Link>
+            </Button>
+          }
+        />
+        <WeatherWidget className="sm:col-start-2 sm:row-span-2 sm:row-start-1 sm:self-start" />
+        <TodaysScheduleCard
+          className="min-w-0"
+          entries={todaysScheduleEntries}
+          title="Today's rides"
+        />
+      </div>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
         <ThisWeekScheduleCard

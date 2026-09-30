@@ -143,8 +143,8 @@ export function RouteMemoryDiagnostics() {
                           </span>
                         ) : (
                           <span className="rounded-full border border-amber/40 bg-amber/10 px-2 py-0.5 text-[11px] font-medium text-amber-foreground">
-                            5 min/km estimate — teach more days
-                          </span>
+                              Untrained — finalize / teach more days
+                            </span>
                         )}
                       </td>
                     </tr>

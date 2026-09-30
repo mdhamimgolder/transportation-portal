@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
+import { dbErrorMessage } from "@/lib/db/retry";
 import { requireRole } from "@/lib/rbac/guards";
 import { Role, OFFICE_LOCATIONS } from "@/lib/constants/enums";
 import type { OfficeLocation } from "@/lib/constants/enums";
@@ -59,8 +60,12 @@ export async function setAllPickupPointCoordinatesAction(
     return { pickupPoint, addressId: address.id };
   }));
 
+  // Both plain employees AND fixed-arrival employees inherit the saved point
+  // coordinates — FIXED_ARRIVAL rows were previously excluded here, so their
+  // pick-up lat/lng never synced with this page (User Info showed "Not set"
+  // and generation couldn't resolve their point).
   await Promise.all(addresses.map(({ pickupPoint, addressId }) => prisma.user.updateMany({
-    where: { role: Role.EMPLOYEE, pickupPoint },
+    where: { role: { in: [Role.EMPLOYEE, Role.FIXED_ARRIVAL] }, pickupPoint },
     data: { pickupAddressId: addressId },
   })));
 
@@ -96,8 +101,9 @@ export async function setPickupPointCoordinatesAction(
     create: { addressText: pickupPoint, latitude, longitude },
   });
   await linkPickupPointsToAddress(pickupPoint, address.id);
+  // FIXED_ARRIVAL included — see the same comment in setAllPickupPointCoordinatesAction.
   await prisma.user.updateMany({
-    where: { role: Role.EMPLOYEE, pickupPoint },
+    where: { role: { in: [Role.EMPLOYEE, Role.FIXED_ARRIVAL] }, pickupPoint },
     data: { pickupAddressId: address.id },
   });
   revalidatePath("/facilities/pickup-point-coordinates");
@@ -195,75 +201,160 @@ export async function updateEmployeeProfileByFacilitiesAction(
     return { error: "Latitude must be between -90 and 90; longitude between -180 and 180." };
   }
 
-  const employee = await prisma.user.findUnique({ where: { id: userId } });
-  if (
-    !employee ||
-    (employee.role !== Role.EMPLOYEE && employee.role !== Role.FIXED_ARRIVAL)
-  ) {
-    return { error: "Employee not found." };
-  }
-
-  // Fixed-arrival employees lock their arrival time once; only Facilities can
-  // change it afterwards. The select always carries a value: a valid arrival
-  // time, or the "Not required / not set" sentinel which clears the field.
-  const fixedArrivalRaw = formData.get("fixedArrivalTime");
-  const fixedArrivalNormalized = normalizeArrivalTimeInput(
-    typeof fixedArrivalRaw === "string" ? fixedArrivalRaw : ""
-  );
-  if (employee.role === Role.FIXED_ARRIVAL) {
-    if (!fixedArrivalNormalized) {
-      return { error: "Please pick a valid fixed arrival time (10 PM through 6 AM)." };
-    }
+  try {
+    const employee = await prisma.user.findUnique({ where: { id: userId } });
     if (
-      fixedArrivalNormalized !== NO_TRANSPORT_VALUE &&
-      !ARRIVAL_TIME_OPTIONS.some((o) => o.value === fixedArrivalNormalized)
+      !employee ||
+      (employee.role !== Role.EMPLOYEE && employee.role !== Role.FIXED_ARRIVAL)
     ) {
-      return { error: "Invalid fixed arrival time." };
+      return { error: "Employee not found." };
     }
-  }
 
-  // Employee ID is unique in the database — catch collisions with a friendly
-  // message instead of a raw Prisma unique-constraint error. Any format is
-  // accepted; an empty value clears the field (column is nullable).
-  if (employeeCode) {
-    const codeOwner = await prisma.user.findUnique({
-      where: { employeeCode },
-      select: { id: true },
+    // Fixed-arrival employees lock their arrival time once; only Facilities can
+    // change it afterwards. The select always carries a value: a valid arrival
+    // time, or the "Not required / not set" sentinel which clears the field.
+    const fixedArrivalRaw = formData.get("fixedArrivalTime");
+    const fixedArrivalNormalized = normalizeArrivalTimeInput(
+      typeof fixedArrivalRaw === "string" ? fixedArrivalRaw : ""
+    );
+    if (employee.role === Role.FIXED_ARRIVAL) {
+      if (!fixedArrivalNormalized) {
+        return { error: "Please pick a valid fixed arrival time (10 PM through 6 AM)." };
+      }
+      if (
+        fixedArrivalNormalized !== NO_TRANSPORT_VALUE &&
+        !ARRIVAL_TIME_OPTIONS.some((o) => o.value === fixedArrivalNormalized)
+      ) {
+        return { error: "Invalid fixed arrival time." };
+      }
+    }
+
+    // Coordinates guard: when the fixed-arrival employee is linked to a pickup
+    // point, that point's Address row MUST carry the point's real coordinates —
+    // the route generators plan every fixed-arrival rider from this row, so a
+    // (0,0) or blank row would silently place the pickup in the Gulf of Guinea.
+    if (employee.role === Role.FIXED_ARRIVAL && employee.pickupAddressId) {
+      const linked = await prisma.address.findUnique({
+        where: { id: employee.pickupAddressId },
+        select: { addressText: true, latitude: true, longitude: true },
+      });
+      if (
+        !linked ||
+        (linked.latitude === 0 && linked.longitude === 0) ||
+        linked.latitude === null ||
+        linked.longitude === null
+      ) {
+        return {
+          error:
+            "The linked pick-up point has no coordinates. Set its latitude/longitude on the Pick-up Points page before saving this profile.",
+        };
+      }
+    }
+
+    // Employee ID is unique in the database — catch collisions with a friendly
+    // message instead of a raw Prisma unique-constraint error. Any format is
+    // accepted; an empty value clears the field (column is nullable).
+    if (employeeCode) {
+      const codeOwner = await prisma.user.findUnique({
+        where: { employeeCode },
+        select: { id: true },
+      });
+      if (codeOwner && codeOwner.id !== userId) {
+        return { error: `Employee ID ${employeeCode} is already used by another employee.` };
+      }
+    }
+
+    const homeAddress = await prisma.address.upsert({
+      where: { addressText: address },
+      update: { latitude: homeLatitude, longitude: homeLongitude },
+      create: { addressText: address, latitude: homeLatitude, longitude: homeLongitude },
     });
-    if (codeOwner && codeOwner.id !== userId) {
-      return { error: `Employee ID ${employeeCode} is already used by another employee.` };
+    const pickupAddress = await prisma.address.upsert({
+      where: { addressText: pickupPoint },
+      update: { latitude: pickupLatitude, longitude: pickupLongitude },
+      create: { addressText: pickupPoint, latitude: pickupLatitude, longitude: pickupLongitude },
+    });
+    await prisma.user.update({
+      where: { id: userId },
+      data: {
+        fullName,
+        employeeCode,
+        contactNumber,
+        address,
+        pickupPoint,
+        officeLocation,
+        homeAddressId: homeAddress.id,
+        pickupAddressId: pickupAddress.id,
+        ...(employee.role === Role.FIXED_ARRIVAL
+          ? {
+              fixedArrivalTime:
+                fixedArrivalNormalized === NO_TRANSPORT_VALUE ? null : fixedArrivalNormalized,
+            }
+          : {}),
+      },
+    });
+  } catch (error) {
+    return {
+      error: `Could not save the profile: ${dbErrorMessage(error)} — please try again.`,
+    };
+  }
+
+  revalidatePath("/facilities/user-info");
+  revalidatePath("/employee/profile");
+  revalidatePath("/fixed-arrival/my-schedule");
+  revalidatePath("/fixed-arrival/dashboard");
+  return { success: true };
+}
+
+export type FixedArrivalServiceState = { error?: string; success?: boolean };
+
+export type FixedArrivalServiceInput = {
+  active?: boolean;
+  arrivalTime?: string | null;
+};
+
+/**
+ * Facilities' per-row fixed-arrival controls for the User Info page: toggle the
+ * service switch (ON/OFF, independent of the saved time) and/or change the
+ * standing arrival time. Turning OFF keeps the time on the record so it can be
+ * restored instantly; mapping excludes OFF users (see ensureFixedArrivalSchedules).
+ */
+export async function updateFixedArrivalServiceAction(
+  userId: string,
+  input: FixedArrivalServiceInput
+): Promise<FixedArrivalServiceState> {
+  await requireRole([Role.FACILITIES, Role.SUPER_ADMIN]);
+
+  const employee = await prisma.user.findUnique({ where: { id: userId } });
+  if (!employee || employee.role !== Role.FIXED_ARRIVAL) {
+    return { error: "Fixed-arrival employee not found." };
+  }
+
+  const data: { fixedArrivalActive?: boolean; fixedArrivalTime?: string | null } = {};
+  if (typeof input.active === "boolean") {
+    data.fixedArrivalActive = input.active;
+  }
+
+  if (Object.hasOwn(input, "arrivalTime")) {
+    const raw = input.arrivalTime;
+    if (typeof raw === "string" && raw.length > 0) {
+      const normalized = normalizeArrivalTimeInput(raw);
+      if (
+        !normalized ||
+        (normalized !== NO_TRANSPORT_VALUE &&
+          !ARRIVAL_TIME_OPTIONS.some((o) => o.value === normalized))
+      ) {
+        return { error: "Invalid fixed arrival time — must be between 10 PM and 6 AM." };
+      }
+      data.fixedArrivalTime = normalized === NO_TRANSPORT_VALUE ? null : normalized;
+    } else if (raw === null) {
+      data.fixedArrivalTime = null;
     }
   }
 
-  const homeAddress = await prisma.address.upsert({
-    where: { addressText: address },
-    update: { latitude: homeLatitude, longitude: homeLongitude },
-    create: { addressText: address, latitude: homeLatitude, longitude: homeLongitude },
-  });
-  const pickupAddress = await prisma.address.upsert({
-    where: { addressText: pickupPoint },
-    update: { latitude: pickupLatitude, longitude: pickupLongitude },
-    create: { addressText: pickupPoint, latitude: pickupLatitude, longitude: pickupLongitude },
-  });
-  await prisma.user.update({
-    where: { id: userId },
-    data: {
-      fullName,
-      employeeCode,
-      contactNumber,
-      address,
-      pickupPoint,
-      officeLocation,
-      homeAddressId: homeAddress.id,
-      pickupAddressId: pickupAddress.id,
-      ...(employee.role === Role.FIXED_ARRIVAL
-        ? {
-            fixedArrivalTime:
-              fixedArrivalNormalized === NO_TRANSPORT_VALUE ? null : fixedArrivalNormalized,
-          }
-        : {}),
-    },
-  });
+  if (Object.keys(data).length === 0) return { success: true };
+
+  await prisma.user.update({ where: { id: userId }, data });
 
   revalidatePath("/facilities/user-info");
   revalidatePath("/employee/profile");
