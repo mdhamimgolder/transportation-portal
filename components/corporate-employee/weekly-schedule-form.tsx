@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useEffect, useState } from "react";
+import { useActionState, useState } from "react";
 import { useFormStatus } from "react-dom";
 import {
   submitCorporateWeeklySchedule,
@@ -53,9 +53,13 @@ export function CorporateWeeklyScheduleForm({
   const [values, setValues] = useState<string[]>(initialValues);
   const [confirmOpen, setConfirmOpen] = useState(false);
 
-  useEffect(() => {
+  // Adjust state during render when a new action result arrives
+  // (https://react.dev/learn/you-might-not-need-an-effect#adjusting-some-state-when-a-prop-changes).
+  const [prevState, setPrevState] = useState(state);
+  if (state !== prevState) {
+    setPrevState(state);
     if (state.success) setConfirmOpen(true);
-  }, [state.success]);
+  }
 
   function setDay(index: number, value: string) {
     setValues((prev) => prev.map((v, i) => (i === index ? value : v)));

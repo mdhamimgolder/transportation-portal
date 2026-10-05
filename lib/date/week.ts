@@ -8,6 +8,37 @@
  */
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
+const DHAKA_UTC_OFFSET_MINUTES = 6 * 60;
+
+/** Convert Dhaka wall-clock minutes on a UTC-midnight date key into a UTC instant. */
+export function dhakaDateTimeFromMinutes(dayDate: Date, minutes: number): Date {
+  return new Date(
+    Date.UTC(
+      dayDate.getUTCFullYear(),
+      dayDate.getUTCMonth(),
+      dayDate.getUTCDate(),
+      0,
+      minutes - DHAKA_UTC_OFFSET_MINUTES
+    )
+  );
+}
+
+/** Read a stored UTC instant as minutes from midnight in Asia/Dhaka. */
+export function dhakaMinutesOfDay(date: Date): number {
+  return (
+    (date.getUTCHours() * 60 +
+      date.getUTCMinutes() +
+      DHAKA_UTC_OFFSET_MINUTES) %
+    (24 * 60)
+  );
+}
+
+/** Add calendar days to a UTC-midnight date key without using host timezone. */
+export function addUtcCalendarDays(date: Date, days: number): Date {
+  const result = new Date(date);
+  result.setUTCDate(result.getUTCDate() + days);
+  return result;
+}
 
 function atMidnight(date: Date): Date {
   const d = new Date(date);

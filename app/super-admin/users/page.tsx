@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { requireRole } from "@/lib/rbac/guards";
 import { Role } from "@/lib/constants/enums";
 import { getAllUsers } from "@/lib/queries/users";
@@ -22,11 +23,17 @@ import {
 export default async function SuperAdminUsersPage({
   searchParams,
 }: {
-  searchParams: Promise<{ q?: string }>;
+  searchParams: Promise<{ q?: string; page?: string }>;
 }) {
   const session = await requireRole([Role.SUPER_ADMIN]);
-  const { q } = await searchParams;
-  const users = await getAllUsers(q);
+  const { q, page: pageParam } = await searchParams;
+  const result = await getAllUsers(q, Number(pageParam ?? 1));
+  const paginationHref = (page: number) => {
+    const params = new URLSearchParams();
+    if (q) params.set("q", q);
+    params.set("page", String(page));
+    return `/super-admin/users?${params}`;
+  };
 
   return (
     <div className="space-y-6">
@@ -63,14 +70,14 @@ export default async function SuperAdminUsersPage({
             </TableRow>
           </TableHeader>
           <TableBody>
-            {users.length === 0 ? (
+            {result.rows.length === 0 ? (
               <TableRow>
                 <TableCell colSpan={7} className="text-center text-muted-foreground">
                   No users found.
                 </TableCell>
               </TableRow>
             ) : (
-              users.map((user) => (
+              result.rows.map((user) => (
                 <TableRow key={user.id}>
                   <TableCell className="sticky left-0 z-10 bg-card font-medium">
                     {user.fullName}
@@ -116,6 +123,19 @@ export default async function SuperAdminUsersPage({
             )}
           </TableBody>
         </Table>
+      </div>
+      <div className="flex items-center justify-between text-sm">
+        <span className="text-muted-foreground">
+          {result.total.toLocaleString()} users · Page {result.page} of {result.pageCount}
+        </span>
+        <div className="flex gap-3">
+          {result.page > 1 ? (
+            <Link className="underline underline-offset-4" href={paginationHref(result.page - 1)}>Previous</Link>
+          ) : null}
+          {result.page < result.pageCount ? (
+            <Link className="underline underline-offset-4" href={paginationHref(result.page + 1)}>Next</Link>
+          ) : null}
+        </div>
       </div>
     </div>
   );

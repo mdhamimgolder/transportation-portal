@@ -1,8 +1,9 @@
 import "server-only";
 import nodemailer from "nodemailer";
-import type SMTPTransport from "nodemailer/lib/smtp-transport";
+import type SMTPPool from "nodemailer/lib/smtp-pool";
 import { env } from "@/lib/env";
 import { logger } from "@/lib/logger";
+import { escapeHtml, textToHtml } from "@/lib/html";
 
 /**
  * SMTP transporter, created on first send (never at module import) so importing
@@ -13,10 +14,18 @@ let transporter: nodemailer.Transporter | null = null;
 
 function getTransporter(): nodemailer.Transporter {
   if (!transporter) {
-    const options: SMTPTransport.Options = {
+    const options: SMTPPool.Options = {
       host: env.SMTP_HOST,
       port: env.SMTP_PORT,
       secure: true,
+      // Pooled connections: bulk sends reuse a few TLS sessions instead of
+      // opening one per recipient (providers throttle connection floods).
+      pool: true,
+      maxConnections: 3,
+      maxMessages: 100,
+      connectionTimeout: 15_000,
+      greetingTimeout: 10_000,
+      socketTimeout: 30_000,
       auth: {
         user: env.SMTP_USER,
         pass: env.SMTP_PASS,
@@ -35,9 +44,6 @@ function getTransporter(): nodemailer.Transporter {
 export function isEmailEnabled(): boolean {
   return env.NODE_ENV === "production";
 }
-
-/** @deprecated Prefer `isEmailEnabled()`. */
-export const EMAIL_ENABLED = false;
 
 export async function sendMail(params: {
   to: string;
@@ -58,7 +64,9 @@ export async function sendMail(params: {
       to,
       subject,
       text: body,
-      html: html || body,
+      // Plain-text bodies may contain user-supplied names/addresses — never
+      // send them as raw HTML.
+      html: html || textToHtml(body),
     });
     logger.info("mailer", "email sent", { to, subject });
   } catch (error) {
@@ -67,9 +75,7 @@ export async function sendMail(params: {
       subject,
       error: error instanceof Error ? error.message : String(error),
     });
-    throw new Error(
-      `Failed to send email: ${error instanceof Error ? error.message : String(error)}`
-    );
+    throw new Error("Failed to send email");
   }
 }
 
@@ -119,10 +125,7 @@ export async function trySendMail(params: {
       subject: params.subject,
       error: error instanceof Error ? error.message : String(error),
     });
-    return {
-      status: "FAILED",
-      error: error instanceof Error ? error.message : String(error),
-    };
+    return { status: "FAILED", error: "The email could not be sent." };
   }
 }
 
@@ -132,6 +135,9 @@ function credentialsEmailContent(params: {
   password: string;
 }): { subject: string; body: string; html: string } {
   const { to, fullName, password } = params;
+  const safeName = escapeHtml(fullName);
+  const safeTo = escapeHtml(to);
+  const safePassword = escapeHtml(password);
   return {
     subject: "Your Transportation Portal Account Has Been Created",
     body: `Hi ${fullName},\n\nYour account for the Transportation Portal has been created.\n\nLogin credentials:\nEmail: ${to}\nPassword: ${password}\n\nPlease change your password after signing in for the first time.\n\nBest regards,\nTransportation Team`,
@@ -141,16 +147,16 @@ function credentialsEmailContent(params: {
         <div style="border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 4px 4px; padding: 32px;">
           <h2 style="color: #1a1a2e; margin: 0 0 8px;">Your Account Has Been Created</h2>
           <p style="color: #6b7280; margin: 0 0 24px;">You can now sign in to the Transportation Portal.</p>
-          <p>Hi <strong>${fullName}</strong>,</p>
+          <p>Hi <strong>${safeName}</strong>,</p>
           <p>Your account is ready. Here are your login credentials:</p>
           <table style="width: 100%; border-collapse: collapse; margin: 16px 0;">
             <tr style="background: #f8f9fa;">
               <td style="padding: 10px; border: 1px solid #dee2e6; font-weight: bold; width: 120px;">Email</td>
-              <td style="padding: 10px; border: 1px solid #dee2e6; font-family: monospace;">${to}</td>
+              <td style="padding: 10px; border: 1px solid #dee2e6; font-family: monospace;">${safeTo}</td>
             </tr>
             <tr style="background: #f8f9fa;">
               <td style="padding: 10px; border: 1px solid #dee2e6; font-weight: bold;">Password</td>
-              <td style="padding: 10px; border: 1px solid #dee2e6; font-family: monospace;">${password}</td>
+              <td style="padding: 10px; border: 1px solid #dee2e6; font-family: monospace;">${safePassword}</td>
             </tr>
           </table>
           <p style="color: #b45309; font-weight: bold; margin-top: 16px;">Please change your password after signing in for the first time.</p>
@@ -183,9 +189,11 @@ export async function sendCredentialsEmailNow(params: {
     await sendMail({ to: params.to, subject, body, html });
     return isEmailEnabled() ? { status: "sent" } : { status: "skipped-dev" };
   } catch (error) {
-    return {
-      status: "failed",
+    logger.error("mailer", "credentials email failed", {
+      to: params.to,
       error: error instanceof Error ? error.message : String(error),
-    };
+    });
+    // Staff see a generic reason; the SMTP detail stays in the server log.
+    return { status: "failed", error: "The email could not be sent. Check the SMTP configuration." };
   }
 }

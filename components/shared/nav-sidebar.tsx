@@ -12,7 +12,6 @@ import {
   History,
   LayoutDashboard,
   LogOut,
-  Mail,
   Map,
   MapPin,
   Menu,
@@ -62,7 +61,6 @@ const ICONS: Record<string, LucideIcon> = {
   reports: BarChart3,
   audit: ScrollText,
   settings: Settings,
-  email: Mail,
 };
 
 function initialsOf(name: string): string {

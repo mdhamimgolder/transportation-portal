@@ -14,6 +14,7 @@ import {
   trainRoutePlannerFromHistory,
   type LearnFromHistoryResult,
 } from "@/actions/route-learning.actions";
+import { sanitizedActionError } from "@/lib/actions/action-error";
 
 /**
  * "Teach from manual plan" — ingest a MANUALLY made route plan as CSV.
@@ -106,7 +107,8 @@ export async function importManualRoutePlanCsv(
 ): Promise<ManualPlanImportState> {
   await requireRole([Role.FACILITIES, Role.SUPER_ADMIN]);
 
-  const file = formData.get("file");
+  try {
+    const file = formData.get("file");
   if (!(file instanceof File) || file.size === 0) {
     return { error: "Choose a CSV file to upload." };
   }
@@ -254,6 +256,34 @@ export async function importManualRoutePlanCsv(
 
   let stored = 0;
   let updated = 0;
+
+  // One batched read for every parsed row's composite key, instead of a
+  // findUnique per row (2N → 1+N queries: the single upsert below replaces
+  // the old find-then-update-or-create pair). Keys touched by this upload are
+  // added to the set as we go so duplicate rows within the file count the
+  // same way they did before (first = stored, repeat = updated).
+  const rowKey = (r: { date: Date; shiftKey: string; vehicleNumber: string }, employeeId: string) =>
+    `${r.date.getTime()}|${r.shiftKey}|${r.vehicleNumber}|${employeeId}`;
+  const touchedKeys = new Set(
+    (
+      await prisma.manualRoutePlanEntry.findMany({
+        where: {
+          employeeId: {
+            in: Array.from(
+              new Set(
+                parsed.map(
+                  (r) =>
+                    (r.email ? byEmail.get(r.email)?.id : byName.get(r.name.trim().toLowerCase())?.id) ??
+                    "__none__"
+                )
+              )
+            ),
+          },
+        },
+        select: { date: true, shiftKey: true, vehicleNumber: true, employeeId: true },
+      })
+    ).map((e) => rowKey(e, e.employeeId))
+  );
   for (const row of parsed) {
     const user = row.email ? byEmail.get(row.email) : byName.get(row.name.trim().toLowerCase());
     if (!user) {
@@ -289,7 +319,9 @@ export async function importManualRoutePlanCsv(
       arrivalMinutes: row.arrivalMinutes,
       sourceFile: file.name.slice(0, 120),
     };
-    const existing = await prisma.manualRoutePlanEntry.findUnique({
+    const key = rowKey(row, user.id);
+    const isUpdate = touchedKeys.has(key);
+    await prisma.manualRoutePlanEntry.upsert({
       where: {
         date_shiftKey_vehicleNumber_employeeId: {
           date: row.date,
@@ -298,12 +330,13 @@ export async function importManualRoutePlanCsv(
           employeeId: user.id,
         },
       },
+      update: data,
+      create: data,
     });
-    if (existing) {
-      await prisma.manualRoutePlanEntry.update({ where: { id: existing.id }, data });
+    touchedKeys.add(key);
+    if (isUpdate) {
       updated += 1;
     } else {
-      await prisma.manualRoutePlanEntry.create({ data });
       stored += 1;
     }
   }
@@ -323,4 +356,7 @@ export async function importManualRoutePlanCsv(
       learning: learning.success ? learning : undefined,
     },
   };
+  } catch (error) {
+    return sanitizedActionError("importManualRoutePlanCsv", error);
+  }
 }

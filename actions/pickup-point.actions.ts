@@ -3,8 +3,15 @@
 import { requireRole } from "@/lib/rbac/guards";
 import { Role } from "@/lib/constants/enums";
 import { prisma } from "@/lib/prisma";
+import type { Prisma } from "@/lib/generated/prisma/client";
+import { sanitizedActionError } from "@/lib/actions/action-error";
 import { revalidatePath } from "next/cache";
 import { syncPickupPointTimes } from "@/lib/routing/pickup-schedule";
+import {
+  createPickupPointSchema,
+  updatePickupPointSchema,
+  routePlanIdSchema,
+} from "@/lib/validation/schemas";
 
 /**
  * The (vehicleId, sequence) pair is UNIQUE at the database level — soft-deleted
@@ -38,14 +45,32 @@ async function clearInactiveRowsFromSequence(
 /**
  * Create a new pickup point for a vehicle
  */
+export type PickupPointWithAddress = Prisma.PickupPointGetPayload<{
+  include: { address: true };
+}>;
+
+export type PickupPointResult = {
+  success: boolean;
+  error?: string;
+  data?: PickupPointWithAddress;
+};
+
 export async function createPickupPoint(input: {
   vehicleId: string;
   addressId: string;
   name: string;
   sequence: number;
   baseETA?: string; // accepted for backward-compat; syncPickupPointTimes recomputes it
-}) {
+}): Promise<PickupPointResult> {
   await requireRole([Role.FACILITIES, Role.SUPER_ADMIN]);
+
+  const parsed = createPickupPointSchema.safeParse(input);
+  if (!parsed.success) {
+    return {
+      success: false,
+      error: parsed.error.issues[0]?.message ?? "Invalid pickup point details.",
+    };
+  }
 
   try {
     // The point name must be the LOCATION, never a resident's name. Real
@@ -54,7 +79,7 @@ export async function createPickupPoint(input: {
     // Properties row), so for those the name is forced to `addressText`.
     // Only coordinate-only rows ("23.75, 90.37") carry their name in `label`.
     const address = await prisma.address.findUnique({
-      where: { id: input.addressId },
+      where: { id: parsed.data.addressId },
       select: { addressText: true },
     });
     const isCoordinateText = (text: string): boolean =>
@@ -62,7 +87,7 @@ export async function createPickupPoint(input: {
     const name =
       address && !isCoordinateText(address.addressText)
         ? address.addressText
-        : input.name.trim();
+        : parsed.data.name;
     if (!name) {
       return { success: false, error: "Pickup point has no name" };
     }
@@ -72,8 +97,8 @@ export async function createPickupPoint(input: {
     // (vehicleId, sequence) index).
     const existing = await prisma.pickupPoint.findFirst({
       where: {
-        vehicleId: input.vehicleId,
-        sequence: input.sequence,
+        vehicleId: parsed.data.vehicleId,
+        sequence: parsed.data.sequence,
         isActive: true,
       },
     });
@@ -81,18 +106,18 @@ export async function createPickupPoint(input: {
     if (existing) {
       return {
         success: false,
-        error: `Sequence ${input.sequence} already exists for this vehicle`,
+        error: `Sequence ${parsed.data.sequence} already exists for this vehicle`,
       };
     }
-    await clearInactiveRowsFromSequence(input.vehicleId, input.sequence);
+    await clearInactiveRowsFromSequence(parsed.data.vehicleId, parsed.data.sequence);
 
     const point = await prisma.pickupPoint.create({
       data: {
         name,
-        sequence: input.sequence,
-        vehicleId: input.vehicleId,
-        addressId: input.addressId,
-        baseETA: input.baseETA ?? "20:00",
+        sequence: parsed.data.sequence,
+        vehicleId: parsed.data.vehicleId,
+        addressId: parsed.data.addressId,
+        baseETA: parsed.data.baseETA ?? "20:00",
         isActive: true,
       },
       include: { address: true },
@@ -100,7 +125,7 @@ export async function createPickupPoint(input: {
 
     // Sequence changed → recompute the remaining pickup times (first point
     // anchored on the vehicle's first pickup time / BASE ETA, trained legs only).
-    await syncPickupPointTimes(input.vehicleId).catch(() => null);
+    await syncPickupPointTimes(parsed.data.vehicleId).catch(() => null);
 
     revalidatePath("/facilities/vehicles");
 
@@ -108,7 +133,7 @@ export async function createPickupPoint(input: {
   } catch (error) {
     return {
       success: false,
-      error: error instanceof Error ? error.message : "Failed to create pickup point",
+      ...sanitizedActionError("createPickupPoint", error),
     };
   }
 }
@@ -122,12 +147,20 @@ export async function updatePickupPoint(input: {
   sequence?: number;
   baseETA?: string;
   isActive?: boolean;
-}) {
+}): Promise<PickupPointResult> {
   await requireRole([Role.FACILITIES, Role.SUPER_ADMIN]);
+
+  const parsed = updatePickupPointSchema.safeParse(input);
+  if (!parsed.success) {
+    return {
+      success: false,
+      error: parsed.error.issues[0]?.message ?? "Invalid pickup point details.",
+    };
+  }
 
   try {
     const current = await prisma.pickupPoint.findUnique({
-      where: { id: input.id },
+      where: { id: parsed.data.id },
       select: { vehicleId: true, sequence: true },
     });
     if (!current) {
@@ -137,38 +170,38 @@ export async function updatePickupPoint(input: {
     // Moving to an occupied position: an ACTIVE row is a real conflict; a
     // soft-deleted row squatting on the slot is pushed out of the way first
     // (it still holds the DB-unique (vehicleId, sequence) index).
-    if (input.sequence !== undefined && input.sequence !== current.sequence) {
+    if (parsed.data.sequence !== undefined && parsed.data.sequence !== current.sequence) {
       const clash = await prisma.pickupPoint.findFirst({
         where: {
           vehicleId: current.vehicleId,
-          sequence: input.sequence,
+          sequence: parsed.data.sequence,
           isActive: true,
-          id: { not: input.id },
+          id: { not: parsed.data.id },
         },
         select: { id: true },
       });
       if (clash) {
         return {
           success: false,
-          error: `Sequence ${input.sequence} already exists for this vehicle`,
+          error: `Sequence ${parsed.data.sequence} already exists for this vehicle`,
         };
       }
-      await clearInactiveRowsFromSequence(current.vehicleId, input.sequence);
+      await clearInactiveRowsFromSequence(current.vehicleId, parsed.data.sequence);
     }
 
     const point = await prisma.pickupPoint.update({
-      where: { id: input.id },
+      where: { id: parsed.data.id },
       data: {
-        ...(input.name && { name: input.name }),
-        ...(input.sequence && { sequence: input.sequence }),
-        ...(input.baseETA && { baseETA: input.baseETA }),
-        ...(input.isActive !== undefined && { isActive: input.isActive }),
+        ...(parsed.data.name && { name: parsed.data.name }),
+        ...(parsed.data.sequence !== undefined && { sequence: parsed.data.sequence }),
+        ...(parsed.data.baseETA && { baseETA: parsed.data.baseETA }),
+        ...(parsed.data.isActive !== undefined && { isActive: parsed.data.isActive }),
       },
       include: { address: true },
     });
 
     const owner = await prisma.pickupPoint.findUnique({
-      where: { id: input.id },
+      where: { id: parsed.data.id },
       select: { vehicleId: true },
     });
     if (owner) await syncPickupPointTimes(owner.vehicleId).catch(() => null);
@@ -179,7 +212,7 @@ export async function updatePickupPoint(input: {
   } catch (error) {
     return {
       success: false,
-      error: error instanceof Error ? error.message : "Failed to update pickup point",
+      ...sanitizedActionError("updatePickupPoint", error),
     };
   }
 }
@@ -187,17 +220,22 @@ export async function updatePickupPoint(input: {
 /**
  * Delete a pickup point (soft delete)
  */
-export async function deletePickupPoint(id: string) {
+export async function deletePickupPoint(
+  id: string
+): Promise<{ success: boolean; error?: string }> {
   await requireRole([Role.FACILITIES, Role.SUPER_ADMIN]);
+
+  const parsed = routePlanIdSchema.safeParse(id);
+  if (!parsed.success) return { success: false, error: "Invalid pickup point ID." };
 
   try {
     const owner = await prisma.pickupPoint.findUnique({
-      where: { id },
+      where: { id: parsed.data },
       select: { vehicleId: true },
     });
 
     await prisma.pickupPoint.update({
-      where: { id },
+      where: { id: parsed.data },
       data: { isActive: false },
     });
 
@@ -209,7 +247,7 @@ export async function deletePickupPoint(id: string) {
   } catch (error) {
     return {
       success: false,
-      error: error instanceof Error ? error.message : "Failed to delete pickup point",
+      ...sanitizedActionError("deletePickupPoint", error),
     };
   }
 }
@@ -217,26 +255,12 @@ export async function deletePickupPoint(id: string) {
 /**
  * Get all addresses for dropdown
  */
-export async function getAddressesForPickupPoints() {
-  await requireRole([Role.FACILITIES, Role.SUPER_ADMIN]);
-
-  try {
-    const addresses = await prisma.address.findMany({
-      select: {
-        id: true,
-        addressText: true,
-        label: true,
-        latitude: true,
-        longitude: true,
-      },
-      orderBy: { addressText: "asc" },
-    });
-
-    return { success: true, data: addresses };
-  } catch (error) {
-    return {
-      success: false,
-      error: error instanceof Error ? error.message : "Failed to fetch addresses",
-    };
-  }
-}
+export type PickupPointAddressOption = Prisma.AddressGetPayload<{
+  select: {
+    id: true;
+    addressText: true;
+    label: true;
+    latitude: true;
+    longitude: true;
+  };
+}>;

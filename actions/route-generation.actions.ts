@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { mapWithConcurrency } from "@/lib/concurrency";
 import { prisma } from "@/lib/prisma";
 import { requireRole } from "@/lib/rbac/guards";
 import { Role, WeeklyScheduleStatus } from "@/lib/constants/enums";
@@ -15,11 +16,14 @@ import {
   generate10PMRoutes,
   generate11PMRoutes,
   generate12AMPlus6AMRoutes,
-  errorMessage,
 } from "@/lib/routing/algorithms";
 import { trainRoutePlannerFromHistory } from "@/actions/route-learning.actions";
 import { Prisma } from "@/lib/generated/prisma/client";
 import type { RouteAnalysis } from "@/lib/routing/route-analysis.types";
+import {
+  sanitizedActionMessage,
+  throwSanitizedError,
+} from "@/lib/actions/action-error";
 
 export interface GenerateRoutesResult {
   success: boolean;
@@ -69,7 +73,9 @@ function parseDayString(value: string): Date {
  * pick them up by pickup point / home address automatically. Idempotent —
  * safe to call on every RUN MAPPING re-run.
  */
-async function ensureFixedArrivalSchedules(weekStartDate: Date): Promise<number> {
+async function ensureFixedArrivalSchedules(
+  weekStartDate: Date,
+): Promise<number> {
   const fixedUsers = await prisma.user.findMany({
     where: {
       role: Role.FIXED_ARRIVAL,
@@ -86,8 +92,12 @@ async function ensureFixedArrivalSchedules(weekStartDate: Date): Promise<number>
   // Parallel upserts — every employee/day is an independent row keyed by
   // (employeeId, weekStartDate) / (weeklyScheduleId, dayOfWeek), so the
   // outcome is identical to the sequential loop, just without the latency.
-  await Promise.all(
-    fixedUsers.map(async (user) => {
+  // Bounded (5 users × 5 days in flight) so a large roster can't exhaust the
+  // connection pool.
+  await mapWithConcurrency(
+    fixedUsers,
+    FIXED_ARRIVAL_CONCURRENCY,
+    async (user) => {
       const arrivalTime = user.fixedArrivalTime;
       if (!arrivalTime) return;
       const schedule = await prisma.weeklySchedule.upsert({
@@ -124,12 +134,14 @@ async function ensureFixedArrivalSchedules(weekStartDate: Date): Promise<number>
             },
           });
           ensured++;
-        })
+        }),
       );
-    })
+    },
   );
   return ensured;
 }
+
+const FIXED_ARRIVAL_CONCURRENCY = 5;
 
 /** Minutes-from-midnight reference for each arrival label (same day for 10/11
  * PM; late-night labels fall on the following calendar day, so 1440 + shift). */
@@ -145,8 +157,7 @@ const ARRIVAL_REF_MINUTES: Record<string, number> = {
   "6AM": 30 * 60,
 };
 
-function arrivalRefMinutes(label: string | null | undefined): number |
-  null {
+function arrivalRefMinutes(label: string | null | undefined): number | null {
   const norm = (label ?? "").toUpperCase().replace(/\s+/g, "");
   return ARRIVAL_REF_MINUTES[norm] ?? null;
 }
@@ -220,51 +231,66 @@ async function runRouteGeneration(weekStartDate: Date, dayIndexes: number[]) {
       },
     });
   } catch (error) {
-    throw new Error(`Failed to clear previous draft routes: ${errorMessage(error)}`);
+    console.error(
+      "[runRouteGeneration] Failed to clear previous draft routes:",
+      error,
+    );
+    throw new Error(
+      "Failed to clear previous draft routes — please try again.",
+    );
   }
 
-  // Generate routes for each scoped day (Monday = 0, Friday = 4)
-  for (const dayOfWeek of dayIndexes) {
+  // Days own distinct route-plan keys and can run together; the 10 PM → late-
+  // night ordering inside each day stays sequential for vehicle reuse.
+  const dayResults = await mapWithConcurrency(dayIndexes, 2, async (dayOfWeek) => {
     try {
       const result10PM = await generate10PMRoutes(weekStartDate, dayOfWeek);
-      summary.routesGenerated10PM += result10PM.routesCreated;
-      if (result10PM.errors.length > 0) {
-        details.errors10PM.push(...result10PM.errors);
-        summary.totalErrors += result10PM.errors.length;
-      }
-
       const result11PM = await generate11PMRoutes(weekStartDate, dayOfWeek);
-      summary.routesGenerated11PM += result11PM.routesCreated;
-      if (result11PM.errors.length > 0) {
-        details.errors11PM.push(...result11PM.errors);
-        summary.totalErrors += result11PM.errors.length;
-      }
-
       const result12AMPlus = await generate12AMPlus6AMRoutes(
         weekStartDate,
-        dayOfWeek
+        dayOfWeek,
       );
-      summary.routesGenerated12AMPlus += result12AMPlus.routesCreated;
-      if (result12AMPlus.errors.length > 0) {
-        details.errors12AMPlus.push(...result12AMPlus.errors);
-        summary.totalErrors += result12AMPlus.errors.length;
-      }
+      return { dayOfWeek, result10PM, result11PM, result12AMPlus };
     } catch (dayError) {
-      const errorMsg = errorMessage(dayError);
-      details.errors10PM.push(`Day ${dayOfWeek + 1}: ${errorMsg}`);
-      summary.totalErrors++;
+      console.error(
+        `[runRouteGeneration] Day ${dayOfWeek + 1} generation failed:`,
+        dayError,
+      );
+      return { dayOfWeek, failed: true as const };
     }
+  });
+
+  for (const dayResult of dayResults) {
+    if ("failed" in dayResult) {
+      details.errors10PM.push(
+        `Day ${dayResult.dayOfWeek + 1}: An unexpected error occurred while generating routes.`,
+      );
+      summary.totalErrors++;
+      continue;
+    }
+
+    summary.routesGenerated10PM += dayResult.result10PM.routesCreated;
+    details.errors10PM.push(...dayResult.result10PM.errors);
+    summary.totalErrors += dayResult.result10PM.errors.length;
+
+    summary.routesGenerated11PM += dayResult.result11PM.routesCreated;
+    details.errors11PM.push(...dayResult.result11PM.errors);
+    summary.totalErrors += dayResult.result11PM.errors.length;
+
+    summary.routesGenerated12AMPlus += dayResult.result12AMPlus.routesCreated;
+    details.errors12AMPlus.push(...dayResult.result12AMPlus.errors);
+    summary.totalErrors += dayResult.result12AMPlus.errors.length;
   }
 
   return { summary, details, learning };
 }
 
 export async function generateWeeklyRoutes(
-  weekStartDateStr: string
+  weekStartDateStr: string,
 ): Promise<GenerateRoutesResult> {
-  try {
-    await requireRole([Role.FACILITIES, Role.SUPER_ADMIN]);
+  await requireRole([Role.FACILITIES, Role.SUPER_ADMIN]);
 
+  try {
     const parsed = parseDayString(weekStartDateStr);
     if (isNaN(parsed.getTime())) {
       throw new Error("Invalid week start date format");
@@ -274,7 +300,7 @@ export async function generateWeeklyRoutes(
 
     const { summary, details, learning } = await runRouteGeneration(
       weekStartDate,
-      [0, 1, 2, 3, 4]
+      [0, 1, 2, 3, 4],
     );
 
     revalidatePath("/facilities/route-planning");
@@ -294,7 +320,7 @@ export async function generateWeeklyRoutes(
       },
     };
   } catch (error) {
-    const errorMsg = errorMessage(error);
+    const errorMsg = sanitizedActionMessage("generateWeeklyRoutes", error);
     return {
       success: false,
       weekStartDate: weekStartDateStr,
@@ -325,11 +351,11 @@ export async function generateWeeklyRoutes(
  */
 export async function generateDayRoutes(
   weekStartDateStr: string,
-  dayIndex: number
+  dayIndex: number,
 ): Promise<GenerateRoutesResult> {
-  try {
-    await requireRole([Role.FACILITIES, Role.SUPER_ADMIN]);
+  await requireRole([Role.FACILITIES, Role.SUPER_ADMIN]);
 
+  try {
     const parsed = parseDayString(weekStartDateStr);
     if (isNaN(parsed.getTime())) {
       throw new Error("Invalid week start date format");
@@ -342,7 +368,7 @@ export async function generateDayRoutes(
 
     const { summary, details, learning } = await runRouteGeneration(
       weekStartDate,
-      [dayIndex]
+      [dayIndex],
     );
 
     revalidatePath("/facilities/route-planning");
@@ -363,7 +389,7 @@ export async function generateDayRoutes(
       },
     };
   } catch (error) {
-    const errorMsg = errorMessage(error);
+    const errorMsg = sanitizedActionMessage("generateDayRoutes", error);
     return {
       success: false,
       weekStartDate: weekStartDateStr,
@@ -405,40 +431,43 @@ export type WeekRouteOverview = WeekRouteOverviewDay[];
  * used by the Auto Route Planner before/after running mapping.
  */
 export async function getWeekRouteOverview(
-  weekStartDateStr: string
+  weekStartDateStr: string,
 ): Promise<WeekRouteOverview> {
-  try {
-    await requireRole([Role.FACILITIES, Role.SUPER_ADMIN]);
+  await requireRole([Role.FACILITIES, Role.SUPER_ADMIN]);
 
+  try {
     const weekStartDate = toUtcMidnight(
-      getMondayOfWeek(parseDayString(weekStartDateStr))
+      getMondayOfWeek(parseDayString(weekStartDateStr)),
     );
     const days = getWeekDays(weekStartDate);
 
-  const [approvedDays, routes] = await Promise.all([
-    prisma.weeklyScheduleDay.findMany({
-      where: {
-        needsTransport: true,
-        weeklySchedule: { status: "APPROVED", weekStartDate },
-      },
-      select: { dayOfWeek: true },
-    }),
-    prisma.routePlan.findMany({
-      where: { weekStartDate },
-      select: {
-        dayOfWeek: true,
-        arrivalTime: true,
-        status: true,
-      },
-    }),
-  ]);
+    const [approvedDays, routes] = await Promise.all([
+      prisma.weeklyScheduleDay.findMany({
+        where: {
+          needsTransport: true,
+          weeklySchedule: { status: "APPROVED", weekStartDate },
+        },
+        select: { dayOfWeek: true },
+      }),
+      prisma.routePlan.findMany({
+        where: { weekStartDate },
+        select: {
+          dayOfWeek: true,
+          arrivalTime: true,
+          status: true,
+        },
+      }),
+    ]);
 
-  const approvedByDay = new Map<number, number>();
-  for (const day of approvedDays) {
-    approvedByDay.set(day.dayOfWeek, (approvedByDay.get(day.dayOfWeek) ?? 0) + 1);
-  }
+    const approvedByDay = new Map<number, number>();
+    for (const day of approvedDays) {
+      approvedByDay.set(
+        day.dayOfWeek,
+        (approvedByDay.get(day.dayOfWeek) ?? 0) + 1,
+      );
+    }
 
-  return days.map((dayDate, idx) => {
+    return days.map((dayDate, idx) => {
       const dayRoutes = routes.filter((r) => r.dayOfWeek === idx);
       const isLateNight = (t: string) =>
         ["12 AM", "1 AM", "2 AM", "3 AM", "4 AM", "5 AM", "6 AM"].includes(t);
@@ -450,103 +479,14 @@ export async function getWeekRouteOverview(
         byShift: {
           "10PM": dayRoutes.filter((r) => r.arrivalTime === "10 PM").length,
           "11PM": dayRoutes.filter((r) => r.arrivalTime === "11 PM").length,
-          "12AMPlus": dayRoutes.filter((r) => isLateNight(r.arrivalTime)).length,
+          "12AMPlus": dayRoutes.filter((r) => isLateNight(r.arrivalTime))
+            .length,
         },
         finalized: dayRoutes.filter((r) => r.status === "FINALIZED").length,
       };
     });
   } catch (error) {
-    throw new Error(`Failed to load the week overview: ${errorMessage(error)}`);
-  }
-}
-
-/**
- * Get pending routes for review (used by the Route Planning dashboard).
- */
-export async function getPendingRoutes(dayDate: Date) {
-  try {
-    await requireRole([Role.FACILITIES, Role.SUPER_ADMIN]);
-
-    const routes = await prisma.routePlan.findMany({
-      where: {
-        dayDate: {
-          gte: new Date(dayDate.setHours(0, 0, 0, 0)),
-          lt: new Date(dayDate.setHours(23, 59, 59, 999)),
-        },
-        status: { in: ["DRAFT", "UNDER_REVIEW"] },
-      },
-      include: {
-        vehicle: true,
-        tripAssignments: {
-          include: {
-            employee: true,
-            pickupAddress: true,
-          },
-        },
-        previousRoutePlan: true,
-      },
-      orderBy: [{ arrivalTime: "asc" }, { vehicleId: "asc" }],
-    });
-
-    return routes;
-  } catch (error) {
-    throw new Error(`Failed to fetch pending routes: ${errorMessage(error)}`);
-  }
-}
-
-/**
- * Get route statistics for a day (used by the Route Planning dashboard).
- */
-export async function getRouteDayStats(dayDate: Date) {
-  try {
-    await requireRole([Role.FACILITIES, Role.SUPER_ADMIN]);
-
-    const startOfDay = new Date(dayDate.setHours(0, 0, 0, 0));
-    const endOfDay = new Date(dayDate.setHours(23, 59, 59, 999));
-
-    const routes = await prisma.routePlan.findMany({
-      where: {
-        dayDate: {
-          gte: startOfDay,
-          lte: endOfDay,
-        },
-      },
-      include: {
-        tripAssignments: true,
-      },
-    });
-
-    return {
-      totalRoutes: routes.length,
-      routesByStatus: {
-        draft: routes.filter((r) => r.status === "DRAFT").length,
-        underReview: routes.filter((r) => r.status === "UNDER_REVIEW").length,
-        finalized: routes.filter((r) => r.status === "FINALIZED").length,
-        executed: routes.filter((r) => r.status === "EXECUTED").length,
-      },
-      routesByShift: {
-        "10PM": routes.filter((r) => r.arrivalTime === "10 PM").length,
-        "11PM": routes.filter((r) => r.arrivalTime === "11 PM").length,
-        "12AMPlus": routes.filter((r) =>
-          ["12 AM", "1 AM", "2 AM", "3 AM", "4 AM", "5 AM", "6 AM"].includes(
-            r.arrivalTime
-          )
-        ).length,
-      },
-      totalEmployeesAssigned: routes.reduce(
-        (sum, r) => sum + r.tripAssignments.length,
-        0
-      ),
-      capacityUtilization: {
-        avg: Math.round(
-          (routes.reduce((sum, r) => sum + r.tripAssignments.length, 0) /
-            (routes.length * 5)) *
-            100
-        ),
-      },
-    };
-  } catch (error) {
-    throw new Error(`Failed to fetch route stats: ${errorMessage(error)}`);
+    throwSanitizedError("getWeekRouteOverview", error);
   }
 }
 
@@ -615,7 +555,14 @@ const PLAN_DETAIL_INCLUDE = {
   vehicle: true,
   tripAssignments: {
     include: {
-      employee: true,
+      employee: {
+        select: {
+          fullName: true,
+          employeeCode: true,
+          role: true,
+          address: true,
+        },
+      },
       pickupAddress: true,
       pickupPoint: { include: { address: true } },
     },
@@ -631,10 +578,12 @@ type PlanDetailRow = Prisma.RoutePlanGetPayload<{
  *  Shared by the week breakdown and the single-route refresh so the two can
  *  never drift apart. */
 function mapPlanToDetail(plan: PlanDetailRow): GeneratedRouteDetail {
-  const office = officeCoordinatesFor(plan.officeLocation ?? plan.vehicle.officeLocation);
+  const office = officeCoordinatesFor(
+    plan.officeLocation ?? plan.vehicle.officeLocation,
+  );
   const arrivalRef = arrivalRefMinutes(plan.arrivalTime);
   const tripMinutes = plan.tripAssignments.map((t) =>
-    t.pickupTime ? hhmmToMinutes(t.pickupTime) : null
+    t.pickupTime ? hhmmToMinutes(t.pickupTime) : null,
   );
   const firstPickupMin = tripMinutes.find((m) => m != null) ?? null;
   const pickupDriveMinutes =
@@ -652,8 +601,8 @@ function mapPlanToDetail(plan: PlanDetailRow): GeneratedRouteDetail {
           Math.round(
             (plan.estimatedCompletionTime.getTime() -
               plan.departureTime.getTime()) /
-              60000
-          ) - pickupDriveMinutes
+              60000,
+          ) - pickupDriveMinutes,
         )
       : null;
   const rawAnalysis = plan.routeAnalysis as unknown;
@@ -755,13 +704,13 @@ function mapPlanToDetail(plan: PlanDetailRow): GeneratedRouteDetail {
  *  employees are on which vehicle per shift, with their pickup times.
  */
 export async function getGeneratedRouteDetails(
-  weekStartDateStr: string
+  weekStartDateStr: string,
 ): Promise<GeneratedRouteDay[]> {
-  try {
-    await requireRole([Role.FACILITIES, Role.SUPER_ADMIN]);
+  await requireRole([Role.FACILITIES, Role.SUPER_ADMIN]);
 
+  try {
     const weekStartDate = toUtcMidnight(
-      getMondayOfWeek(parseDayString(weekStartDateStr))
+      getMondayOfWeek(parseDayString(weekStartDateStr)),
     );
 
     const plans = await prisma.routePlan.findMany({
@@ -837,9 +786,7 @@ export async function getGeneratedRouteDetails(
       routes: byDay.get(idx) ?? [],
     }));
   } catch (error) {
-    throw new Error(
-      `Failed to load the generated routes: ${errorMessage(error)}`
-    );
+    throwSanitizedError("getGeneratedRouteDetails", error);
   }
 }
 
@@ -847,11 +794,11 @@ export async function getGeneratedRouteDetails(
  *  row reorder, employee move, apply, finalize) — the planner patches a single
  *  card instead of re-fetching the entire week on every change. */
 export async function getRoutePlanDetail(
-  routePlanId: string
+  routePlanId: string,
 ): Promise<GeneratedRouteDetail | null> {
-  try {
-    await requireRole([Role.FACILITIES, Role.SUPER_ADMIN]);
+  await requireRole([Role.FACILITIES, Role.SUPER_ADMIN]);
 
+  try {
     const plan = await prisma.routePlan.findUnique({
       where: { id: routePlanId },
       include: PLAN_DETAIL_INCLUDE,
@@ -860,8 +807,6 @@ export async function getRoutePlanDetail(
 
     return mapPlanToDetail(plan);
   } catch (error) {
-    throw new Error(
-      `Failed to refresh the route: ${errorMessage(error)}`
-    );
+    throwSanitizedError("getRoutePlanDetail", error);
   }
 }

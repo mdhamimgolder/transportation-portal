@@ -96,20 +96,3 @@ export function useVehicleGroups(routes: GeneratedRouteDetail[]): VehicleGroup[]
     return result;
   }, [routes]);
 }
-
-export function flattenTrips(groups: VehicleGroup[]): { trip: GeneratedRouteTrip; routeId: string; arrivalTime: string; vehicleId: string }[] {
-  const result: { trip: GeneratedRouteTrip; routeId: string; arrivalTime: string; vehicleId: string }[] = [];
-  for (const group of groups) {
-    for (const shift of group.shifts) {
-      for (const trip of shift.trips) {
-        result.push({
-          trip,
-          routeId: shift.route.id,
-          arrivalTime: shift.arrivalTime,
-          vehicleId: group.vehicleId,
-        });
-      }
-    }
-  }
-  return result;
-}

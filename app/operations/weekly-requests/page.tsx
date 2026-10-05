@@ -1,7 +1,16 @@
 import { requireRole } from "@/lib/rbac/guards";
 import { Role } from "@/lib/constants/enums";
 import { prisma } from "@/lib/prisma";
-import { formatShortDate, getWeekDays, getSubmissionWindow, toUtcMidnight, DAY_LABELS } from "@/lib/date/week";
+import {
+  addUtcCalendarDays,
+  formatShortDate,
+  getMondayOfWeek,
+  getWeekDays,
+  getSubmissionWindow,
+  startOfToday,
+  toUtcMidnight,
+  DAY_LABELS,
+} from "@/lib/date/week";
 import { getTransportSettings } from "@/lib/queries/settings";
 import { NO_TRANSPORT_VALUE, ARRIVAL_TIME_OPTIONS } from "@/lib/constants/arrival-times";
 import { MAX_UNFILTERED_ROWS } from "@/lib/constants/limits";
@@ -36,54 +45,70 @@ export default async function WeeklyRequestsPage({
   const params = await searchParams;
   const q = params.q?.trim().toLowerCase() ?? "";
   const weekFilter = params.week;
+  const thisMonday = toUtcMidnight(getMondayOfWeek(startOfToday()));
+  const nextMonday = addUtcCalendarDays(thisMonday, 7);
+  const formatWeekOptionLabel = (weekStartDate: Date) => {
+    const days = getWeekDays(weekStartDate);
+    const weekType =
+      weekStartDate.getTime() === thisMonday.getTime()
+        ? " (this week)"
+        : weekStartDate.getTime() === nextMonday.getTime()
+          ? " (next week)"
+          : "";
+    return `${formatShortDate(days[0])} – ${formatShortDate(days[4])}${weekType}`;
+  };
 
-  const distinctWeeks = await prisma.weeklySchedule.findMany({
-    select: { weekStartDate: true },
-    distinct: ["weekStartDate"],
-    orderBy: { weekStartDate: "desc" },
-  });
+  // Independent reads in parallel. The search filter runs in the database
+  // (before `take`), so a match beyond the newest N rows is still found.
+  const [distinctWeeks, filteredSchedules, employees, settings] = await Promise.all([
+    prisma.weeklySchedule.groupBy({
+      by: ["weekStartDate"],
+      orderBy: { weekStartDate: "desc" },
+    }),
+    prisma.weeklySchedule.findMany({
+      where: {
+        ...(weekFilter ? { weekStartDate: new Date(weekFilter) } : {}),
+        ...(q
+          ? {
+              employee: {
+                OR: [
+                  { fullName: { contains: q, mode: "insensitive" as const } },
+                  { email: { contains: q, mode: "insensitive" as const } },
+                ],
+              },
+            }
+          : {}),
+      },
+      include: { employee: true, days: true },
+      orderBy: { submittedAt: "desc" },
+      take: MAX_UNFILTERED_ROWS,
+    }),
+    prisma.user.findMany({
+      where: { role: Role.EMPLOYEE, isActive: true },
+      select: {
+        id: true,
+        fullName: true,
+        employeeCode: true,
+        email: true,
+        contactNumber: true,
+        address: true,
+      },
+      orderBy: { fullName: "asc" },
+    }),
+    getTransportSettings(),
+  ]);
 
   const weekOptions: WeekOption[] = distinctWeeks.map(({ weekStartDate }) => {
-    const days = getWeekDays(weekStartDate);
     return {
       value: weekStartDate.toISOString(),
-      label: `${formatShortDate(days[0])} – ${formatShortDate(days[4])}`,
+      label: formatWeekOptionLabel(weekStartDate),
     };
   });
-
-  const schedules = await prisma.weeklySchedule.findMany({
-    where: weekFilter ? { weekStartDate: new Date(weekFilter) } : undefined,
-    include: { employee: true, days: true },
-    orderBy: { submittedAt: "desc" },
-    take: MAX_UNFILTERED_ROWS,
-  });
-
-  const filteredSchedules = q
-    ? schedules.filter(
-        (s) =>
-          s.employee.fullName.toLowerCase().includes(q) ||
-          s.employee.email.toLowerCase().includes(q)
-      )
-    : schedules;
 
   const reviewerNames = await getUserNamesByIds(
     filteredSchedules.map((s) => s.reviewedById)
   );
 
-  const employees = await prisma.user.findMany({
-    where: { role: Role.EMPLOYEE, isActive: true },
-    select: {
-      id: true,
-      fullName: true,
-      employeeCode: true,
-      email: true,
-      contactNumber: true,
-      address: true,
-    },
-    orderBy: { fullName: "asc" },
-  });
-
-  const settings = await getTransportSettings();
   const onBehalfWindow = getSubmissionWindow(
     new Date(),
     settings.weeklyLockDayOfWeek,
@@ -97,7 +122,6 @@ export default async function WeeklyRequestsPage({
     dateLabel: formatShortDate(date),
   }));
 
-  const currentWeekValue = toUtcMidnight(onBehalfWindow.weekStartDate).toISOString();
   const uploadWeekOptions: WeekOption[] = (() => {
     // Rolling set of recent Mondays (newest -> oldest) so a fully-cleaned or
     // backfill week stays uploadable even when it currently has 0 submissions
@@ -105,18 +129,20 @@ export default async function WeeklyRequestsPage({
     // action normalizes to the canonical UTC-midnight Monday key, so option
     // values must match that key.
     const byValue = new Map<string, WeekOption>();
-    const currentWeekMs = toUtcMidnight(onBehalfWindow.weekStartDate).getTime();
+    const submissionWeekStartMs = toUtcMidnight(onBehalfWindow.weekStartDate).getTime();
     for (let i = 0; i < RECENT_UPLOAD_WEEKS; i++) {
-      const start = new Date(currentWeekMs - i * 7 * 24 * 60 * 60 * 1000);
-      const days = getWeekDays(start);
+      const start = new Date(submissionWeekStartMs - i * 7 * 24 * 60 * 60 * 1000);
       byValue.set(start.toISOString(), {
         value: start.toISOString(),
-        label: `${formatShortDate(days[0])} – ${formatShortDate(days[4])}${
-          start.toISOString() === currentWeekValue ? " (current)" : ""
-        }`,
+        label: formatWeekOptionLabel(start),
       });
     }
-    for (const w of weekOptions) byValue.set(w.value, w);
+    for (const w of weekOptions) {
+      byValue.set(w.value, {
+        ...w,
+        label: formatWeekOptionLabel(new Date(w.value)),
+      });
+    }
     return [...byValue.values()];
   })();
 

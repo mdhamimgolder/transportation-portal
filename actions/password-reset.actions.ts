@@ -1,18 +1,25 @@
 "use server";
 
 import { after } from "next/server";
-import { randomBytes } from "node:crypto";
-import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { hashPassword } from "@/lib/auth/password";
+import { auditEntry } from "@/lib/audit";
+import {
+  RESET_TOKEN_TTL_LABEL,
+  RESET_TOKEN_TTL_MS,
+  createResetToken,
+  hashResetToken,
+} from "@/lib/auth/reset-token";
+import { appBaseUrl } from "@/lib/env";
+import { logger } from "@/lib/logger";
 import { sendMailBackground } from "@/lib/mailer";
+import { RATE_LIMITS, clientIp, consumeRateLimit } from "@/lib/rate-limit";
 import {
   forgotPasswordSchema,
   resetPasswordSchema,
 } from "@/lib/validation/schemas";
-
-const RESET_TOKEN_TTL_MS = 60 * 60 * 1000; // 1 hour
+import { sanitizedActionError } from "@/lib/actions/action-error";
 
 export type RequestPasswordResetState = {
   error?: string;
@@ -28,36 +35,65 @@ export async function requestPasswordResetAction(
     return { error: parsed.error.issues[0]?.message ?? "Invalid input" };
   }
 
-  const email = parsed.data.email.toLowerCase();
-  const user = await prisma.user.findUnique({ where: { email } });
+  // Public entry point — intentionally no requireAuth/requireRole.
+  try {
+    const email = parsed.data.email.toLowerCase();
 
-  // Always report success, whether or not the account exists, to avoid
-  // leaking which emails have accounts.
-  if (user && user.isActive) {
-    const token = randomBytes(32).toString("hex");
-    await prisma.user.update({
-      where: { id: user.id },
-      data: {
-        passwordResetToken: token,
-        passwordResetExpires: new Date(Date.now() + RESET_TOKEN_TTL_MS),
-      },
+    const [ipAllowed, emailAllowed] = await Promise.all([
+      consumeRateLimit(RATE_LIMITS.resetRequestByIp, await clientIp()),
+      consumeRateLimit(RATE_LIMITS.resetRequestByEmail, email),
+    ]);
+    if (!ipAllowed) {
+      return { error: "Too many reset requests. Please try again later." };
+    }
+    // Over the per-email limit: report the same generic success so the
+    // response never reveals whether the account exists — just don't send.
+    if (!emailAllowed) return { success: true };
+
+    const user = await prisma.user.findUnique({
+      where: { email },
+      select: { id: true, email: true, fullName: true, isActive: true },
     });
 
-    const headerList = await headers();
-    const host = headerList.get("host") ?? "localhost:3000";
-    const protocol = host.startsWith("localhost") ? "http" : "https";
-    const resetUrl = `${protocol}://${host}/reset-password/${token}`;
+    // Always report success, whether or not the account exists, to avoid
+    // leaking which emails have accounts.
+    if (user && user.isActive) {
+      const baseUrl = appBaseUrl();
+      if (!baseUrl) {
+        logger.error("password-reset", "APP_URL is not configured; reset email not sent");
+        return { success: true };
+      }
 
-    after(async () => {
-      await sendMailBackground({
-        to: user.email,
-        subject: "Reset your Transportation Portal password",
-        body: `Hi ${user.fullName},\n\nUse the link below to reset your password. This link expires in 1 hour.\n\n${resetUrl}\n\nIf you didn't request this, you can ignore this email.`,
+      const { token, tokenHash } = createResetToken();
+      await prisma.user.update({
+        where: { id: user.id },
+        data: {
+          passwordResetToken: tokenHash,
+          passwordResetExpires: new Date(Date.now() + RESET_TOKEN_TTL_MS),
+        },
       });
-    });
-  }
 
-  return { success: true };
+      const resetUrl = `${baseUrl}/reset-password/${token}`;
+
+      after(async () => {
+        await sendMailBackground({
+          to: user.email,
+          subject: "Reset your Transportation Portal password",
+          body: `Hi ${user.fullName},
+
+Use the link below to reset your password. This link expires in ${RESET_TOKEN_TTL_LABEL} and can be used once.
+
+${resetUrl}
+
+If you didn't request this, you can ignore this email.`,
+        });
+      });
+    }
+
+    return { success: true };
+  } catch (error) {
+    return sanitizedActionError("requestPasswordResetAction", error);
+  }
 }
 
 export type ResetPasswordState = {
@@ -78,29 +114,59 @@ export async function resetPasswordAction(
     return { error: parsed.error.issues[0]?.message ?? "Invalid input" };
   }
 
-  const user = await prisma.user.findUnique({
-    where: { passwordResetToken: parsed.data.token },
-  });
+  // Public entry point — intentionally no requireAuth/requireRole.
+  try {
+    if (!(await consumeRateLimit(RATE_LIMITS.resetSubmitByIp, await clientIp()))) {
+      return { error: "Too many attempts. Please try again later." };
+    }
 
-  if (
-    !user ||
-    !user.isActive ||
-    !user.passwordResetExpires ||
-    user.passwordResetExpires.getTime() < Date.now()
-  ) {
-    return { error: "This reset link is invalid or has expired." };
+    const tokenHash = hashResetToken(parsed.data.token);
+    const user = await prisma.user.findUnique({
+      where: { passwordResetToken: tokenHash },
+      select: { id: true, role: true, isActive: true },
+    });
+    if (!user || !user.isActive) {
+      return { error: "This reset link is invalid or has expired." };
+    }
+
+    const passwordHash = await hashPassword(parsed.data.newPassword);
+    // Consume the token atomically: the WHERE re-checks the hash + expiry, so
+    // two concurrent submissions of the same link can't both succeed.
+    const consumed = await prisma.$transaction(async (tx) => {
+      const result = await tx.user.updateMany({
+        where: {
+          id: user.id,
+          passwordResetToken: tokenHash,
+          passwordResetExpires: { gt: new Date() },
+        },
+        data: {
+          passwordHash,
+          mustChangePassword: false,
+          passwordResetToken: null,
+          passwordResetExpires: null,
+        },
+      });
+      if (result.count !== 1) return false;
+
+      await tx.session.deleteMany({ where: { userId: user.id } });
+      await auditEntry(
+        { id: user.id, role: user.role },
+        {
+          action: "RESET_PASSWORD",
+          entityType: "User",
+          entityId: user.id,
+          description: "User reset their password via an emailed link",
+        },
+        tx
+      );
+      return true;
+    });
+    if (!consumed) {
+      return { error: "This reset link is invalid or has expired." };
+    }
+
+    redirect("/login?reset=success");
+  } catch (error) {
+    return sanitizedActionError("resetPasswordAction", error);
   }
-
-  const passwordHash = await hashPassword(parsed.data.newPassword);
-  await prisma.user.update({
-    where: { id: user.id },
-    data: {
-      passwordHash,
-      mustChangePassword: false,
-      passwordResetToken: null,
-      passwordResetExpires: null,
-    },
-  });
-
-  redirect("/login?reset=success");
 }

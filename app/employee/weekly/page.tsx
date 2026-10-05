@@ -2,12 +2,14 @@ import { requireRole } from "@/lib/rbac/guards";
 import { Role } from "@/lib/constants/enums";
 import { prisma } from "@/lib/prisma";
 import {
+  addUtcCalendarDays,
+  getMondayOfWeek,
   getWeekDays,
-  getSubmissionWindow,
+  startOfToday,
+  toUtcMidnight,
   DAY_LABELS,
   formatShortDate,
 } from "@/lib/date/week";
-import { getTransportSettings } from "@/lib/queries/settings";
 import { StatusBadge } from "@/components/shared/status-badge";
 import { WeeklyScheduleTable, type ScheduleDay } from "@/components/employee/weekly-schedule-table";
 
@@ -46,22 +48,13 @@ function toWeekDays({ weekStartDate, days }: {
 export default async function WeeklySchedulePage() {
   const session = await requireRole([Role.EMPLOYEE]);
 
-  const settings = await getTransportSettings();
-  const window = getSubmissionWindow(
-    new Date(),
-    settings.weeklyLockDayOfWeek,
-    settings.weeklyLockHour,
-    settings.weeklyLockMinute
-  );
-
-  // Employees see the currently-open submission week plus the one before it.
-  const thisMonday = window.weekStartDate;
-  const prevMonday = new Date(thisMonday.getTime() - 7 * 24 * 60 * 60 * 1000);
+  const thisMonday = toUtcMidnight(getMondayOfWeek(startOfToday()));
+  const nextMonday = addUtcCalendarDays(thisMonday, 7);
 
   const schedules = await prisma.weeklySchedule.findMany({
     where: {
       employeeId: session.id,
-      weekStartDate: { in: [thisMonday, prevMonday] },
+      weekStartDate: { in: [thisMonday, nextMonday] },
     },
     include: {
       days: { include: { routeAssignment: { include: { vehicleDriver: true } } } },
@@ -69,7 +62,12 @@ export default async function WeeklySchedulePage() {
     orderBy: { weekStartDate: "desc" },
   });
 
-  const [latest, ...history] = schedules;
+  const currentSchedule = schedules.find(
+    (schedule) => schedule.weekStartDate.getTime() === thisMonday.getTime()
+  );
+  const nextSchedule = schedules.find(
+    (schedule) => schedule.weekStartDate.getTime() === nextMonday.getTime()
+  );
 
   return (
     <div className="space-y-6">
@@ -83,50 +81,40 @@ export default async function WeeklySchedulePage() {
         </p>
       </div>
 
-      {schedules.length === 0 ? (
-        <p className="text-sm text-muted-foreground">
-          No weekly schedule has been set yet.
-        </p>
-      ) : (
-        <>
-          <section>
-            {latest ? (
-              <WeeklyScheduleTable
-                key={latest.id}
-                days={toWeekDays(latest)}
-                title="This week's schedule"
-                subtitle={`Week of ${formatShortDate(getWeekDays(latest.weekStartDate)[0])} – ${formatShortDate(getWeekDays(latest.weekStartDate)[4])}`}
-                statusNode={<StatusBadge status={latest.status} />}
-              />
-            ) : null}
-          </section>
+      <section>
+        {currentSchedule ? (
+          <WeeklyScheduleTable
+            key={currentSchedule.id}
+            days={toWeekDays(currentSchedule)}
+            title="This week's schedule"
+            subtitle={`Week of ${formatShortDate(getWeekDays(thisMonday)[0])} – ${formatShortDate(getWeekDays(thisMonday)[4])}`}
+            statusNode={<StatusBadge status={currentSchedule.status} />}
+          />
+        ) : (
+          <p className="text-sm text-muted-foreground">
+            No schedule has been set for this week yet.
+          </p>
+        )}
+      </section>
 
-          {history.length > 0 ? (
-            <section id="history" className="scroll-mt-6 space-y-3">
-              <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                Previous week
-              </h2>
-              {history.map((schedule) => (
-                <div key={schedule.id} className="space-y-2">
-                  <div className="flex items-center justify-between gap-3 px-1">
-                    <p className="text-sm font-medium">
-                      Week of {formatShortDate(getWeekDays(schedule.weekStartDate)[0])} –{" "}
-                      {formatShortDate(getWeekDays(schedule.weekStartDate)[4])}
-                    </p>
-                    <StatusBadge status={schedule.status} />
-                  </div>
-                  <WeeklyScheduleTable days={toWeekDays(schedule)} compact />
-                  {schedule.status === "REJECTED" && schedule.rejectReason ? (
-                    <p className="px-1 text-xs text-muted-foreground">
-                      Reason: {schedule.rejectReason}
-                    </p>
-                  ) : null}
-                </div>
-              ))}
-            </section>
-          ) : null}
-        </>
-      )}
+      <section>
+        <h2 className="mb-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+          Next week · {formatShortDate(getWeekDays(nextMonday)[0])} – {formatShortDate(getWeekDays(nextMonday)[4])}
+        </h2>
+        {nextSchedule ? (
+          <div className="space-y-2">
+            <div className="flex items-center justify-between gap-3 px-1">
+              <p className="text-sm font-medium">Next week&apos;s schedule</p>
+              <StatusBadge status={nextSchedule.status} />
+            </div>
+            <WeeklyScheduleTable days={toWeekDays(nextSchedule)} compact />
+          </div>
+        ) : (
+          <p className="text-sm text-muted-foreground">
+            No schedule has been set for next week yet.
+          </p>
+        )}
+      </section>
     </div>
   );
 }

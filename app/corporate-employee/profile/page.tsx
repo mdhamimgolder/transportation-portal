@@ -11,14 +11,14 @@ import { formatDistanceToNow } from "date-fns";
 export default async function CorporateEmployeeProfilePage() {
   const session = await requireRole([Role.CORPORATE_EMPLOYEE]);
 
-  const user = await prisma.user.findUniqueOrThrow({
-    where: { id: session.id },
-  });
-
-  const pickupPointChangeRequests = await prisma.pickupPointChangeRequest.findMany({
-    where: { employeeId: session.id },
-    orderBy: { createdAt: "desc" },
-  });
+  const [user, pickupPointChangeRequests] = await Promise.all([
+    prisma.user.findUniqueOrThrow({ where: { id: session.id } }),
+    prisma.pickupPointChangeRequest.findMany({
+      where: { employeeId: session.id },
+      orderBy: { createdAt: "desc" },
+      take: 50,
+    }),
+  ]);
 
   const combinedHistory = [
     ...pickupPointChangeRequests.map((r) => ({

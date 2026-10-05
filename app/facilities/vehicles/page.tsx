@@ -1,6 +1,6 @@
 import { requireRole } from "@/lib/rbac/guards";
 import { Role } from "@/lib/constants/enums";
-import { prisma } from "@/lib/prisma";
+import { getActiveVehicleDrivers } from "@/lib/queries/fleet";
 import { deactivateVehicleDriver } from "@/actions/vehicle-driver.actions";
 import { Button } from "@/components/ui/button";
 import {
@@ -17,10 +17,7 @@ import { VehicleDriverBulkUploadDialog } from "@/components/facilities/vehicle-d
 export default async function VehiclesAndDriversPage() {
   await requireRole([Role.FACILITIES, Role.SUPER_ADMIN]);
 
-  const records = await prisma.vehicleDriver.findMany({
-    where: { isActive: true },
-    orderBy: { driverName: "asc" },
-  });
+  const records = await getActiveVehicleDrivers();
 
   return (
     <div className="space-y-4">

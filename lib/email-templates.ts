@@ -1,4 +1,5 @@
 import "server-only";
+import { escapeHtml } from "@/lib/html";
 
 export type TransportEmailKind = "WEEKLY" | "ADHOC";
 
@@ -25,6 +26,13 @@ export function transportArrangedEmail({
   pickupTime,
 }: TransportArrangedEmailParams): { subject: string; body: string; html: string } {
   const isAdhoc = kind === "ADHOC";
+  const safe = {
+    employeeName: escapeHtml(employeeName),
+    driverName: escapeHtml(driverName),
+    contactNumber: escapeHtml(contactNumber),
+    vehicleNumber: escapeHtml(vehicleNumber),
+    pickupTime: escapeHtml(pickupTime),
+  };
   const subject = isAdhoc
     ? "Your ad-hoc transport has been arranged"
     : "Your transport has been arranged";
@@ -43,24 +51,24 @@ export function transportArrangedEmail({
   const html = `
     <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
       <h2 style="color: #1a1a2e;">${headline}</h2>
-      <p>Hi <strong>${employeeName}</strong>,</p>
+      <p>Hi <strong>${safe.employeeName}</strong>,</p>
       <p>${intro}</p>
       <table style="width: 100%; border-collapse: collapse; margin: 16px 0;">
         <tr style="background: #f8f9fa;">
           <td style="padding: 10px; border: 1px solid #dee2e6; font-weight: bold;">Driver</td>
-          <td style="padding: 10px; border: 1px solid #dee2e6;">${driverName}</td>
+          <td style="padding: 10px; border: 1px solid #dee2e6;">${safe.driverName}</td>
         </tr>
         <tr>
           <td style="padding: 10px; border: 1px solid #dee2e6; font-weight: bold;">Contact</td>
-          <td style="padding: 10px; border: 1px solid #dee2e6;">${contactNumber}</td>
+          <td style="padding: 10px; border: 1px solid #dee2e6;">${safe.contactNumber}</td>
         </tr>
         <tr style="background: #f8f9fa;">
           <td style="padding: 10px; border: 1px solid #dee2e6; font-weight: bold;">Vehicle</td>
-          <td style="padding: 10px; border: 1px solid #dee2e6;">${vehicleNumber}</td>
+          <td style="padding: 10px; border: 1px solid #dee2e6;">${safe.vehicleNumber}</td>
         </tr>
         <tr>
           <td style="padding: 10px; border: 1px solid #dee2e6; font-weight: bold;">Pickup Time</td>
-          <td style="padding: 10px; border: 1px solid #dee2e6;">${pickupTime}</td>
+          <td style="padding: 10px; border: 1px solid #dee2e6;">${safe.pickupTime}</td>
         </tr>
       </table>
       <p>Please be ready at the pickup location at the scheduled time.</p>

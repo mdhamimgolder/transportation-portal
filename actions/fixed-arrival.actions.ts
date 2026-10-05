@@ -9,6 +9,8 @@ import {
   NO_TRANSPORT_VALUE,
   normalizeArrivalTimeInput,
 } from "@/lib/constants/arrival-times";
+import { sanitizedActionError } from "@/lib/actions/action-error";
+import { audit } from "@/lib/audit";
 
 export type SaveFixedArrivalState = {
   error?: string;
@@ -27,9 +29,9 @@ export async function saveFixedArrivalTime(
   _prevState: SaveFixedArrivalState,
   formData: FormData
 ): Promise<SaveFixedArrivalState> {
-  try {
-    const session = await requireRole([Role.FIXED_ARRIVAL]);
+  const session = await requireRole([Role.FIXED_ARRIVAL]);
 
+  try {
     const raw = formData.get("arrivalTime");
     const value = typeof raw === "string" ? (raw as string).trim() : "";
     if (!value) return { error: "Please choose an arrival time." };
@@ -52,17 +54,27 @@ export async function saveFixedArrivalTime(
       };
     }
 
-    await prisma.user.update({
-      where: { id: session.id },
+    // Lock-once guard in the WHERE: a concurrent double-submit can only set it once.
+    const locked = await prisma.user.updateMany({
+      where: { id: session.id, fixedArrivalTime: null },
       data: { fixedArrivalTime: normalized },
+    });
+    if (locked.count === 0) {
+      return { error: "Your arrival time is already fixed — only Facilities can change it." };
+    }
+    await audit(session, {
+      action: "SET_FIXED_ARRIVAL_TIME",
+      entityType: "User",
+      entityId: session.id,
+      before: { fixedArrivalTime: null },
+      after: { fixedArrivalTime: normalized },
+      description: `${session.fullName} fixed their arrival time at ${normalized}`,
     });
 
     revalidatePath("/fixed-arrival/my-schedule");
     revalidatePath("/fixed-arrival/dashboard");
     return { success: true };
   } catch (error) {
-    return {
-      error: error instanceof Error ? error.message : "Failed to save your arrival time.",
-    };
+    return sanitizedActionError("saveFixedArrivalTime", error);
   }
 }

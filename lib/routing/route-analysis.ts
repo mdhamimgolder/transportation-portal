@@ -19,6 +19,7 @@
  * (+ NoSegment retries) + up to 2 routes ≈ 4 requests.
  */
 
+import "server-only";
 import { createHash } from "crypto";
 import { prisma } from "@/lib/prisma";
 import {

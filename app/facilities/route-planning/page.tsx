@@ -1,6 +1,7 @@
 import { requireRole } from "@/lib/rbac/guards";
 import { Role, WeeklyScheduleStatus } from "@/lib/constants/enums";
 import { prisma } from "@/lib/prisma";
+import { getActiveVehicleDrivers } from "@/lib/queries/fleet";
 import { formatShortDate, getWeekDays } from "@/lib/date/week";
 import {
   ARRIVAL_TIME_OPTIONS,
@@ -42,18 +43,39 @@ export default async function RoutePlanningPage({
   const dayOfWeek = Number(params.day) >= 1 && Number(params.day) <= 5 ? Number(params.day) : 1;
   const weekFilter = typeof params.week === "string" ? params.week : undefined;
 
-  const vehicleDrivers = await prisma.vehicleDriver.findMany({
-    where: { isActive: true },
-    orderBy: { driverName: "asc" },
-  });
-
+  // Every read on this page is independent — fetch them in parallel.
   // Weekly export (top-right): week picker + CSV over approved schedules.
-  const distinctWeeks = await prisma.weeklySchedule.findMany({
-    where: { status: WeeklyScheduleStatus.APPROVED },
-    select: { weekStartDate: true },
-    distinct: ["weekStartDate"],
-    orderBy: { weekStartDate: "desc" },
-  });
+  // `groupBy` lets Postgres return the distinct weeks instead of shipping
+  // every approved schedule row to dedupe in memory.
+  const [vehicleDrivers, distinctWeeks, exportSchedules, sheet] = await Promise.all([
+    getActiveVehicleDrivers(),
+    prisma.weeklySchedule.groupBy({
+      by: ["weekStartDate"],
+      where: { status: WeeklyScheduleStatus.APPROVED },
+      orderBy: { weekStartDate: "desc" },
+    }),
+    prisma.weeklySchedule.findMany({
+      where: {
+        status: WeeklyScheduleStatus.APPROVED,
+        ...(weekFilter ? { weekStartDate: new Date(weekFilter) } : {}),
+      },
+      select: {
+        employee: {
+          select: {
+            fullName: true,
+            employeeCode: true,
+            contactNumber: true,
+            address: true,
+            pickupPoint: true,
+          },
+        },
+        days: { select: { dayOfWeek: true, needsTransport: true, arrivalTime: true } },
+      },
+      orderBy: [{ weekStartDate: "desc" }, { employee: { fullName: "asc" } }],
+      take: MAX_UNFILTERED_ROWS,
+    }),
+    getDaySheet(dayOfWeek, ARRIVAL_TIME_LABELS),
+  ]);
 
   const weekOptions: WeekOption[] = distinctWeeks.map(({ weekStartDate }) => {
     const days = getWeekDays(weekStartDate);
@@ -61,16 +83,6 @@ export default async function RoutePlanningPage({
       value: weekStartDate.toISOString(),
       label: `${formatShortDate(days[0])} – ${formatShortDate(days[4])}`,
     };
-  });
-
-  const exportSchedules = await prisma.weeklySchedule.findMany({
-    where: {
-      status: WeeklyScheduleStatus.APPROVED,
-      ...(weekFilter ? { weekStartDate: new Date(weekFilter) } : {}),
-    },
-    include: { employee: true, days: true },
-    orderBy: [{ weekStartDate: "desc" }, { employee: { fullName: "asc" } }],
-    take: MAX_UNFILTERED_ROWS,
   });
 
   // Ordered by arrival time (Monday's requested arrival): 10 PM first,
@@ -109,7 +121,6 @@ export default async function RoutePlanningPage({
     </div>
   );
 
-  const sheet = await getDaySheet(dayOfWeek, ARRIVAL_TIME_LABELS);
   const vehicleLookup = Object.fromEntries(
     vehicleDrivers.map((v) => [
       v.vehicleNumber.trim().toUpperCase(),

@@ -4,6 +4,137 @@ Read this at the start of every task so you can continue without re-exploring.
 **Always update it before the session ends** (append/rewrite the Latest Session
 block and bump Work State / Next Move). Do this EVERY session — it is how we
 work fast without interruption.
+## Latest Session (2026-10-05) — Restore Facilities Weekly Export URL
+**User request:** fix the Facilities Weekly Export link's 404.
+**Completed:** added `app/facilities/weekly-export/page.tsx` as a compatibility
+redirect to Route Planning, preserving the optional selected week. Removed
+Weekly Export from the Facilities sidebar per follow-up; CSV export controls
+remain on Route Planning. The compatibility redirect remains for old URLs only.
+**Verified:** `npm run verify` passed (typecheck, ESLint, 28/28 tests); layout ESLint passed.
+
+**Follow-up (2026-10-05):** renamed the Facilities sidebar's Route Planning
+label to "Pick-up schedule"; the href and behavior are unchanged. ESLint passed.
+
+**Follow-up (2026-10-05):** restored Facilities sidebar links to the existing
+Route Settings and Pick-up Points pages; added a map-pin icon mapping.
+**Verified:** touched-file ESLint and `npx tsc --noEmit` passed.
+
+## Latest Session (2026-10-05) — Correct employee weekly schedule labels
+**User request:** show Oct 5–9 as the current week and Oct 12–16 as next week.
+**Completed:** `app/employee/weekly/page.tsx` now queries the calendar's current
+and next Monday keys and labels the sections accordingly. The corporate employee
+submission form still follows the open submission window. The Operations MDS
+week filter and upload options now label calendar current/next weeks accurately,
+without changing which submission week is available or its deadline behavior.
+**Verified:** `npm run verify` passed (typecheck, ESLint, 28/28 tests).
+
+## Latest Session (2026-10-01) — Wire corridor-core into route generation
+**User request:** replace duplicate corridor planner logic in `lib/routing/algorithms.ts` with `lib/routing/corridor-core.ts`.
+**Completed:** production generation now calls the synchronous pure core. The async orchestration iteratively asks the core for decisions using a `LegRoadIndex`, fetches only missing evaluated road edges through the existing timeout/retry/throttle/cache path with concurrency capped at 4, fills distances for all candidate homes, and replans until no missing edge affects a decision. Failed geometry uses the core's existing straight-line fallback; a finite directed-edge bound prevents non-convergence. Removed the duplicate async planner, duplicate corridor thresholds/shapes/matrix/date/geometry/pool/error helpers from `algorithms.ts`; it re-exports shared public helpers where useful. `route-override.actions.ts` now imports `DYNAMIC_GROUP_CAPACITY` and `errorMessage` directly from the pure core.
+**Tests:** added a golden pure-core attachment fixture asserting far-first anchor preservation and exact insertion order; retained infeasible-candidate regression.
+**Verified:** `npm run verify` passed (28/28 tests), `npm run build` passed (39 routes), and `git diff --check` passed for the routing changes.
+
+## Latest Session (2026-10-01) — Bound user-directory queries
+**User request:** push `getAllUsers` and `getEmployeeDirectory` searches into Prisma and add pagination.
+**Completed:** both queries now use bounded case-insensitive Prisma `where` predicates, explicit selects, stable ordering, 50-row `skip`/`take`, and return `{ rows, page, pageSize, pageCount, total }`. Super Admin Users and Facilities User Info pages accept `page`, retain `q` in Previous/Next links, and show result/page counts.
+**Verified:** `npm run verify` passes (typecheck, ESLint, 27/27 tests). `git diff --check` reports only the repo's existing line-ending notices.
+
+## Latest Session (2026-10-01) — Enforce weekly assignment eligibility
+**User request:** in `actions/route-assignment.actions.ts`, only assign a weekly day when its schedule is approved.
+**Completed:** `upsertAssignmentForWeeklyDay` now rejects days unless the parent `WeeklySchedule.status` is `APPROVED` and `WeeklyScheduleDay.needsTransport` is true. This shared helper covers direct assignments, day-sheet saves, week replication, and last-week copies; ad-hoc assignments retain their separate no-approval flow.
+**Verified:** `npm run verify` passes (typecheck, ESLint, 27/27 tests); `git diff --check` is clean for the action file.
+
+## Latest Session (2026-10-01) — Fix build/type/lint failures
+**User request:** fix the five TypeScript errors and React purity lint error reported in `SYSTEM_AUDIT_REPORT2.md`, and make the build green.
+**Completed:** restored `resendRouteAssignmentEmail`/`ResendEmailState` with logged delivery outcomes; restored fixed-arrival service update and bounded bulk pickup-coordinate save actions; removed profile-dialog props not represented by its form; moved dialog close behavior from `useEffect` into the action callback; removed unused parameters/type causing lint warnings.
+**Verified:** `npm run verify` passes (typecheck, ESLint, 27/27 tests); `npm run build` succeeds and generates all 39 routes. No schema or migration changes.
+
+## Latest Session (2026-10-01) — Restore Super Admin Audit Log page
+**User request:** recover a page that had been deleted.
+**Finding:** no `app/**/page.tsx` was deleted in the current worktree. Git history showed three prior page removals: Weekly Export (replaced by export controls in Route Planning), Operations profile approvals (explicitly removed when profile changes became immediate), and Super Admin Audit Log. Restored the Audit Log because the current schema/audit service and PRD support it; left the other two intentional removals untouched.
+**Restored:** `app/super-admin/audit-log/page.tsx`, `lib/queries/audit.ts`, plus the Super Admin sidebar link. The new query uses the current `AuditLog` fields, Dhaka-formatted timestamps, DB-bounded search, 50-row pagination, actor-name resolution, and before/after display.
+**Validation:** touched-file ESLint clean and editor diagnostics clean for all restored files. `npx tsc --noEmit` currently fails on 5 unrelated errors in existing Facilities files: missing exports `resendRouteAssignmentEmail`, `updateFixedArrivalServiceAction`, `setAllPickupPointCoordinatesAction`, and an `employeeCode` prop mismatch in `components/facilities/user-info-table.tsx`. Those files were not changed for this recovery.
+
+## Latest Session (2026-10-01) — Continued audit checklist remediation
+**User request:** compare every report recommendation with the current tree, avoid touching satisfied items, and implement the remaining safe improvements.
+**Completed:**
+- Added bounded Zod validation for route-analysis geometry/totals and pickup-point create/update/delete inputs, with regression tests.
+- Added the authenticated `/api/routing/route` proxy; route-map clients now use the configured server OSRM client, retry/timeout/throttle path, and bounded in-memory route cache instead of calling the public demo host directly.
+- Distance matrix requests now deduplicate shared coordinates and chunk into ≤100-coordinate OSRM table requests; fallback emits a planner warning. Added matrix completeness/limit tests.
+- Fixed corridor path growth to skip infeasible candidates rather than `break`, in both current and extracted planners; added a pure-core regression test.
+- Route generation now processes separate weekdays with concurrency capped at two while preserving per-day shift order.
+- User creation and password reset now write audit entries atomically with their mutation; password reset revokes sessions in that same transaction.
+- Added CI workflow and made `npm run verify` run typecheck, ESLint, and all tests. Updated README/runbook command descriptions.
+- Rewrote stale CLAUDE.md sections for the active stack, Prisma, auth, design tokens, current address-change decision, and verification workflow.
+**Confirmed already satisfied; left untouched:** approved/transport checks and allocated-day replication guards; fleet read-query wiring; settings/fleet cache invalidation; bounded route learning selection and atomic rebuild; server request timeouts/retries; capped geocoder/polyline caches; fixed-arrival concurrency; report DB-side date filters; approval status guards; removed orphan components and reported dead actions; applied migrations.
+**Verified:** `npm run verify` passed with 27/27 tests; `npm run build` passed and lists `/api/routing/route`; Prisma validate passed; `migrate status` reports up to date (25 migrations); `git diff --check` clean apart from existing CRLF notices.
+**Still open:** full `corridor-core` integration and removal of duplicate planner (requires a behavior-preserving prefetch design, especially for public OSRM); atomic audit conversion across every mutation; remaining action schemas and query-boundary cleanup; broad UI/layout/component decomposition. Immediate employee address updates with the 30-day lock remain the explicit user-approved behavior and should not be changed without reconfirmation.
+
+## Latest Session (2026-10-01) — Continued system-audit remediation
+**User request:** resume the interrupted audit remediation, inspect the existing Claude work first,
+then close remaining issues without discarding the staged/unstaged working tree.
+**Completed in this continuation:**
+- Closed the remaining `adjustPickupTime` credential leak with a narrow response DTO; Prisma's
+   global `omit` already protects hashes/reset fields in nested relations.
+- Admin password resets (direct and bulk update) now set `mustChangePassword`; removed the local
+   `isProd()` validation bypass for new-account email/contact values.
+- Route learning now excludes the synthetic `PRESET_10PM` 20:00 departure from learned office legs.
+- Finalize-route email status is truthful: `trySendMail` outcomes are logged per recipient and
+   `emailSentAt` is set only for actual `SENT` results. Escaped the remaining vehicle fields in HTML.
+- Added explicit Asia/Dhaka-to-UTC date helpers; replaced host-local route date construction and
+   reads in `algorithms.ts`, `corridor-core.ts`, `route-analysis.actions.ts`, and `route-learning.actions.ts`.
+   Added three timezone tests and wired them into `npm run test`.
+- Existing audit/rate-limit/index migration was already applied (25 migrations, DB up to date);
+   regenerated Prisma Client.
+**Verified:** `npm run verify` clean (tsc + eslint), `npm run test` 22/22, `npx prisma validate`
+clean, `git diff --check` clean (Git only printed existing LF/CRLF notices).
+**Still open from the report:** corridor-core remains unwired and the public-OSRM corridor scan can
+still be slow; many audit writes are post-commit rather than atomic with their mutation; broad
+per-action Zod validation and the read/write boundary/component decomposition remain follow-up work.
+**Explicit business-rule exception:** do NOT replace immediate employee address changes with an
+Operations approval workflow without reconfirming. On 2026-09-03 the user explicitly chose immediate
+address changes + a 30-day lock and removed the approval module; this conflicts with audit S10.
+**Next:** choose the next bounded phase (transactional audit writes or corridor-core extraction with
+golden tests); preserve all current uncommitted changes.
+
+## Latest Session (2026-10-01) — DB layer optimization: N+1 refactors + indexes (DONE, uncommitted)
+**User request:** optimize database layer — kill N+1 patterns via include/select, add
+@@index for WHERE/ORDER BY/routing hot paths, give exact migration command.
+**N+1 refactors (same semantics, fewer round trips):** `approveAdHocRequests` +
+`approveSchedules` findMany+per-row-update → single `updateMany` (PENDING-only filter
+kept); `upsertAssignmentForWeeklyDay/AdHoc` dropped redundant post-upsert `findUnique`
+(reused `assignment`; `!emailSentAt` check is provably identical); manual-plan CSV
+findUnique+update/create per row → 1 batched `findMany` + `upsert` per row (2N→1+N,
+stored/updated counts preserved incl. intra-file dups); vehicle bulk CSV per-row
+findUnique → 1 batched `findMany` + set (also fixes intra-file dup P2002 abort);
+weekly bulk-upload per-row schedule findUnique → 1 batched `findMany` + map (dup
+message incl. created-date preserved); 5 sequential day-upserts → `Promise.all` in
+submitCorporate/submitMy/editWeekly/on-behalf-create (bulkUpload already batched).
+**Over-fetch fixed:** `getAllUsers` + `getEmployeeDirectory` now explicit `select`
+(passwordHash no longer loaded; addresses only lat/lng).
+**Schema indexes added (13):** User(fullName), User(role,fixedArrivalActive,isActive);
+WeeklySchedule(status,weekStartDate); WeeklyScheduleDay(dayOfWeek,needsTransport,
+arrivalTime); AdHocRequest(status,date); RouteAssignment(assignedAt);
+EmailNotificationLog(routeAssignmentId,createdAt); PickupPoint(vehicleId,isActive),
+(addressId,isActive), (isActive); RoutePlan(weekStartDate,dayOfWeek,status),
+(vehicleId,dayDate,arrivalTime); TripAssignment(routePlanId), (routePlanId,vehicleId);
+VehicleShiftAssignment(startDate,isActive). `prisma validate` green, `tsc` 0, eslint 0.
+**Incidental fix:** pickup-point actions got explicit return types (pre-existing
+inferred-union `.error` tsc errors in 2 components).
+**Migration NOT yet applied (needs DATABASE_URL):** run
+`npx prisma migrate dev --name add-query-indexes` then `npx prisma generate`,
+then restart dev server (kill :3000, delete `.next`, relaunch).
+**Migration APPLIED 2026-10-01 ~12:46 UTC:** `20261001124637_add_query-indexes`
+(15 CREATE INDEX, Neon `neondb` in sync), `prisma generate` 7.8.0 OK, dev server
+restarted (killed :3000, deleted `.next`, relaunched hidden — Ready, GET
+/operations/dashboard 200).
+**Prior session (same day) — Server Action hardening (DONE, uncommitted):** new
+`lib/actions/action-error.ts` (sanitizedActionError/Message, throwSanitizedError;
+logs raw, returns generic, rethrows NEXT_REDIRECT); all 73 non-public of 77 exported
+actions guard-first (`requireRole`/`requireAuth` outside try; 4 public auth entry
+points documented exempt); all catches sanitized (no raw Prisma/DB text to client).
+**Next:** apply the migration above → merge working tree to branch/main; then optional
+phases 4–5 (route-group move, RoleShell/nav-config, vitest).
 ## Latest Session (2026-10-01) — Structure/hardening refactor, phases 0–3 (DONE, on branch)
 **User request:** full codebase as a senior dev would — well-structured, organized,
 lightweight, production-ready for every role, nothing deleted. Approved plan: phases

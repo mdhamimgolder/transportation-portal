@@ -129,42 +129,7 @@ export function compassLabel(deg: number): string {
  * the FIRST pickup facing the SECOND waypoint (drop-off / next pickup)
  * instead of being map-matched to the far side and looping around a divider.
  */
-const INITIAL_HEADING_RANGE = 45;
-
-/**
- * Build the OSRM `bearings` value constraining the outgoing heading at EVERY
- * stop to face the NEXT point, leaving the last waypoint (office) free. Under
- * 180 so the opposite carriageway of a divided road is excluded — the vehicle
- * leaves each pickup heading toward the following stop (drop-off / next
- * pickup) instead of being map-matched to the side of the road its lat/lng
- * pin happens to sit on (a right-side pin with a left-side next stop must
- * still depart left). Duplicate consecutive points get no constraint (two
- * riders at the same stop share one visit — a synthetic heading there would
- * be wrong).
- */
-function waypointBearingsParam(pts: [number, number][]): string {
-  if (pts.length < 2) return "";
-  const headings = pts.map((p, i) => {
-    const next = pts[i + 1];
-    if (!next) return null;
-    if (Math.abs(p[0] - next[0]) < 1e-9 && Math.abs(p[1] - next[1]) < 1e-9) {
-      return null;
-    }
-    return bearingDeg(
-      { lat: pts[i][0], lng: pts[i][1] },
-      { lat: next[0], lng: next[1] }
-    );
-  });
-  const elements = headings.map((heading) => {
-    if (heading == null || !Number.isFinite(heading)) return "";
-    const h = Math.round(((heading % 360) + 360) % 360);
-    return `${h},${INITIAL_HEADING_RANGE}`;
-  });
-  if (elements.every((el) => el === "")) return "";
-  return elements.join(";");
-}
-
-/* ── Client-side OSRM road geometry (public demo server, cached per route) ── */
+/* ── Server-proxied OSRM road geometry, cached per route ── */
 
 /** Road-geometry result: the polyline plus the real driving totals. */
 interface RoadGeometry {
@@ -180,38 +145,28 @@ const geometryCache = new Map<string, Promise<RoadGeometry | null>>();
 async function fetchRoadGeometry(
   pts: [number, number][]
 ): Promise<RoadGeometry | null> {
-  const coords = pts
-    .map((p) => `${p[1].toFixed(6)},${p[0].toFixed(6)}`)
-    .join(";");
   // Full geometry + continue_straight so OSRM returns the true shortest
   // drivable path in the exact waypoint order given (table order). Bearings
   // are NOT applied by default: constraining every stop's heading is what
   // produced the unnatural loops and non-shortest detours.
-  const query =
-    `?overview=full&geometries=geojson&alternatives=false&steps=false&continue_straight=true`;
 
   /** bearings=true runs the constrained request; false is the shortest path. */
   const run = async (withBearings: boolean): Promise<RoadGeometry | null> => {
-    const bearings = withBearings ? waypointBearingsParam(pts) : "";
-    const url =
-      `https://router.project-osrm.org/route/v1/driving/${coords}` +
-      `${query}${bearings ? `&bearings=${bearings}` : ""}`;
-    const res = await fetch(url, { signal: AbortSignal.timeout(20000) });
+    const params = new URLSearchParams({
+      points: JSON.stringify(pts),
+      overview: "full",
+      bearings: String(withBearings),
+    });
+    const res = await fetch(`/api/routing/route?${params}`, {
+      signal: AbortSignal.timeout(20000),
+    });
     if (!res.ok) return null;
     const data = await res.json();
-    if (data?.code && data.code !== "Ok") return null;
-    const route = data?.routes?.[0];
-    const g = route?.geometry;
-    const raw = Array.isArray(g?.coordinates) ? g.coordinates : null;
-    if (!raw || raw.length < 2) return null;
+    if (!Array.isArray(data?.line) || data.line.length < 2) return null;
     return {
-      line: raw.map((c: number[]) => [Number(c[1]), Number(c[0])]),
-      totalKm:
-        typeof route?.distance === "number"
-          ? route.distance / 1000
-          : null,
-      totalMin:
-        typeof route?.duration === "number" ? route.duration / 60 : null,
+      line: data.line,
+      totalKm: typeof data.totalKm === "number" ? data.totalKm : null,
+      totalMin: typeof data.totalMin === "number" ? data.totalMin : null,
     };
   };
 

@@ -29,6 +29,7 @@
  * It uses the 10 PM learned set, since preset points are the 10 PM trips.
  */
 
+import "server-only";
 import { prisma } from "@/lib/prisma";
 import { minutesToTimeString } from "./utils";
 import { officeCoordinatesFor } from "@/lib/constants/office-locations";
@@ -290,7 +291,31 @@ export function computePickupSchedule(
  * as `addr:pickup → addr:X` be found when the planner asks for
  * `addr:home → addr:X`.
  */
-export async function loadLearnedLegs(shiftKey: string): Promise<LearnedResolver> {
+export function loadLearnedLegs(shiftKey: string): Promise<LearnedResolver> {
+  // One RUN MAPPING asks for the same shift's legs once per vehicle, shift and
+  // day; each load scans the learned table plus every user with two
+  // addresses. A short-lived memo collapses those to one load per shift.
+  // `invalidateLearnedLegs()` (called after retraining) drops it immediately.
+  const cached = learnedLegsCache.get(shiftKey);
+  if (cached && cached.expiresAt > Date.now()) return cached.value;
+  const value = readLearnedLegs(shiftKey);
+  learnedLegsCache.set(shiftKey, { value, expiresAt: Date.now() + LEARNED_LEGS_TTL_MS });
+  value.catch(() => learnedLegsCache.delete(shiftKey));
+  return value;
+}
+
+const LEARNED_LEGS_TTL_MS = 60_000;
+const learnedLegsCache = new Map<
+  string,
+  { value: Promise<LearnedResolver>; expiresAt: number }
+>();
+
+/** Drop memoized learned legs — call after the learned set is rebuilt. */
+export function invalidateLearnedLegs(): void {
+  learnedLegsCache.clear();
+}
+
+async function readLearnedLegs(shiftKey: string): Promise<LearnedResolver> {
   const rows = await prisma.routeLegLearning.findMany({ where: { shiftKey } });
   const map: LearnedResolver = new Map();
   for (const row of rows) {

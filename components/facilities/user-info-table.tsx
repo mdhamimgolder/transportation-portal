@@ -172,17 +172,13 @@ export function UserInfoTable({ employees }: { employees: UserInfoRow[] }) {
                       <EditEmployeeProfileDialog
                         userId={employee.id}
                         fullName={employee.fullName}
-                        employeeCode={employee.employeeCode}
                         contactNumber={employee.contactNumber}
                         address={employee.address}
                         pickupPoint={employee.pickupPoint}
-                        officeLocation={employee.officeLocation}
                         homeLatitude={employee.homeLatitude}
                         homeLongitude={employee.homeLongitude}
                         pickupLatitude={employee.pickupLatitude}
                         pickupLongitude={employee.pickupLongitude}
-                        role={employee.role}
-                        fixedArrivalTime={employee.fixedArrivalTime}
                       />
                       <SetPasswordDialog userId={employee.id} fullName={employee.fullName} />
                       <ResendCredentialsDialog userId={employee.id} fullName={employee.fullName} />

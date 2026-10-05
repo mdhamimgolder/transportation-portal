@@ -9,7 +9,9 @@
  * rate limit — searches are memoized in memory so repeat lookups are free.
  */
 
+import "server-only";
 import { env } from "@/lib/env";
+import { logger } from "@/lib/logger";
 
 export interface GeocodeResult {
   lat: number;
@@ -18,7 +20,39 @@ export interface GeocodeResult {
   addressText: string;
 }
 
-const cache = new Map<string, GeocodeResult[]>();
+const REQUEST_TIMEOUT_MS = 8_000;
+const MIN_REQUEST_GAP_MS = 1_100; // Nominatim policy: max ~1 request/second
+const CACHE_MAX = 5_000;
+const EMPTY_RESULT_TTL_MS = 10 * 60 * 1000; // re-try unresolved terms later
+
+type CacheEntry = { results: GeocodeResult[]; expiresAt: number };
+const cache = new Map<string, CacheEntry>();
+
+let lastRequestAt = 0;
+let throttleChain: Promise<void> = Promise.resolve();
+
+/** Serializes requests so concurrent callers respect the 1 req/s policy. */
+function acquireRequestSlot(): Promise<void> {
+  const slot = throttleChain.then(async () => {
+    const wait = MIN_REQUEST_GAP_MS - (Date.now() - lastRequestAt);
+    if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
+    lastRequestAt = Date.now();
+  });
+  throttleChain = slot.catch(() => undefined);
+  return slot;
+}
+
+function remember(key: string, results: GeocodeResult[]): void {
+  if (cache.size >= CACHE_MAX) {
+    const oldest = cache.keys().next().value;
+    if (oldest !== undefined) cache.delete(oldest);
+  }
+  cache.set(key, {
+    results,
+    // Hits are stable; misses may be transient (outage) so they expire.
+    expiresAt: results.length > 0 ? Number.POSITIVE_INFINITY : Date.now() + EMPTY_RESULT_TTL_MS,
+  });
+}
 
 /** Base URL of the Nominatim server, without trailing slashes. */
 function geocoderBase(): string {
@@ -42,8 +76,10 @@ async function nominatimSearch(term: string, limit: number): Promise<GeocodeResu
   url.searchParams.set("addressdetails", "0");
   url.searchParams.set("countrycodes", countryCodes());
 
+  await acquireRequestSlot();
   const response = await fetch(url, {
     cache: "no-store",
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     headers: {
       "User-Agent": userAgent(),
       "Accept-Language": "en",
@@ -83,25 +119,18 @@ export async function geocodeAddress(term: string): Promise<GeocodeResult | null
   if (!key) return null;
 
   const cached = cache.get(key);
-  if (cached) return cached[0] ?? null;
+  if (cached && cached.expiresAt > Date.now()) return cached.results[0] ?? null;
 
-  const results = await nominatimSearch(term, 3);
-  cache.set(key, results);
-  return results[0] ?? null;
-}
-
-/**
- * Return several candidate matches so Facilities can pick the right one
- * (used by the Route Setting → "Map an address" tool).
- */
-export async function geocodeSearch(term: string, limit: number = 6): Promise<GeocodeResult[]> {
-  const key = term.trim().toLowerCase();
-  if (!key) return [];
-
-  const cached = cache.get(key);
-  if (cached) return cached;
-
-  const results = await nominatimSearch(term, limit);
-  cache.set(key, results);
-  return results;
+  try {
+    const results = await nominatimSearch(term, 3);
+    remember(key, results);
+    return results[0] ?? null;
+  } catch (error) {
+    // Outage / timeout: degrade gracefully (the caller falls back), and don't
+    // cache — the next run retries.
+    logger.warn("geocoder", "lookup failed", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return null;
+  }
 }

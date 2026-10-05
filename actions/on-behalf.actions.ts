@@ -1,5 +1,6 @@
 "use server";
 
+import { escapeHtml } from "@/lib/html";
 import { after } from "next/server";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
@@ -10,6 +11,8 @@ import { NO_TRANSPORT_VALUE, ARRIVAL_TIME_OPTIONS } from "@/lib/constants/arriva
 import { sendMailBackground } from "@/lib/mailer";
 import { ADHOC_ARRIVAL_TIME_OPTIONS, isAdhocArrivalEligible } from "@/lib/constants/adhoc-arrival-times";
 import { Role, WeeklyScheduleStatus, AdHocStatus } from "@/lib/constants/enums";
+import { sanitizedActionError } from "@/lib/actions/action-error";
+import { audit } from "@/lib/audit";
 
 const VALID_DAY_VALUES = new Set([
   NO_TRANSPORT_VALUE,
@@ -63,7 +66,7 @@ function sendScheduleSubmittedNotice(args: {
       html: `
         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
           <h2 style="color: #1a1a2e;">Your Schedule Has Been Submitted</h2>
-          <p>Hi <strong>${fullName}</strong>,</p>
+          <p>Hi <strong>${escapeHtml(fullName)}</strong>,</p>
           <p>Your weekly schedule for the week of <strong>${weekStartDate.toDateString()}</strong> has been submitted successfully.</p>
           <table style="width: 100%; border-collapse: collapse; margin: 16px 0;">
             ${htmlRows}
@@ -88,11 +91,15 @@ export async function createWeeklyScheduleOnBehalf(
 ): Promise<CreateWeeklyScheduleOnBehalfState> {
   const session = await requireRole([Role.OPERATIONS]);
 
-  const lookup = await requireActiveEmployee(formData.get("employeeId"));
-  if ("error" in lookup) return { error: lookup.error };
-  const { employee } = lookup;
+  try {
+    // Independent reads — fetch concurrently.
+    const [lookup, settings] = await Promise.all([
+      requireActiveEmployee(formData.get("employeeId")),
+      getTransportSettings(),
+    ]);
+    if ("error" in lookup) return { error: lookup.error };
+    const { employee } = lookup;
 
-  const settings = await getTransportSettings();
   const window = getSubmissionWindow(
     new Date(),
     settings.weeklyLockDayOfWeek,
@@ -138,35 +145,56 @@ export async function createWeeklyScheduleOnBehalf(
     },
   });
 
-  const submittedDays: Parameters<typeof sendScheduleSubmittedNotice>[0]["days"] = [];
-  for (let i = 0; i < 5; i++) {
-    const value = dayValues[i];
-    const needsTransport = value !== NO_TRANSPORT_VALUE;
-    submittedDays.push({
-      dayOfWeek: i + 1,
-      date: weekDates[i],
-      needsTransport,
-      arrivalTime: needsTransport ? value : null,
-    });
-    await prisma.weeklyScheduleDay.upsert({
-      where: {
-        weeklyScheduleId_dayOfWeek: { weeklyScheduleId: scheduleId, dayOfWeek: i + 1 },
-      },
-      update: {
-        needsTransport,
-        arrivalTime: needsTransport ? value : null,
-        date: weekDates[i],
-      },
-      create: {
-        weeklyScheduleId: scheduleId,
+  const submittedDays: Parameters<typeof sendScheduleSubmittedNotice>[0]["days"] = dayValues.map(
+    (value, i) => {
+      const needsTransport = value !== NO_TRANSPORT_VALUE;
+      return {
         dayOfWeek: i + 1,
         date: weekDates[i],
         needsTransport,
         arrivalTime: needsTransport ? value : null,
-      },
-    });
-  }
+      };
+    }
+  );
+  // The 5 day rows are independent (unique per dayOfWeek) — one concurrent
+  // batch instead of 5 sequential round trips.
+  await Promise.all(
+    submittedDays.map((d) =>
+      prisma.weeklyScheduleDay.upsert({
+        where: {
+          weeklyScheduleId_dayOfWeek: { weeklyScheduleId: scheduleId, dayOfWeek: d.dayOfWeek },
+        },
+        update: {
+          needsTransport: d.needsTransport,
+          arrivalTime: d.arrivalTime,
+          date: d.date,
+        },
+        create: {
+          weeklyScheduleId: scheduleId,
+          dayOfWeek: d.dayOfWeek,
+          date: d.date,
+          needsTransport: d.needsTransport,
+          arrivalTime: d.arrivalTime,
+        },
+      })
+    )
+  );
 
+  await audit(session, {
+    action: "CREATE_WEEKLY_SCHEDULE_ON_BEHALF",
+    entityType: "WeeklySchedule",
+    entityId: scheduleId,
+    before: existing ? { status: existing.status } : undefined,
+    after: {
+      employeeId: employee.id,
+      status: WeeklyScheduleStatus.APPROVED,
+      weekStartDate: window.weekStartDate,
+      days: submittedDays,
+    },
+    description: `${session.fullName} created a weekly schedule on behalf of ${employee.fullName} for the week of ${window.weekStartDate.toDateString()}.`,
+  });
+
+  // sendScheduleSubmittedNotice schedules its own after() — no extra layer.
   sendScheduleSubmittedNotice({
     to: employee.email,
     fullName: employee.fullName,
@@ -176,6 +204,9 @@ export async function createWeeklyScheduleOnBehalf(
 
   revalidatePath("/operations/weekly-requests");
   return { success: true, employeeName: employee.fullName };
+  } catch (error) {
+    return sanitizedActionError("createWeeklyScheduleOnBehalf", error);
+  }
 }
 
 export type CreateAdHocRequestOnBehalfState = {
@@ -190,11 +221,12 @@ export async function createAdHocRequestOnBehalf(
 ): Promise<CreateAdHocRequestOnBehalfState> {
   const session = await requireRole([Role.OPERATIONS]);
 
-  const lookup = await requireActiveEmployee(formData.get("employeeId"));
-  if ("error" in lookup) return { error: lookup.error };
-  const { employee } = lookup;
+  try {
+    const lookup = await requireActiveEmployee(formData.get("employeeId"));
+    if ("error" in lookup) return { error: lookup.error };
+    const { employee } = lookup;
 
-  const dateValue = formData.get("date");
+    const dateValue = formData.get("date");
   const arrivalTime = formData.get("arrivalTime");
   const reason = formData.get("reason");
 
@@ -217,20 +249,39 @@ export async function createAdHocRequestOnBehalf(
     };
   }
 
-  await prisma.adHocRequest.create({
+  const cleanReason = typeof reason === "string" && reason.trim() ? reason.trim() : null;
+  const created = await prisma.adHocRequest.create({
     data: {
       employeeId: employee.id,
       date,
       arrivalTime,
-      reason: typeof reason === "string" && reason.trim() ? reason.trim() : null,
+      reason: cleanReason,
       status: AdHocStatus.APPROVED,
       reviewedById: session.id,
       reviewedAt: new Date(),
     },
+    select: { id: true },
+  });
+
+  await audit(session, {
+    action: "CREATE_ADHOC_ON_BEHALF",
+    entityType: "AdHocRequest",
+    entityId: created.id,
+    after: {
+      employeeId: employee.id,
+      date,
+      arrivalTime,
+      reason: cleanReason,
+      status: AdHocStatus.APPROVED,
+    },
+    description: `${session.fullName} created an ad-hoc request on behalf of ${employee.fullName} for ${dateValue} (arrival ${arrivalTime}).`,
   });
 
   revalidatePath("/operations/adhoc");
   revalidatePath("/facilities/adhoc");
   revalidatePath("/employee/adhoc");
   return { success: true, employeeName: employee.fullName };
+  } catch (error) {
+    return sanitizedActionError("createAdHocRequestOnBehalf", error);
+  }
 }

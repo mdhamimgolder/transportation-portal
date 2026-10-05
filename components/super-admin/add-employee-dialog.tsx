@@ -29,6 +29,12 @@ import { ALL_ROLES, OFFICE_LOCATIONS, ROLE_LABELS, type Role } from "@/lib/const
  * env directly. */
 const IS_PROD = process.env.NODE_ENV === "production";
 
+const FACILITIES_CREATABLE_ROLES: Role[] = [
+  "EMPLOYEE",
+  "CORPORATE_EMPLOYEE",
+  "FIXED_ARRIVAL",
+];
+
 const initialState: CreateUserState = {};
 
 function SubmitButton() {
@@ -50,7 +56,8 @@ function AddEmployeeDialogBody({ onDone, availableRoles }: { onDone: () => void;
           Account created for{" "}
           <span className="font-medium">{state.created.fullName}</span>{" "}
           (<span className="font-mono">{state.created.email}</span>). They can
-          sign in now with the password you set.
+          sign in with the password you set and will be asked to choose a new
+          one on first sign-in.
         </p>
         <DialogFooter>
           <Button type="button" onClick={onDone}>
@@ -167,7 +174,9 @@ export function AddEmployeeDialog({ allowAllRoles = false }: { allowAllRoles?: b
   const [open, setOpen] = useState(false);
   const [resetKey, setResetKey] = useState(0);
 
-  const availableRoles = allowAllRoles ? ALL_ROLES : ALL_ROLES.filter((r) => r !== "SUPER_ADMIN");
+  // Facilities may only create employee-type accounts (enforced server-side
+  // in createUserAction too); Super Admin can create any role.
+  const availableRoles = allowAllRoles ? ALL_ROLES : FACILITIES_CREATABLE_ROLES;
 
   return (
     <Dialog

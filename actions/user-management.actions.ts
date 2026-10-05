@@ -3,14 +3,20 @@
 import { revalidatePath } from "next/cache";
 import { after } from "next/server";
 import { z } from "zod";
+import { newPasswordField } from "@/lib/validation/schemas";
 import { prisma } from "@/lib/prisma";
 import { requireRole } from "@/lib/rbac/guards";
 import { hashPassword } from "@/lib/auth/password";
+import { audit, auditEntry } from "@/lib/audit";
 import { parseCsv } from "@/lib/csv";
 import { sendCredentialsEmail, sendCredentialsEmailNow } from "@/lib/mailer";
 import { randomBytes } from "node:crypto";
-import { env } from "@/lib/env";
 import { Role, ALL_ROLES, OFFICE_LOCATIONS } from "@/lib/constants/enums";
+import {
+  sanitizedActionError,
+  throwSanitizedError,
+  logActionError,
+} from "@/lib/actions/action-error";
 import {
   ARRIVAL_TIME_OPTIONS,
   NO_TRANSPORT_VALUE,
@@ -55,14 +61,27 @@ function splitCoordPair(pair: string): [number, number] | null {
 }
 
 /**
- * TEST MODE (local only): the email/contact-number format checks below are
- * skipped outside production so multiple dummy test accounts can be created
- * locally via `next dev`. On Vercel NODE_ENV=production → validation fully on.
- * TODO: remove this test-mode flag before relying on validation again.
+ * Roles Facilities may create, edit, re-credential or delete. Staff accounts
+ * (Operations, Facilities, Super Admin) are managed by Super Admin only, so a
+ * Facilities user can never mint or take over an elevated account.
  */
-function isProd(): boolean {
-  return env.NODE_ENV === "production";
+const FACILITIES_MANAGEABLE_ROLES: readonly string[] = [
+  Role.EMPLOYEE,
+  Role.CORPORATE_EMPLOYEE,
+  Role.FIXED_ARRIVAL,
+];
+
+function canManageRole(actorRole: Role, targetRole: string): boolean {
+  if (actorRole === Role.SUPER_ADMIN) return true;
+  return FACILITIES_MANAGEABLE_ROLES.includes(targetRole);
 }
+
+const STAFF_ACCOUNT_ERROR =
+  "Facilities can only manage employee accounts (Employee, Corporate Employee, Fixed Arrival).";
+
+/** Upload guards: Next caps the action body too, these give a clear message. */
+const MAX_UPLOAD_BYTES = 2 * 1024 * 1024;
+const MAX_UPLOAD_ROWS = 2000;
 
 function isValidRole(value: string): value is Role {
   return (ALL_ROLES as string[]).includes(value);
@@ -82,9 +101,9 @@ export async function createUserAction(
   _prevState: CreateUserState,
   formData: FormData
 ): Promise<CreateUserState> {
-  try {
-    const session = await requireRole([Role.SUPER_ADMIN, Role.FACILITIES]);
+  const session = await requireRole([Role.SUPER_ADMIN, Role.FACILITIES]);
 
+  try {
     const fullName = requiredField(formData, "fullName");
     const email = requiredField(formData, "email");
     const role = formData.get("role");
@@ -98,19 +117,19 @@ export async function createUserAction(
 
     if (!fullName) return { error: "Full name is required." };
     if (!email) return { error: "Email is required." };
-    if (isProd() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
       return { error: "Please enter a valid email address." };
     }
     if (typeof role !== "string" || !isValidRole(role)) {
       return { error: "Please select a valid role." };
     }
-    if (session.role === Role.FACILITIES && role === Role.SUPER_ADMIN) {
-      return { error: "Facilities cannot create Super Admin accounts." };
+    if (!canManageRole(session.role, role)) {
+      return { error: STAFF_ACCOUNT_ERROR };
     }
     if (!employeeCode) return { error: "Employee ID is required." };
     if (!department) return { error: "Department is required." };
     if (!contactNumber) return { error: "Contact number is required." };
-    if (isProd() && !/^\d{11}$/.test(contactNumber)) {
+    if (!/^\d{11}$/.test(contactNumber)) {
       return { error: "Contact number must be exactly 11 digits." };
     }
     if (!address) return { error: "Address is required." };
@@ -130,21 +149,39 @@ export async function createUserAction(
 
     const passwordHash = await hashPassword(password);
 
-    const user = await prisma.user.create({
-      data: {
-        email: normalizedEmail,
-        fullName,
-        role,
-        employeeCode,
-        department,
-        contactNumber,
-        address,
-        pickupPoint,
-        officeLocation,
-        passwordHash,
-        mustChangePassword: false,
-        isBulkCreated: false,
-      },
+    const user = await prisma.$transaction(async (tx) => {
+      const created = await tx.user.create({
+        data: {
+          email: normalizedEmail,
+          fullName,
+          role,
+          employeeCode,
+          department,
+          contactNumber,
+          address,
+          pickupPoint,
+          officeLocation,
+          passwordHash,
+          // Admin-chosen passwords are temporary: the user must replace it on
+          // first sign-in, so whoever set it can't keep using it.
+          mustChangePassword: true,
+          isBulkCreated: false,
+        },
+        select: { id: true, email: true, fullName: true, role: true },
+      });
+
+      await auditEntry(
+        session,
+        {
+          action: "CREATE_USER",
+          entityType: "User",
+          entityId: created.id,
+          after: { email: created.email, fullName: created.fullName, role: created.role },
+          description: `${session.fullName} created ${created.role} account for ${created.fullName}`,
+        },
+        tx
+      );
+      return created;
     });
 
     after(async () => {
@@ -159,8 +196,8 @@ export async function createUserAction(
     revalidatePath("/facilities/user-info");
     return { created: { email: user.email, fullName: user.fullName } };
   } catch (err) {
-    console.error("[createUserAction]", err);
     if (err && typeof err === "object" && "code" in err && err.code === "P2002") {
+      logActionError("createUserAction", err);
       const meta = (err as { meta?: { target?: string[] } }).meta;
       const target = meta?.target ?? [];
       if (target.includes("employeeCode")) {
@@ -171,11 +208,7 @@ export async function createUserAction(
       }
       return { error: "A record with that value already exists." };
     }
-    const message =
-      err && typeof err === "object" && "message" in err
-        ? String(err.message)
-        : "An unexpected error occurred. Please try again.";
-    return { error: message };
+    return sanitizedActionError("createUserAction", err);
   }
 }
 
@@ -195,18 +228,26 @@ export async function bulkCreateUsersAction(
   _prevState: BulkCreateUsersState,
   formData: FormData
 ): Promise<BulkCreateUsersState> {
-  try {
   const session = await requireRole([Role.SUPER_ADMIN, Role.FACILITIES]);
 
-  const file = formData.get("file");
+  try {
+    const file = formData.get("file");
   if (!(file instanceof File) || file.size === 0) {
     return { error: "Please choose a CSV file." };
+  }
+  if (file.size > MAX_UPLOAD_BYTES) {
+    return { error: "The CSV file is too large (max 2 MB)." };
   }
 
   const text = await file.text();
   const rows = parseCsv(text);
   if (rows.length < 2) {
     return { error: "The CSV file has no data rows." };
+  }
+  if (rows.length - 1 > MAX_UPLOAD_ROWS) {
+    return {
+      error: `The CSV file has too many rows (max ${MAX_UPLOAD_ROWS}). Split it into smaller files.`,
+    };
   }
 
   // Header matching is case/whitespace/punctuation-agnostic ("Home Latitude",
@@ -274,8 +315,7 @@ export async function bulkCreateUsersAction(
     const createdCredentials: { email: string; fullName: string; password: string }[] = [];
 
     // Pre-fetch every existing email / employee ID in TWO queries total
-    // (was: two findUnique round trips per row), and pre-hash every password
-    // in PARALLEL (bcrypt was awaited serially, ~100ms per row).
+    // (was: two findUnique round trips per row).
     const allEmails = [
       ...new Set(
         rows
@@ -317,19 +357,11 @@ export async function bulkCreateUsersAction(
       existingCodeRows.map((r) => [r.employeeCode, r.email.toLowerCase()])
     );
 
-    const passwordHashByLine = new Map<number, string>();
-    const passwordPlainByLine = new Map<number, string>();
-    await Promise.all(
-      rows.slice(1).map(async (cols, j) => {
-        const line = j + 2;
-        const pw = (cols[idx.password] ?? "").trim();
-        // Blank password → a random temporary one is generated and emailed;
-        // the user can change it after logging in.
-        const effective = pw || randomBytes(8).toString("hex");
-        passwordPlainByLine.set(line, effective);
-        passwordHashByLine.set(line, await hashPassword(effective));
-      })
-    );
+    // Passwords are hashed lazily, only for rows that actually create an
+    // account or set a new password — bcrypt is CPU-bound, so hashing rows
+    // that are later skipped (or updates without a password) only blocked
+    // the event loop.
+    const usersWithRevokedCredentials: string[] = [];
 
     // One address upsert per UNIQUE address text + coordinate variant (was:
     // per row). Coordinates optional — see the hasCoords comment above.
@@ -437,8 +469,8 @@ export async function bulkCreateUsersAction(
       skipped.push({ line, reason: `Unknown role "${cols[idx.role]?.trim()}".` });
       continue;
     }
-    if (session.role === Role.FACILITIES && role === Role.SUPER_ADMIN) {
-      skipped.push({ line, reason: "Facilities cannot create Super Admin accounts." });
+    if (!canManageRole(session.role, role)) {
+      skipped.push({ line, reason: STAFF_ACCOUNT_ERROR });
       continue;
     }
 
@@ -488,19 +520,13 @@ export async function bulkCreateUsersAction(
       continue;
     }
 
-    const passwordHash =
-      passwordHashByLine.get(line) ?? (await hashPassword(password || randomBytes(8).toString("hex")));
-
     // ── UPDATE path: the account already exists ─────────────────────────
     // Non-blank CSV cells refresh the profile; blank cells keep the current
     // value as it is. Blank lat/long never overwrites coordinates.
     const existingUser = existingUsersByEmail.get(email);
     if (existingUser) {
-      if (
-        session.role === Role.FACILITIES &&
-        (role === Role.SUPER_ADMIN || existingUser.role === Role.SUPER_ADMIN)
-      ) {
-        skipped.push({ line, reason: "Facilities cannot change Super Admin accounts." });
+      if (!canManageRole(session.role, existingUser.role)) {
+        skipped.push({ line, reason: STAFF_ACCOUNT_ERROR });
         continue;
       }
       const updates: {
@@ -511,6 +537,7 @@ export async function bulkCreateUsersAction(
         pickupPoint?: string;
         employeeCode?: string;
         passwordHash?: string;
+        mustChangePassword?: boolean;
         address?: string;
         homeAddressId?: string;
         fixedArrivalTime?: string | null;
@@ -532,14 +559,24 @@ export async function bulkCreateUsersAction(
         }
         updates.employeeCode = employeeCode;
       }
-      if (password) updates.passwordHash = passwordHash;
+      if (password) {
+        updates.passwordHash = await hashPassword(password);
+        updates.mustChangePassword = true;
+      }
       if (address) {
         updates.address = address;
         const linked = await resolveHomeAddressId(address, hasCoords, coordLat, coordLng);
         if (linked) updates.homeAddressId = linked;
       }
       if (Object.keys(updates).length > 0) {
-        await prisma.user.update({ where: { id: existingUser.id }, data: updates });
+        await prisma.user.update({
+          where: { id: existingUser.id },
+          data: updates,
+          select: { id: true },
+        });
+        if (updates.passwordHash || updates.role) {
+          usersWithRevokedCredentials.push(existingUser.id);
+        }
         updatedAccounts += 1;
       }
       emailsInFile.add(email);
@@ -549,6 +586,11 @@ export async function bulkCreateUsersAction(
     const homeAddressId = address
       ? await resolveHomeAddressId(address, hasCoords, coordLat, coordLng)
       : null;
+
+    // Blank password → a random temporary one is generated and emailed; the
+    // user must change it after logging in.
+    const plainPassword = password || `Tmp-${randomBytes(6).toString("base64url")}`;
+    const passwordHash = await hashPassword(plainPassword);
 
     let user;
     try {
@@ -564,10 +606,11 @@ export async function bulkCreateUsersAction(
           homeAddressId,
           pickupPoint,
           passwordHash,
-          mustChangePassword: false,
+          mustChangePassword: true,
           isBulkCreated: true,
           fixedArrivalTime: fixedArrivalTime ?? undefined,
         },
+        select: { email: true, fullName: true },
       });
     } catch (error) {
       if (error && typeof error === "object" && "code" in error && error.code === "P2002") {
@@ -583,30 +626,47 @@ export async function bulkCreateUsersAction(
       fullName: user.fullName,
       // The plain password that was actually hashed — a provided one, or the
       // generated temporary one when the CSV cell was blank.
-      password: passwordPlainByLine.get(line) ?? password ?? "",
+      password: plainPassword,
     });
     emailsInFile.add(email);
     if (employeeCode) employeeCodesInFile.add(employeeCode);
   }
 
+  // Credential/role changes invalidate the affected users' sessions.
+  if (usersWithRevokedCredentials.length > 0) {
+    await prisma.session.deleteMany({
+      where: { userId: { in: usersWithRevokedCredentials } },
+    });
+  }
+
+  await audit(session, {
+    action: "BULK_UPSERT_USERS",
+    entityType: "User",
+    after: {
+      created: created.map((c) => c.email),
+      updatedAccounts,
+      skipped: skipped.length,
+    },
+    description: `${session.fullName} bulk-uploaded users: ${created.length} created, ${updatedAccounts} updated, ${skipped.length} skipped`,
+  });
+
+  // Sequential sends over the pooled transporter keep the SMTP provider from
+  // throttling a burst of simultaneous connections.
   after(async () => {
-    await Promise.allSettled(
-      createdCredentials.map((c) =>
-        sendCredentialsEmail({ to: c.email, fullName: c.fullName, password: c.password })
-      )
-    );
+    for (const c of createdCredentials) {
+      await sendCredentialsEmail({ to: c.email, fullName: c.fullName, password: c.password });
+    }
   });
 
   revalidatePath("/super-admin/users");
   revalidatePath("/facilities/user-info");
   return { results: { created, updatedAccounts, skipped } };
   } catch (err) {
-    console.error("[bulkCreateUsersAction]", err);
-    const message =
-      err && typeof err === "object" && "message" in err
-        ? String(err.message)
-        : "An unexpected error occurred during bulk upload.";
-    return { error: message };
+    return sanitizedActionError(
+      "bulkCreateUsersAction",
+      err,
+      "An unexpected error occurred during bulk upload."
+    );
   }
 }
 
@@ -630,9 +690,9 @@ export async function resendCredentialsAction(
   _prevState: ResendCredentialsState,
   formData: FormData
 ): Promise<ResendCredentialsState> {
-  try {
-    await requireRole([Role.SUPER_ADMIN, Role.FACILITIES]);
+  const session = await requireRole([Role.SUPER_ADMIN, Role.FACILITIES]);
 
+  try {
     const userId = formData.get("userId");
     if (typeof userId !== "string" || !userId) {
       return { error: "Missing user." };
@@ -640,19 +700,32 @@ export async function resendCredentialsAction(
 
     const user = await prisma.user.findUnique({
       where: { id: userId },
-      select: { id: true, email: true, fullName: true, isActive: true },
+      select: { id: true, email: true, fullName: true, isActive: true, role: true },
     });
     if (!user) return { error: "User not found." };
+    if (!canManageRole(session.role, user.role)) {
+      return { error: STAFF_ACCOUNT_ERROR };
+    }
     if (!user.isActive) {
       return { error: "This account is deactivated — activate it first." };
     }
 
     const tempPassword = `Tmp-${randomBytes(6).toString("base64url")}`;
     const passwordHash = await hashPassword(tempPassword);
-    await prisma.user.update({
-      where: { id: user.id },
-      data: { passwordHash, mustChangePassword: true },
-    });
+    await prisma.$transaction([
+      prisma.user.update({
+        where: { id: user.id },
+        data: { passwordHash, mustChangePassword: true },
+        select: { id: true },
+      }),
+      prisma.session.deleteMany({ where: { userId: user.id } }),
+      auditEntry(session, {
+        action: "RESEND_CREDENTIALS",
+        entityType: "User",
+        entityId: user.id,
+        description: `${session.fullName} issued new temporary credentials to ${user.fullName}`,
+      }),
+    ]);
 
     const outcome = await sendCredentialsEmailNow({
       to: user.email,
@@ -671,13 +744,11 @@ export async function resendCredentialsAction(
       },
     };
   } catch (err) {
-    console.error("[resendCredentialsAction]", err);
-    return {
-      error:
-        err instanceof Error
-          ? err.message
-          : "Failed to resend credentials. Please try again.",
-    };
+    return sanitizedActionError(
+      "resendCredentialsAction",
+      err,
+      "Failed to resend credentials. Please try again."
+    );
   }
 }
 
@@ -689,54 +760,93 @@ export async function updateUserRoleAction(
 ): Promise<UpdateUserRoleState> {
   const session = await requireRole([Role.SUPER_ADMIN]);
 
-  const id = formData.get("id");
-  const role = formData.get("role");
-  if (typeof id !== "string" || !id) return { error: "Missing user." };
-  if (typeof role !== "string" || !isValidRole(role)) {
-    return { error: "Please select a valid role." };
-  }
+  try {
+    const id = formData.get("id");
+    const role = formData.get("role");
+    if (typeof id !== "string" || !id) return { error: "Missing user." };
+    if (typeof role !== "string" || !isValidRole(role)) {
+      return { error: "Please select a valid role." };
+    }
 
-  const user = await prisma.user.findUnique({ where: { id } });
-  if (!user) return { error: "User not found." };
+    const user = await prisma.user.findUnique({
+      where: { id },
+      select: { id: true, role: true, fullName: true },
+    });
+    if (!user) return { error: "User not found." };
 
-  if (user.id === session.id && role !== user.role) {
-    return { error: "You can't change your own role." };
-  }
-  if (user.role === role) {
+    if (user.id === session.id && role !== user.role) {
+      return { error: "You can't change your own role." };
+    }
+    if (user.role === role) {
+      return { success: true };
+    }
+
+    await prisma.$transaction([
+      prisma.user.update({ where: { id }, data: { role }, select: { id: true } }),
+      // Sessions carry the role claim — force a fresh sign-in.
+      prisma.session.deleteMany({ where: { userId: id } }),
+      auditEntry(session, {
+        action: "UPDATE_USER_ROLE",
+        entityType: "User",
+        entityId: id,
+        before: { role: user.role },
+        after: { role },
+        description: `${session.fullName} changed ${user.fullName}'s role from ${user.role} to ${role}`,
+      }),
+    ]);
+
+    revalidatePath("/super-admin/users");
     return { success: true };
+  } catch (error) {
+    return sanitizedActionError("updateUserRoleAction", error);
   }
-
-  await prisma.user.update({ where: { id }, data: { role } });
-
-  revalidatePath("/super-admin/users");
-  return { success: true };
 }
 
 export async function toggleUserActiveAction(formData: FormData): Promise<void> {
   const session = await requireRole([Role.SUPER_ADMIN]);
-  const id = formData.get("id");
-  if (typeof id !== "string" || !id) return;
 
-  const user = await prisma.user.findUnique({ where: { id } });
-  if (!user || user.id === session.id) return;
+  try {
+    const id = formData.get("id");
+    if (typeof id !== "string" || !id) return;
 
-  const nextActive = !user.isActive;
-  await prisma.user.update({
-    where: { id },
-    data: {
-      isActive: nextActive,
-      deletedAt: nextActive ? null : new Date(),
-      deletedBy: nextActive ? null : session.id,
-    },
-  });
+    const user = await prisma.user.findUnique({
+      where: { id },
+      select: { id: true, isActive: true, fullName: true },
+    });
+    if (!user || user.id === session.id) return;
 
-  revalidatePath("/super-admin/users");
+    const nextActive = !user.isActive;
+    await prisma.$transaction([
+      prisma.user.update({
+        where: { id },
+        data: {
+          isActive: nextActive,
+          deletedAt: nextActive ? null : new Date(),
+          deletedBy: nextActive ? null : session.id,
+        },
+        select: { id: true },
+      }),
+      prisma.session.deleteMany({ where: { userId: id } }),
+      auditEntry(session, {
+        action: nextActive ? "ACTIVATE_USER" : "DEACTIVATE_USER",
+        entityType: "User",
+        entityId: id,
+        before: { isActive: user.isActive },
+        after: { isActive: nextActive },
+        description: `${session.fullName} ${nextActive ? "activated" : "deactivated"} ${user.fullName}`,
+      }),
+    ]);
+
+    revalidatePath("/super-admin/users");
+  } catch (error) {
+    throwSanitizedError("toggleUserActiveAction", error);
+  }
 }
 
 const setUserPasswordSchema = z
   .object({
     userId: z.string().min(1, "Missing user."),
-    newPassword: z.string().min(8, "Password must be at least 8 characters"),
+    newPassword: newPasswordField,
     confirmPassword: z.string().min(1, "Please confirm the password"),
   })
   .refine((data) => data.newPassword === data.confirmPassword, {
@@ -752,31 +862,49 @@ export async function setUserPasswordAction(
 ): Promise<SetUserPasswordState> {
   const session = await requireRole([Role.SUPER_ADMIN, Role.FACILITIES]);
 
-  const parsed = setUserPasswordSchema.safeParse({
-    userId: formData.get("userId"),
-    newPassword: formData.get("newPassword"),
-    confirmPassword: formData.get("confirmPassword"),
-  });
-  if (!parsed.success) {
-    return { error: parsed.error.issues[0]?.message ?? "Invalid input." };
+  try {
+    const parsed = setUserPasswordSchema.safeParse({
+      userId: formData.get("userId"),
+      newPassword: formData.get("newPassword"),
+      confirmPassword: formData.get("confirmPassword"),
+    });
+    if (!parsed.success) {
+      return { error: parsed.error.issues[0]?.message ?? "Invalid input." };
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { id: parsed.data.userId },
+      select: { id: true, role: true, fullName: true },
+    });
+    if (!user) return { error: "User not found." };
+
+    if (!canManageRole(session.role, user.role)) {
+      return { error: STAFF_ACCOUNT_ERROR };
+    }
+
+    const passwordHash = await hashPassword(parsed.data.newPassword);
+    await prisma.$transaction([
+      prisma.user.update({
+        where: { id: user.id },
+        data: { passwordHash, mustChangePassword: true },
+        select: { id: true },
+      }),
+      // Old sessions may belong to whoever knew the previous password.
+      prisma.session.deleteMany({ where: { userId: user.id } }),
+      auditEntry(session, {
+        action: "SET_USER_PASSWORD",
+        entityType: "User",
+        entityId: user.id,
+        description: `${session.fullName} set a new password for ${user.fullName}`,
+      }),
+    ]);
+
+    revalidatePath("/super-admin/users");
+    revalidatePath("/facilities/user-info");
+    return { success: true };
+  } catch (error) {
+    return sanitizedActionError("setUserPasswordAction", error);
   }
-
-  const user = await prisma.user.findUnique({ where: { id: parsed.data.userId } });
-  if (!user) return { error: "User not found." };
-
-  if (session.role === Role.FACILITIES && user.role !== Role.EMPLOYEE) {
-    return { error: "You can only set passwords for employees." };
-  }
-
-  const passwordHash = await hashPassword(parsed.data.newPassword);
-  await prisma.user.update({
-    where: { id: user.id },
-    data: { passwordHash },
-  });
-
-  revalidatePath("/super-admin/users");
-  revalidatePath("/facilities/user-info");
-  return { success: true };
 }
 
 export type DeleteUserState = { error?: string; success?: boolean };
@@ -804,38 +932,52 @@ export async function deleteUserAction(
 ): Promise<DeleteUserState> {
   const actor = await requireRole([Role.FACILITIES, Role.SUPER_ADMIN]);
 
-  const userId = formData.get("userId");
-  if (typeof userId !== "string" || !userId) {
-    return { error: "Missing user." };
-  }
-  if (userId === actor.id) {
-    return { error: "You cannot delete your own account." };
-  }
+  try {
+    const userId = formData.get("userId");
+    if (typeof userId !== "string" || !userId) {
+      return { error: "Missing user." };
+    }
+    if (userId === actor.id) {
+      return { error: "You cannot delete your own account." };
+    }
 
-  const target = await prisma.user.findUnique({
-    where: { id: userId },
-    select: { id: true, role: true, fullName: true },
-  });
-  if (!target) return { error: "User not found." };
-  if (target.role === Role.SUPER_ADMIN) {
-    return { error: "Super Admin accounts cannot be deleted." };
+    const target = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { id: true, role: true, fullName: true },
+    });
+    if (!target) return { error: "User not found." };
+    if (target.role === Role.SUPER_ADMIN) {
+      return { error: "Super Admin accounts cannot be deleted." };
+    }
+    if (!canManageRole(actor.role, target.role)) {
+      return { error: STAFF_ACCOUNT_ERROR };
+    }
+
+    await prisma.$transaction([
+      prisma.session.deleteMany({ where: { userId } }),
+      prisma.weeklyScheduleDay.deleteMany({
+        where: { weeklySchedule: { employeeId: userId } },
+      }),
+      prisma.weeklySchedule.deleteMany({ where: { employeeId: userId } }),
+      prisma.addressChangeRequest.deleteMany({ where: { employeeId: userId } }),
+      prisma.contactChangeRequest.deleteMany({ where: { employeeId: userId } }),
+      prisma.pickupPointChangeRequest.deleteMany({ where: { employeeId: userId } }),
+      prisma.adHocRequest.deleteMany({ where: { employeeId: userId } }),
+      prisma.manualRoutePlanEntry.deleteMany({ where: { employeeId: userId } }),
+      prisma.user.delete({ where: { id: userId }, select: { id: true } }),
+      auditEntry(actor, {
+        action: "DELETE_USER",
+        entityType: "User",
+        entityId: userId,
+        before: { fullName: target.fullName, role: target.role },
+        description: `${actor.fullName} permanently deleted ${target.fullName} (${target.role})`,
+      }),
+    ]);
+
+    revalidatePath("/facilities/user-info");
+    revalidatePath("/super-admin/users");
+    return { success: true };
+  } catch (error) {
+    return sanitizedActionError("deleteUserAction", error);
   }
-
-  await prisma.$transaction([
-    prisma.session.deleteMany({ where: { userId } }),
-    prisma.weeklyScheduleDay.deleteMany({
-      where: { weeklySchedule: { employeeId: userId } },
-    }),
-    prisma.weeklySchedule.deleteMany({ where: { employeeId: userId } }),
-    prisma.addressChangeRequest.deleteMany({ where: { employeeId: userId } }),
-    prisma.contactChangeRequest.deleteMany({ where: { employeeId: userId } }),
-    prisma.pickupPointChangeRequest.deleteMany({ where: { employeeId: userId } }),
-    prisma.adHocRequest.deleteMany({ where: { employeeId: userId } }),
-    prisma.manualRoutePlanEntry.deleteMany({ where: { employeeId: userId } }),
-    prisma.user.delete({ where: { id: userId } }),
-  ]);
-
-  revalidatePath("/facilities/user-info");
-  revalidatePath("/super-admin/users");
-  return { success: true };
 }

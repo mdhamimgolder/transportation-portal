@@ -1,6 +1,7 @@
 "use server";
 
 
+import { escapeHtml } from "@/lib/html";
 import { revalidatePath } from "next/cache";
 import { after } from "next/server";
 import { prisma } from "@/lib/prisma";
@@ -22,6 +23,8 @@ import {
 import { sendMailBackground, isEmailEnabled } from "@/lib/mailer";
 import { Role, WeeklyScheduleStatus } from "@/lib/constants/enums";
 import { parseCsv } from "@/lib/csv";
+import { sanitizedActionError } from "@/lib/actions/action-error";
+import { audit } from "@/lib/audit";
 
 const ARRIVAL_VALUE_TO_LABEL = Object.fromEntries(
   ARRIVAL_TIME_OPTIONS.map((o) => [o.value, o.label])
@@ -61,7 +64,7 @@ async function sendScheduleSubmittedNotice({ to, fullName, weekStartDate, days }
     html: `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
         <h2 style="color: #1a1a2e;">Your Schedule Has Been Submitted</h2>
-        <p>Hi <strong>${fullName}</strong>,</p>
+        <p>Hi <strong>${escapeHtml(fullName)}</strong>,</p>
         <p>Your weekly schedule for the week of <strong>${weekStartDate.toDateString()}</strong> has been submitted successfully.</p>
         <table style="width: 100%; border-collapse: collapse; margin: 16px 0;">
           ${htmlRows}
@@ -92,6 +95,7 @@ export async function submitCorporateWeeklySchedule(
 ): Promise<SubmitCorporateWeeklyScheduleState> {
   const session = await requireRole([Role.CORPORATE_EMPLOYEE]);
 
+  try {
   const settings = await getTransportSettings();
   const window = getSubmissionWindow(
     new Date(),
@@ -152,34 +156,55 @@ export async function submitCorporateWeeklySchedule(
     });
   }
 
-  for (let i = 0; i < 5; i++) {
-    const value = dayValues[i];
-    const needsTransport = value !== NO_TRANSPORT_VALUE;
-    await prisma.weeklyScheduleDay.upsert({
-      where: {
-        weeklyScheduleId_dayOfWeek: {
+  // The 5 day rows are independent (unique per dayOfWeek) — one concurrent
+  // batch instead of 5 sequential round trips.
+  await Promise.all(
+    dayValues.map((value, i) => {
+      const needsTransport = value !== NO_TRANSPORT_VALUE;
+      return prisma.weeklyScheduleDay.upsert({
+        where: {
+          weeklyScheduleId_dayOfWeek: {
+            weeklyScheduleId: scheduleId,
+            dayOfWeek: i + 1,
+          },
+        },
+        update: {
+          needsTransport,
+          arrivalTime: needsTransport ? value : null,
+          date: weekDates[i],
+        },
+        create: {
           weeklyScheduleId: scheduleId,
           dayOfWeek: i + 1,
+          date: weekDates[i],
+          needsTransport,
+          arrivalTime: needsTransport ? value : null,
         },
-      },
-      update: {
-        needsTransport,
-        arrivalTime: needsTransport ? value : null,
-        date: weekDates[i],
-      },
-      create: {
-        weeklyScheduleId: scheduleId,
-        dayOfWeek: i + 1,
-        date: weekDates[i],
-        needsTransport,
-        arrivalTime: needsTransport ? value : null,
-      },
-    });
-  }
+      });
+    })
+  );
+
+  await audit(session, {
+    action: "SUBMIT_WEEKLY_SCHEDULE",
+    entityType: "WeeklySchedule",
+    entityId: scheduleId,
+    before: existing
+      ? { status: existing.status, rejectReason: existing.rejectReason }
+      : undefined,
+    after: {
+      status: WeeklyScheduleStatus.PENDING,
+      weekStartDate: toUtcMidnight(window.weekStartDate),
+      days: dayValues,
+    },
+    description: `${session.fullName} submitted their weekly schedule for the week of ${toUtcMidnight(window.weekStartDate).toDateString()}.`,
+  });
 
   revalidatePath("/corporate-employee/my-schedule");
   revalidatePath("/operations/weekly-requests");
   return { success: true };
+  } catch (error) {
+    return sanitizedActionError("submitCorporateWeeklySchedule", error);
+  }
 }
 
 export type SubmitMyScheduleState = {
@@ -196,6 +221,7 @@ export async function submitMySchedule(
 ): Promise<SubmitMyScheduleState> {
   const session = await requireRole([Role.OPERATIONS]);
 
+  try {
   const weekStartValue = formData.get("weekStartDate");
   if (typeof weekStartValue !== "string" || !weekStartValue) {
     return { error: "Missing week." };
@@ -247,48 +273,70 @@ export async function submitMySchedule(
     },
   });
 
-  const submittedDays: SubmitNoticeArgs["days"] = [];
-  for (let i = 0; i < 5; i++) {
-    const value = dayValues[i];
+  const submittedDays: SubmitNoticeArgs["days"] = dayValues.map((value, i) => {
     const needsTransport = value !== NO_TRANSPORT_VALUE;
-    submittedDays.push({
+    return {
       dayOfWeek: i + 1,
       date: weekDates[i],
       needsTransport,
       arrivalTime: needsTransport ? value : null,
-    });
-    await prisma.weeklyScheduleDay.upsert({
-      where: {
-        weeklyScheduleId_dayOfWeek: {
-          weeklyScheduleId: scheduleId,
-          dayOfWeek: i + 1,
+    };
+  });
+  // The 5 day rows are independent (unique per dayOfWeek) — one concurrent
+  // batch instead of 5 sequential round trips.
+  await Promise.all(
+    submittedDays.map((d) =>
+      prisma.weeklyScheduleDay.upsert({
+        where: {
+          weeklyScheduleId_dayOfWeek: {
+            weeklyScheduleId: scheduleId,
+            dayOfWeek: d.dayOfWeek,
+          },
         },
-      },
-      update: {
-        needsTransport,
-        arrivalTime: needsTransport ? value : null,
-        date: weekDates[i],
-      },
-      create: {
-        weeklyScheduleId: scheduleId,
-        dayOfWeek: i + 1,
-        date: weekDates[i],
-        needsTransport,
-        arrivalTime: needsTransport ? value : null,
-      },
-    });
-  }
+        update: {
+          needsTransport: d.needsTransport,
+          arrivalTime: d.arrivalTime,
+          date: d.date,
+        },
+        create: {
+          weeklyScheduleId: scheduleId,
+          dayOfWeek: d.dayOfWeek,
+          date: d.date,
+          needsTransport: d.needsTransport,
+          arrivalTime: d.arrivalTime,
+        },
+      })
+    )
+  );
 
-  sendScheduleSubmittedNotice({
-    to: session.email,
-    fullName: session.fullName,
-    weekStartDate,
-    days: submittedDays,
+  await audit(session, {
+    action: "SUBMIT_WEEKLY_SCHEDULE",
+    entityType: "WeeklySchedule",
+    entityId: scheduleId,
+    before: existing ? { status: existing.status } : undefined,
+    after: {
+      status: WeeklyScheduleStatus.APPROVED,
+      weekStartDate: normalizedWeekStart,
+      days: submittedDays,
+    },
+    description: `${session.fullName} submitted their own weekly schedule for the week of ${normalizedWeekStart.toDateString()} (auto-approved).`,
+  });
+
+  after(async () => {
+    await sendScheduleSubmittedNotice({
+      to: session.email,
+      fullName: session.fullName,
+      weekStartDate,
+      days: submittedDays,
+    });
   });
 
   revalidatePath("/operations/my-schedule");
   revalidatePath("/operations/weekly-requests");
   return { success: true };
+  } catch (error) {
+    return sanitizedActionError("submitMySchedule", error);
+  }
 }
 
 export type ApproveSchedulesState = {
@@ -301,28 +349,38 @@ export async function approveSchedules(
 ): Promise<ApproveSchedulesState> {
   const session = await requireRole([Role.OPERATIONS]);
 
+  try {
   const ids = formData.getAll("scheduleId").filter((v): v is string => typeof v === "string");
   if (ids.length === 0) {
     return { error: "Select at least one schedule to approve." };
   }
 
-  const schedules = await prisma.weeklySchedule.findMany({
+  // Single batched write — only PENDING rows transition (same semantics as
+  // the previous per-row loop, without N round trips).
+  const { count } = await prisma.weeklySchedule.updateMany({
     where: { id: { in: ids }, status: WeeklyScheduleStatus.PENDING },
+    data: {
+      status: WeeklyScheduleStatus.APPROVED,
+      reviewedById: session.id,
+      reviewedAt: new Date(),
+    },
   });
 
-  for (const schedule of schedules) {
-    await prisma.weeklySchedule.update({
-      where: { id: schedule.id },
-      data: {
-        status: WeeklyScheduleStatus.APPROVED,
-        reviewedById: session.id,
-        reviewedAt: new Date(),
-      },
+  if (count > 0) {
+    await audit(session, {
+      action: "APPROVE_WEEKLY_SCHEDULES",
+      entityType: "WeeklySchedule",
+      before: { status: WeeklyScheduleStatus.PENDING, requestedIds: ids },
+      after: { status: WeeklyScheduleStatus.APPROVED, approvedCount: count },
+      description: `${session.fullName} approved ${count} weekly schedule${count === 1 ? "" : "s"}.`,
     });
   }
 
   revalidatePath("/operations/weekly-requests");
   return {};
+  } catch (error) {
+    return sanitizedActionError("approveSchedules", error);
+  }
 }
 
 export type EditWeeklyScheduleState = {
@@ -334,8 +392,9 @@ export async function editWeeklySchedule(
   _prevState: EditWeeklyScheduleState,
   formData: FormData
 ): Promise<EditWeeklyScheduleState> {
-  await requireRole([Role.OPERATIONS]);
+  const session = await requireRole([Role.OPERATIONS]);
 
+  try {
   const scheduleId = formData.get("scheduleId");
   if (typeof scheduleId !== "string" || !scheduleId) {
     return { error: "Missing schedule." };
@@ -352,7 +411,7 @@ export async function editWeeklySchedule(
 
   const schedule = await prisma.weeklySchedule.findUnique({
     where: { id: scheduleId },
-    include: { days: true },
+    include: { days: true, employee: { select: { fullName: true } } },
   });
   if (!schedule) {
     return { error: "Schedule not found." };
@@ -360,33 +419,54 @@ export async function editWeeklySchedule(
 
   const weekDates = getWeekDays(schedule.weekStartDate);
 
-  for (let i = 0; i < 5; i++) {
-    const value = dayValues[i];
-    const needsTransport = value !== NO_TRANSPORT_VALUE;
-    await prisma.weeklyScheduleDay.upsert({
-      where: {
-        weeklyScheduleId_dayOfWeek: {
+  // The 5 day rows are independent (unique per dayOfWeek) — one concurrent
+  // batch instead of 5 sequential round trips.
+  await Promise.all(
+    dayValues.map((value, i) => {
+      const needsTransport = value !== NO_TRANSPORT_VALUE;
+      return prisma.weeklyScheduleDay.upsert({
+        where: {
+          weeklyScheduleId_dayOfWeek: {
+            weeklyScheduleId: schedule.id,
+            dayOfWeek: i + 1,
+          },
+        },
+        update: {
+          needsTransport,
+          arrivalTime: needsTransport ? value : null,
+          date: weekDates[i],
+        },
+        create: {
           weeklyScheduleId: schedule.id,
           dayOfWeek: i + 1,
+          date: weekDates[i],
+          needsTransport,
+          arrivalTime: needsTransport ? value : null,
         },
-      },
-      update: {
-        needsTransport,
-        arrivalTime: needsTransport ? value : null,
-        date: weekDates[i],
-      },
-      create: {
-        weeklyScheduleId: schedule.id,
-        dayOfWeek: i + 1,
-        date: weekDates[i],
-        needsTransport,
-        arrivalTime: needsTransport ? value : null,
-      },
-    });
-  }
+      });
+    })
+  );
+
+  await audit(session, {
+    action: "EDIT_WEEKLY_SCHEDULE",
+    entityType: "WeeklySchedule",
+    entityId: schedule.id,
+    before: {
+      days: schedule.days.map((d) => ({
+        dayOfWeek: d.dayOfWeek,
+        needsTransport: d.needsTransport,
+        arrivalTime: d.arrivalTime,
+      })),
+    },
+    after: { days: dayValues },
+    description: `${session.fullName} edited ${schedule.employee.fullName}'s weekly schedule for the week of ${schedule.weekStartDate.toDateString()}.`,
+  });
 
   revalidatePath("/operations/weekly-requests");
   return { success: true };
+  } catch (error) {
+    return sanitizedActionError("editWeeklySchedule", error);
+  }
 }
 
 export type RejectScheduleState = {
@@ -400,6 +480,7 @@ export async function rejectSchedule(
 ): Promise<RejectScheduleState> {
   const session = await requireRole([Role.OPERATIONS]);
 
+  try {
   const scheduleId = formData.get("scheduleId");
   const reason = formData.get("reason");
 
@@ -410,15 +491,10 @@ export async function rejectSchedule(
     return { error: "A rejection reason is required." };
   }
 
-  const schedule = await prisma.weeklySchedule.findUnique({
-    where: { id: scheduleId },
-  });
-  if (!schedule) {
-    return { error: "Schedule not found." };
-  }
-
-  await prisma.weeklySchedule.update({
-    where: { id: scheduleId },
+  // Atomic PENDING -> REJECTED transition: a concurrent approve/reject can't
+  // be overwritten, and already-reviewed schedules can't be re-rejected.
+  const { count } = await prisma.weeklySchedule.updateMany({
+    where: { id: scheduleId, status: WeeklyScheduleStatus.PENDING },
     data: {
       status: WeeklyScheduleStatus.REJECTED,
       rejectReason: reason.trim(),
@@ -427,8 +503,31 @@ export async function rejectSchedule(
     },
   });
 
+  const schedule = await prisma.weeklySchedule.findUnique({
+    where: { id: scheduleId },
+    select: { weekStartDate: true, employee: { select: { fullName: true } } },
+  });
+  if (!schedule) {
+    return { error: "Schedule not found." };
+  }
+  if (count !== 1) {
+    return { error: "This request was already reviewed." };
+  }
+
+  await audit(session, {
+    action: "REJECT_WEEKLY_SCHEDULE",
+    entityType: "WeeklySchedule",
+    entityId: scheduleId,
+    before: { status: WeeklyScheduleStatus.PENDING },
+    after: { status: WeeklyScheduleStatus.REJECTED, rejectReason: reason.trim() },
+    description: `${session.fullName} rejected ${schedule.employee.fullName}'s weekly schedule for the week of ${schedule.weekStartDate.toDateString()}.`,
+  });
+
   revalidatePath("/operations/weekly-requests");
   return { success: true };
+  } catch (error) {
+    return sanitizedActionError("rejectSchedule", error);
+  }
 }
 
 const ARRIVAL_LABEL_TO_VALUE = Object.fromEntries(
@@ -484,6 +583,7 @@ export async function bulkUploadWeeklySchedules(
 ): Promise<BulkUploadWeeklyScheduleState> {
   const session = await requireRole([Role.OPERATIONS]);
 
+  try {
   const weekStartValue = formData.get("weekStartDate");
   if (typeof weekStartValue !== "string" || !weekStartValue) {
     return { error: "Select a week to upload for." };
@@ -548,8 +648,26 @@ export async function bulkUploadWeeklySchedules(
     (
       await prisma.user.findMany({
         where: { email: { in: emailsInFile } },
+        select: { id: true, email: true, fullName: true, role: true, isActive: true },
       })
     ).map((user) => [user.email, user])
+  );
+
+  // One batched read for this week's schedules instead of a findUnique per
+  // row. Rows created by this upload join the map so a repeated email in the
+  // file is still reported as a duplicate.
+  const existingSchedulesByEmployee = new Map(
+    (
+      await prisma.weeklySchedule.findMany({
+        where: {
+          employeeId: {
+            in: Array.from(new Set([...employeesByEmail.values()].map((u) => u.id))),
+          },
+          weekStartDate,
+        },
+        select: { employeeId: true, createdAt: true },
+      })
+    ).map((s) => [s.employeeId, s.createdAt] as const)
   );
 
   // Emails are collected here and sent AFTER the response (via `after`),
@@ -610,13 +728,11 @@ export async function bulkUploadWeeklySchedules(
     }
 
     // Check for existing schedule — one employee, one schedule per week.
-    const existingSchedule = await prisma.weeklySchedule.findUnique({
-      where: { employeeId_weekStartDate: { employeeId: employee.id, weekStartDate } },
-    });
-    if (existingSchedule) {
+    const duplicateCreatedAt = existingSchedulesByEmployee.get(employee.id);
+    if (duplicateCreatedAt) {
       skipped.push({
         line,
-        reason: `Duplicate entry for "${rawEmail}" — schedule for this week already exists (created ${existingSchedule.createdAt.toISOString().split("T")[0]}).`,
+        reason: `Duplicate entry for "${rawEmail}" — schedule for this week already exists (created ${duplicateCreatedAt.toISOString().split("T")[0]}).`,
       });
       continue;
     }
@@ -633,8 +749,10 @@ export async function bulkUploadWeeklySchedules(
         reviewedById: session.id,
         reviewedAt: now,
       },
+      select: { id: true, createdAt: true },
     });
     const scheduleId = schedule.id;
+    existingSchedulesByEmployee.set(employee.id, schedule.createdAt);
 
     const uploadedDays: SubmitNoticeArgs["days"] = [];
     for (let d = 0; d < 5; d++) {
@@ -686,9 +804,27 @@ export async function bulkUploadWeeklySchedules(
 
   // Send all schedule emails after the response is returned (was: awaited per
   // row — the #1 reason bulk upload felt slow in production).
+  // Sent sequentially over the pooled transporter (an unbounded fan-out
+  // would open a burst of SMTP connections). sendMailBackground never throws.
   after(async () => {
-    await Promise.allSettled(notices.map((notice) => sendScheduleSubmittedNotice(notice)));
+    for (const notice of notices) {
+      await sendScheduleSubmittedNotice(notice);
+    }
   });
+
+  if (created.length > 0) {
+    await audit(session, {
+      action: "BULK_UPLOAD_WEEKLY_SCHEDULES",
+      entityType: "WeeklySchedule",
+      after: {
+        weekStartDate,
+        createdCount: created.length,
+        skippedCount: skipped.length,
+        created: created.map((c) => c.email),
+      },
+      description: `${session.fullName} bulk-uploaded ${created.length} weekly schedule${created.length === 1 ? "" : "s"} for the week of ${weekStartDate.toDateString()} (${skipped.length} row${skipped.length === 1 ? "" : "s"} skipped).`,
+    });
+  }
 
   revalidatePath("/operations/weekly-requests");
   revalidatePath("/employee/weekly");
@@ -699,4 +835,7 @@ export async function bulkUploadWeeklySchedules(
       emailsEnabled: isEmailEnabled(),
     },
   };
+  } catch (error) {
+    return sanitizedActionError("bulkUploadWeeklySchedules", error);
+  }
 }

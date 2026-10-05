@@ -21,19 +21,19 @@ model User {
   passwordHash String
   role         String // SUPER_ADMIN | EMPLOYEE | OPERATIONS | FACILITIES | CORPORATE_EMPLOYEE
 
-  fullName      String
-  employeeCode  String? @unique // human-readable employee ID, e.g. "EMP0001"
-  department    String?
-  contactNumber String?
-  address       String? // free-text "live" value; changes flow through AddressChangeRequest
-  pickupPoint   String? // designated pickup location for transport, editable directly by the employee
-  officeLocation String? // Office location: "Regnum" or "Spectra" - set by Facilities when creating employee
-  fixedArrivalTime String? // FIXED_ARRIVAL role: the single standing arrival time ("22:00" .. "06:00"), locked until Facilities changes it
-  fixedArrivalActive Boolean @default(true) // FIXED_ARRIVAL service switch: OFF pauses mapping but keeps the arrival time
-  homeAddressId String?
-  pickupAddressId String?
-  homeAddress Address? @relation("UserHomeAddress", fields: [homeAddressId], references: [id])
-  pickupAddress Address? @relation("UserPickupAddress", fields: [pickupAddressId], references: [id])
+  fullName           String
+  employeeCode       String?  @unique // human-readable employee ID, e.g. "EMP0001"
+  department         String?
+  contactNumber      String?
+  address            String? // free-text "live" value; changes flow through AddressChangeRequest
+  pickupPoint        String? // designated pickup location for transport, editable directly by the employee
+  officeLocation     String? // Office location: "Regnum" or "Spectra" - set by Facilities when creating employee
+  fixedArrivalTime   String? // FIXED_ARRIVAL role: the single standing arrival time ("22:00" .. "06:00"), locked until Facilities changes it
+  fixedArrivalActive Boolean  @default(true) // FIXED_ARRIVAL service switch: OFF pauses mapping but keeps the arrival time
+  homeAddressId      String?
+  pickupAddressId    String?
+  homeAddress        Address? @relation("UserHomeAddress", fields: [homeAddressId], references: [id])
+  pickupAddress      Address? @relation("UserPickupAddress", fields: [pickupAddressId], references: [id])
 
   mustChangePassword   Boolean   @default(false)
   isBulkCreated        Boolean   @default(false)
@@ -53,43 +53,46 @@ model User {
   zoneId String? // Phase 2 hook: area/zone grouping
   zone   Zone?   @relation(fields: [zoneId], references: [id])
 
-  weeklySchedules        WeeklySchedule[]       @relation("EmployeeWeeklySchedules")
-  adHocRequests          AdHocRequest[]         @relation("EmployeeAdHocRequests")
-  addressChangeRequests  AddressChangeRequest[] @relation("EmployeeAddressChangeRequests")
-  reviewedAddressChanges AddressChangeRequest[] @relation("ReviewerAddressChanges")
-  contactChangeRequests  ContactChangeRequest[] @relation("EmployeeContactChangeRequests")
-  reviewedContactChanges ContactChangeRequest[] @relation("ReviewerContactChangeRequests")
+  weeklySchedules            WeeklySchedule[]           @relation("EmployeeWeeklySchedules")
+  adHocRequests              AdHocRequest[]             @relation("EmployeeAdHocRequests")
+  addressChangeRequests      AddressChangeRequest[]     @relation("EmployeeAddressChangeRequests")
+  reviewedAddressChanges     AddressChangeRequest[]     @relation("ReviewerAddressChanges")
+  contactChangeRequests      ContactChangeRequest[]     @relation("EmployeeContactChangeRequests")
+  reviewedContactChanges     ContactChangeRequest[]     @relation("ReviewerContactChangeRequests")
   pickupPointChangeRequests  PickupPointChangeRequest[] @relation("EmployeePickupPointChangeRequests")
   reviewedPickupPointChanges PickupPointChangeRequest[] @relation("ReviewerPickupPointChanges")
-  sessions               Session[]
-  
-  // New: Route planning relations
-  tripAssignments       TripAssignment[] @relation("TripAssignmentEmployee")
-  manualRoutePlanEntries ManualRoutePlanEntry[] @relation("ManualRoutePlanEntryEmployee")
-  routeTemplateStops    RouteTemplateStop[] @relation("RouteTemplateStopEmployee")
+  sessions                   Session[]
 
-  @@index([role])
+  // New: Route planning relations
+  tripAssignments        TripAssignment[]       @relation("TripAssignmentEmployee")
+  manualRoutePlanEntries ManualRoutePlanEntry[] @relation("ManualRoutePlanEntryEmployee")
+  routeTemplateStops     RouteTemplateStop[]    @relation("RouteTemplateStopEmployee")
+
   @@index([isActive])
   @@index([zoneId])
   @@index([homeAddressId])
   @@index([pickupAddressId])
+  // Directory listings order/filter by name; fixed-arrival mapping scans by
+  // role + service switch + active flag every RUN MAPPING.
+  @@index([fullName])
+  @@index([role, fixedArrivalActive, isActive])
 }
 
 model Address {
-  id           String   @id @default(cuid())
-  addressText  String   @unique
-  label        String? // short, human-friendly identifier for the coordinate (e.g. "Dhanmondi Hub")
-  latitude     Float
-  longitude    Float
-  homeUsers    User[]   @relation("UserHomeAddress")
-  pickupUsers  User[]   @relation("UserPickupAddress")
-  
+  id          String  @id @default(cuid())
+  addressText String  @unique
+  label       String? // short, human-friendly identifier for the coordinate (e.g. "Dhanmondi Hub")
+  latitude    Float
+  longitude   Float
+  homeUsers   User[]  @relation("UserHomeAddress")
+  pickupUsers User[]  @relation("UserPickupAddress")
+
   // New: Route planning relations
-  pickupPoints PickupPoint[]
+  pickupPoints    PickupPoint[]
   tripAssignments TripAssignment[]
-  
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([latitude, longitude])
 }
@@ -128,6 +131,7 @@ model AddressChangeRequest {
   @@index([employeeId])
   @@index([status])
   @@index([createdAt])
+  @@index([reviewedById])
 }
 
 // ── CONTACT NUMBER CHANGE WORKFLOW ───────────────────────────
@@ -152,6 +156,7 @@ model ContactChangeRequest {
   @@index([employeeId])
   @@index([status])
   @@index([createdAt])
+  @@index([reviewedById])
 }
 
 // ── PICK-UP POINT CHANGE WORKFLOW ────────────────────────────
@@ -176,6 +181,7 @@ model PickupPointChangeRequest {
   @@index([employeeId])
   @@index([status])
   @@index([createdAt])
+  @@index([reviewedById])
 }
 
 // ── WEEKLY TRANSPORT ─────────────────────────────────────────
@@ -200,7 +206,8 @@ model WeeklySchedule {
 
   @@unique([employeeId, weekStartDate])
   @@index([weekStartDate])
-  @@index([status])
+  // Day-sheet lookup: latest APPROVED week first.
+  @@index([status, weekStartDate])
 }
 
 model WeeklyScheduleDay {
@@ -214,7 +221,7 @@ model WeeklyScheduleDay {
   arrivalTime    String? // "HH:mm"; null when needsTransport=false
 
   routeAssignment RouteAssignment?
-  
+
   // New: Route planning relation
   tripAssignments TripAssignment[]
 
@@ -223,6 +230,9 @@ model WeeklyScheduleDay {
 
   @@unique([weeklyScheduleId, dayOfWeek])
   @@index([date])
+  // Route generators scan one weekday's needs-transport rows per arrival
+  // time through the parent schedule's week/status.
+  @@index([dayOfWeek, needsTransport, arrivalTime])
 }
 
 // ── AD-HOC TRANSPORT ─────────────────────────────────────────
@@ -232,10 +242,10 @@ model AdHocRequest {
   employeeId String
   employee   User   @relation("EmployeeAdHocRequests", fields: [employeeId], references: [id])
 
-  date        DateTime
-  arrivalTime String // "HH:mm"
-  reason      String?
-  status      String   @default("PENDING") // PENDING | APPROVED | REJECTED | ASSIGNED | CANCELLED
+  date         DateTime
+  arrivalTime  String // "HH:mm"
+  reason       String?
+  status       String   @default("PENDING") // PENDING | APPROVED | REJECTED | ASSIGNED | CANCELLED
   rejectReason String?
 
   reviewedById String?
@@ -249,8 +259,9 @@ model AdHocRequest {
   routeAssignment RouteAssignment?
 
   @@index([date])
-  @@index([status])
   @@index([employeeId])
+  // Operations ad-hoc board filters by review status within a date window.
+  @@index([status, date])
 }
 
 // ── ROUTE ASSIGNMENT (shared by weekly-day and ad-hoc) ───────
@@ -268,21 +279,23 @@ model RouteAssignment {
   vehicleDriver   VehicleDriver @relation(fields: [vehicleDriverId], references: [id])
   pickupTime      String // "HH:mm"
 
-  assignedById String
-  assignedAt   DateTime  @default(now())
-  emailSentAt  DateTime?
-  vehicleType  String?
-  pickupLat    Float?
-  pickupLng    Float?
+  assignedById  String
+  assignedAt    DateTime  @default(now())
+  emailSentAt   DateTime?
+  vehicleType   String?
+  pickupLat     Float?
+  pickupLng     Float?
   pickupAddress String?
-  noShow       Boolean? // Phase 2 hook; null = not tracked
+  noShow        Boolean? // Phase 2 hook; null = not tracked
 
-  emailLogs    EmailNotificationLog[]
+  emailLogs EmailNotificationLog[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([vehicleDriverId])
+  // Reports + allocation history order by newest assignment first.
+  @@index([assignedAt])
 }
 
 // ── EMAIL NOTIFICATION DELIVERY LOG ───────────────────────────
@@ -292,11 +305,11 @@ model RouteAssignment {
 // `RouteAssignment.emailSentAt` column is stamped only when status = SENT.
 
 model EmailNotificationLog {
-  id          String   @id @default(cuid())
-  kind        String // ROUTE_ASSIGNMENT_WEEKLY | ROUTE_ASSIGNMENT_ADHOC | ROUTE_ASSIGNMENT_RESEND
-  recipient   String
+  id            String @id @default(cuid())
+  kind          String // ROUTE_ASSIGNMENT_WEEKLY | ROUTE_ASSIGNMENT_ADHOC | ROUTE_ASSIGNMENT_RESEND
+  recipient     String
   recipientName String
-  subject     String
+  subject       String
 
   status String // PENDING | SENT | FAILED | SKIPPED_DEV
   error  String?
@@ -307,9 +320,10 @@ model EmailNotificationLog {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  @@index([routeAssignmentId])
   @@index([status])
   @@index([createdAt])
+  // Day-sheet reads the latest log per assignment.
+  @@index([routeAssignmentId, createdAt])
 }
 
 // ── VEHICLE & DRIVER MASTER LIST ─────────────────────────────
@@ -373,63 +387,67 @@ model Holiday {
 
 // Preset pickup points for 10 PM routes (vehicles parked in areas with fixed sequences)
 model PickupPoint {
-  id              String   @id @default(cuid())
-  name            String   // e.g., "Pickup Point A", "DhanMondi Hub"
-  sequence        Int      // Order within the vehicle route (1, 2, 3, ...)
-  
-  vehicleId       String
-  vehicle         Vehicle  @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
-  
-  addressId       String
-  address         Address? @relation(fields: [addressId], references: [id])
-  
-  baseETA         String   // "HH:mm" format (e.g., "10:15")
-  
+  id       String @id @default(cuid())
+  name     String // e.g., "Pickup Point A", "DhanMondi Hub"
+  sequence Int // Order within the vehicle route (1, 2, 3, ...)
+
+  vehicleId String
+  vehicle   Vehicle @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+
+  addressId String
+  address   Address? @relation(fields: [addressId], references: [id])
+
+  baseETA String // "HH:mm" format (e.g., "10:15")
+
   tripAssignments TripAssignment[] @relation("PickupPointAssignment")
-  
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
-  isActive        Boolean  @default(true)
-  
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  isActive  Boolean  @default(true)
+
   @@unique([vehicleId, sequence])
-  @@index([vehicleId, sequence])
+  // Hot paths: active sequence per vehicle, address/name resolution for the
+  // 10 PM preset matcher, and the full active-point reference set.
+  @@index([vehicleId, isActive])
+  @@index([addressId, isActive])
+  @@index([isActive])
 }
 
 // Vehicle model (updated from VehicleDriver to support new routing)
 model Vehicle {
-  id              String   @id @default(cuid())
-  vehicleNumber   String   @unique
-  vehicleType     String   // "10-SEATER", "4-SEATER"
-  capacity        Int      // e.g., 10, 4
-  
-  driverName      String?
-  driverContact   String?
+  id            String @id @default(cuid())
+  vehicleNumber String @unique
+  vehicleType   String // "10-SEATER", "4-SEATER"
+  capacity      Int // e.g., 10, 4
+
+  driverName    String?
+  driverContact String?
 
   // Office this vehicle drops employees at (last route destination).
   // Values follow the User.officeLocation convention: "Regnum" | "Spectra".
   // Coordinates are resolved server-side from lib/constants/office-locations.ts.
-  officeLocation  String   @default("Regnum")
+  officeLocation String @default("Regnum")
 
   // Default office arrival time ("HH:mm", e.g. "22:00"). Seeds the vehicle's
   // base arrival / reuse position in route planning. Null = not configured.
-  baseETA         String?
+  baseETA String?
 
   // Time the vehicle reaches its FIRST pickup point ("HH:mm"). When set, the
   // pickup schedule is computed forward from here (trained legs only); when
   // null, it is computed backwards from BASE ETA.
   firstPickupTime String?
-  
+
   pickupSequence  PickupPoint[]
   routePlans      RoutePlan[]
   tripAssignments TripAssignment[]
-  routeTemplates  RouteTemplate[] @relation("RouteTemplateVehicle")
-  
+  routeTemplates  RouteTemplate[]  @relation("RouteTemplateVehicle")
+
   shiftAssignments VehicleShiftAssignment[]
-  
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
-  isActive        Boolean  @default(true)
-  
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  isActive  Boolean  @default(true)
+
   @@index([vehicleType])
   @@index([isActive])
   @@index([officeLocation])
@@ -437,158 +455,171 @@ model Vehicle {
 
 // Track which shifts each vehicle is assigned to
 model VehicleShiftAssignment {
-  id                  String   @id @default(cuid())
-  vehicleId           String
-  vehicle             Vehicle  @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
-  
-  startDate           DateTime // Start of the week
-  shifts              String   // JSON string of shifts: ["10PM", "11PM", "12AM"]
-  
-  completedAt         DateTime? // When previous shift finished
-  readyForReuseAt     DateTime? // After rest period
-  
-  isActive            Boolean  @default(true)
-  createdAt           DateTime @default(now())
-  
+  id        String  @id @default(cuid())
+  vehicleId String
+  vehicle   Vehicle @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+
+  startDate DateTime // Start of the week
+  shifts    String // JSON string of shifts: ["10PM", "11PM", "12AM"]
+
+  completedAt     DateTime? // When previous shift finished
+  readyForReuseAt DateTime? // After rest period
+
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+
   @@index([vehicleId, startDate])
+  // Planner loads every active pin of a week per shift.
+  @@index([startDate, isActive])
 }
 
 // Main route plan for a day/vehicle/shift
 model RoutePlan {
-  id                    String   @id @default(cuid())
-  weekStartDate         DateTime // The week this plan covers
-  dayOfWeek             Int      // 0=Monday, 4=Friday
-  dayDate               DateTime // Actual date
-  
-  vehicleId             String
-  vehicle               Vehicle  @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
-  
-  arrivalTime           String   // "10 PM", "11 PM", "12 AM", etc.
-  routeType             String   // "PRESET_10PM" or "DYNAMIC_11PM_PLUS"
-  status                String   @default("DRAFT") // DRAFT | UNDER_REVIEW | FINALIZED | EXECUTED
-  
+  id            String   @id @default(cuid())
+  weekStartDate DateTime // The week this plan covers
+  dayOfWeek     Int // 0=Monday, 4=Friday
+  dayDate       DateTime // Actual date
+
+  vehicleId String
+  vehicle   Vehicle @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+
+  arrivalTime String // "10 PM", "11 PM", "12 AM", etc.
+  routeType   String // "PRESET_10PM" or "DYNAMIC_11PM_PLUS"
+  status      String @default("DRAFT") // DRAFT | UNDER_REVIEW | FINALIZED | EXECUTED
+
   // Destination: the vehicle's office. Snapshot at generation time so the plan
   // stays correct even if the vehicle's office changes later.
-  officeLocation        String?
-  destinationLat        Float?
-  destinationLng        Float?
-  
+  officeLocation String?
+  destinationLat Float?
+  destinationLng Float?
+
   // Reuse chain (for 10 PM -> 12 AM reuse)
-  previousRoutePlanId   String?
-  previousRoutePlan     RoutePlan? @relation("ReuseChain", fields: [previousRoutePlanId], references: [id])
-  subsequentRoutePlans  RoutePlan[] @relation("ReuseChain")
-  
+  previousRoutePlanId  String?
+  previousRoutePlan    RoutePlan?  @relation("ReuseChain", fields: [previousRoutePlanId], references: [id])
+  subsequentRoutePlans RoutePlan[] @relation("ReuseChain")
+
   // Timing
-  departureTime         DateTime? // When vehicle leaves
+  departureTime           DateTime? // When vehicle leaves
   estimatedCompletionTime DateTime? // When it arrives back at office
-  
-  tripAssignments       TripAssignment[]
-  overrides             RoutePlanOverride[]
+
+  tripAssignments TripAssignment[]
+  overrides       RoutePlanOverride[]
 
   // Route analysis (side-of-road + order candidates, geometry, metrics) —
   // computed on demand from the route map and cached here; `inputHash`
   // inside the JSON invalidates it when stops / coordinates change.
-  routeAnalysis         Json?
-  appliedCandidateId    String?
+  routeAnalysis      Json?
+  appliedCandidateId String?
 
-  createdById           String
+  createdById String
 
-  createdAt             DateTime @default(now())
-  updatedAt             DateTime @updatedAt
-  finalizedAt           DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  finalizedAt DateTime?
 
   @@unique([dayDate, vehicleId, arrivalTime])
   @@index([dayDate, arrivalTime])
   @@index([status])
+  // Week breakdown + idempotent draft cleanup scope by week/day/status.
+  @@index([weekStartDate, dayOfWeek, status])
+  // FK of the reuse chain — checked on every draft delete.
+  @@index([previousRoutePlanId])
+  // Blank-card moves look up a vehicle/day/arrival plan directly.
+  @@index([vehicleId, dayDate, arrivalTime])
 }
 
 // Individual trip assignment (employee pickup on a route)
 model TripAssignment {
-  id                    String   @id @default(cuid())
-  routePlanId           String
-  routePlan             RoutePlan @relation(fields: [routePlanId], references: [id], onDelete: Cascade)
-  
-  weeklyScheduleDayId   String?
-  weeklyScheduleDay     WeeklyScheduleDay? @relation(fields: [weeklyScheduleDayId], references: [id], onDelete: SetNull)
-  
-  employeeId            String
-  employee              User     @relation("TripAssignmentEmployee", fields: [employeeId], references: [id], onDelete: Cascade)
-  
-  vehicleId             String
-  vehicle               Vehicle  @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
-  
+  id          String    @id @default(cuid())
+  routePlanId String
+  routePlan   RoutePlan @relation(fields: [routePlanId], references: [id], onDelete: Cascade)
+
+  weeklyScheduleDayId String?
+  weeklyScheduleDay   WeeklyScheduleDay? @relation(fields: [weeklyScheduleDayId], references: [id], onDelete: SetNull)
+
+  employeeId String
+  employee   User   @relation("TripAssignmentEmployee", fields: [employeeId], references: [id], onDelete: Cascade)
+
+  vehicleId String
+  vehicle   Vehicle @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+
   // Pickup type and location
-  pickupType            String   // "PRESET_POINT" or "HOME_ADDRESS"
-  
-  pickupPointId         String?
-  pickupPoint           PickupPoint? @relation("PickupPointAssignment", fields: [pickupPointId], references: [id])
-  
-  pickupAddressId       String?
-  pickupAddress         Address? @relation(fields: [pickupAddressId], references: [id])
-  
+  pickupType String // "PRESET_POINT" or "HOME_ADDRESS"
+
+  pickupPointId String?
+  pickupPoint   PickupPoint? @relation("PickupPointAssignment", fields: [pickupPointId], references: [id])
+
+  pickupAddressId String?
+  pickupAddress   Address? @relation(fields: [pickupAddressId], references: [id])
+
   // Pickup timing
-  pickupTime            String?  // "HH:mm" format
-  pickupETA             DateTime?
-  
+  pickupTime String? // "HH:mm" format
+  pickupETA  DateTime?
+
   // Sequence in vehicle (1st, 2nd, 3rd, ..., max 5 for 11 PM/12 AM)
-  sequenceInTrip        Int      // 1, 2, 3, 4, 5
+  sequenceInTrip Int // 1, 2, 3, 4, 5
 
   // Chosen carriageway at the stop (from the route analysis): the heading the
   // vehicle faces when stopped, and where OSRM snapped it on that side.
-  approachBearing       Int?
-  snappedLat            Float?
-  snappedLng            Float?
+  approachBearing Int?
+  snappedLat      Float?
+  snappedLng      Float?
 
   // Email notification
-  emailSentAt           DateTime?
-  
+  emailSentAt DateTime?
+
   // Audit
-  assignedAt            DateTime @default(now())
-  manuallyOverridden    Boolean  @default(false)
-  
-  createdAt             DateTime @default(now())
-  updatedAt             DateTime @updatedAt
-  
+  assignedAt         DateTime @default(now())
+  manuallyOverridden Boolean  @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
   @@unique([routePlanId, employeeId, weeklyScheduleDayId])
   @@index([employeeId])
   @@index([vehicleId])
   @@index([weeklyScheduleDayId])
+  // routePlanId lookups are served by the unique key above (it leads with
+  // routePlanId). FK columns below back the PickupPoint/Address deletes.
+  @@index([pickupPointId])
+  @@index([pickupAddressId])
 }
 
 // Facilities override tracking
 model RoutePlanOverride {
-  id                    String   @id @default(cuid())
-  routePlanId           String
-  routePlan             RoutePlan @relation(fields: [routePlanId], references: [id], onDelete: Cascade)
-  
-  changedById           String
-  
-  changeType            String   // "VEHICLE_REASSIGN", "PICKUP_TIME_ADJUST", "EMPLOYEE_SWAP", etc.
-  affectedEmployeeId    String?
-  
-  beforeState           String   // JSON snapshot
-  afterState            String   // JSON snapshot
-  reason                String?
-  
-  createdAt             DateTime @default(now())
-  
+  id          String    @id @default(cuid())
+  routePlanId String
+  routePlan   RoutePlan @relation(fields: [routePlanId], references: [id], onDelete: Cascade)
+
+  changedById String
+
+  changeType         String // "VEHICLE_REASSIGN", "PICKUP_TIME_ADJUST", "EMPLOYEE_SWAP", etc.
+  affectedEmployeeId String?
+
+  beforeState String // JSON snapshot
+  afterState  String // JSON snapshot
+  reason      String?
+
+  createdAt DateTime @default(now())
+
   @@index([changedById, createdAt])
+  @@index([routePlanId])
 }
 
 // Cache Google Maps distance matrix responses
 model DistanceMatrixCache {
-  id                    String   @id @default(cuid())
-  fromLat               Float
-  fromLng               Float
-  toLat                 Float
-  toLng                 Float
+  id      String @id @default(cuid())
+  fromLat Float
+  fromLng Float
+  toLat   Float
+  toLng   Float
 
-  distance              Float    // in km
-  duration              Float    // in minutes
-  provider              String   // "GOOGLE_MAPS", etc.
+  distance Float // in km
+  duration Float // in minutes
+  provider String // "GOOGLE_MAPS", etc.
 
-  cachedAt              DateTime @default(now())
-  expiresAt             DateTime
+  cachedAt  DateTime @default(now())
+  expiresAt DateTime
 
   @@unique([fromLat, fromLng, toLat, toLng, provider])
   @@index([expiresAt])
@@ -600,14 +631,14 @@ model DistanceMatrixCache {
 // the DB (same 30-day TTL) means re-runs and post-restart runs stop re-fetching
 // every leg from the rate-limited public OSRM demo server.
 model RoutePolylineCache {
-  id        String   @id @default(cuid())
-  fromLat   Float
-  fromLng   Float
-  toLat     Float
-  toLng     Float
-  provider  String   // "OSRM"
+  id       String @id @default(cuid())
+  fromLat  Float
+  fromLng  Float
+  toLat    Float
+  toLng    Float
+  provider String // "OSRM"
 
-  points    Json     // Decoded driving geometry as [[lat, lng], ...]
+  points Json // Decoded driving geometry as [[lat, lng], ...]
 
   cachedAt  DateTime @default(now())
   expiresAt DateTime
@@ -623,12 +654,12 @@ model RoutePolylineCache {
 // instead of being estimated.
 // fromKey/toKey are stable location keys: "addr:<addressId>" or "office:<name>".
 model RouteLegLearning {
-  id          String   @id @default(cuid())
+  id          String  @id @default(cuid())
   fromKey     String
   toKey       String
-  fromLabel   String?  // human-readable source name
-  toLabel     String?  // human-readable destination name
-  shiftKey    String   // "10PM" | "11PM" | "12AM-6AM"
+  fromLabel   String? // human-readable source name
+  toLabel     String? // human-readable destination name
+  shiftKey    String // "10PM" | "11PM" | "12AM-6AM"
   sampleCount Int
   avgMinutes  Float
   minMinutes  Float
@@ -652,19 +683,19 @@ model RouteLegLearning {
 model ManualRoutePlanEntry {
   id            String   @id @default(cuid())
   date          DateTime // plan date (UTC midnight), groups rows into one run
-  shiftKey      String   // "10PM" | "11PM" | "12AM-6AM"
+  shiftKey      String // "10PM" | "11PM" | "12AM-6AM"
   vehicleNumber String
 
   employeeId String
   employee   User   @relation("ManualRoutePlanEntryEmployee", fields: [employeeId], references: [id])
 
-  addressId     String? // pickup address used for the "addr:<id>" learning key
-  pickupLabel   String  // human-readable pickup point name
-  pickupMinutes Int     // 0..1439
-  orderIndex    Int?    // visiting order as written on the manual plan
-  officeLabel   String  // "Regnum" | "Spectra"
-  arrivalMinutes Int    // office arrival, may be >= 1440 after midnight wrap
-  sourceFile    String? // original CSV filename
+  addressId      String? // pickup address used for the "addr:<id>" learning key
+  pickupLabel    String // human-readable pickup point name
+  pickupMinutes  Int // 0..1439
+  orderIndex     Int? // visiting order as written on the manual plan
+  officeLabel    String // "Regnum" | "Spectra"
+  arrivalMinutes Int // office arrival, may be >= 1440 after midnight wrap
+  sourceFile     String? // original CSV filename
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -672,6 +703,7 @@ model ManualRoutePlanEntry {
   @@unique([date, shiftKey, vehicleNumber, employeeId])
   @@index([shiftKey])
   @@index([date])
+  @@index([employeeId])
 }
 
 // Learned route pattern: a vehicle's FINALIZED/edited route for one arrival
@@ -680,17 +712,17 @@ model ManualRoutePlanEntry {
 // (vehicleId, arrivalTime) — each vehicle can have one standing template per
 // shift. New riders not in the template are corridor-attached around it.
 model RouteTemplate {
-  id            String   @id @default(cuid())
-  shiftKey      String   // "10PM" | "11PM" | "12AM-6AM"
-  office        String   // normalized office name snapshot ("Regnum" | "Spectra")
-  arrivalTime   String   // display label ("11 PM", "12 AM", ...) — replay key
+  id            String              @id @default(cuid())
+  shiftKey      String // "10PM" | "11PM" | "12AM-6AM"
+  office        String // normalized office name snapshot ("Regnum" | "Spectra")
+  arrivalTime   String // display label ("11 PM", "12 AM", ...) — replay key
   vehicleId     String
-  vehicle       Vehicle  @relation("RouteTemplateVehicle", fields: [vehicleId], references: [id], onDelete: Cascade)
-  sourcePlanId  String?  // last RoutePlan this template was learned from
+  vehicle       Vehicle             @relation("RouteTemplateVehicle", fields: [vehicleId], references: [id], onDelete: Cascade)
+  sourcePlanId  String? // last RoutePlan this template was learned from
   stops         RouteTemplateStop[]
-  lastLearnedAt DateTime @default(now())
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  lastLearnedAt DateTime            @default(now())
+  createdAt     DateTime            @default(now())
+  updatedAt     DateTime            @updatedAt
 
   @@unique([vehicleId, arrivalTime])
   @@index([shiftKey, office])
@@ -700,19 +732,51 @@ model RouteTemplate {
 // key when replaying onto a new week's schedule; the address/point snapshots +
 // labels survive even if the employee later edits their profile or pickup point.
 model RouteTemplateStop {
-  id            String   @id @default(cuid())
+  id            String        @id @default(cuid())
   templateId    String
   template      RouteTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
-  seq           Int      // 1-based visiting order (the vehicle's office is the final implicit destination)
+  seq           Int // 1-based visiting order (the vehicle's office is the final implicit destination)
   employeeId    String?
-  employee      User?    @relation("RouteTemplateStopEmployee", fields: [employeeId], references: [id], onDelete: SetNull)
-  pickupType    String?  // "PRESET_POINT" | "HOME_ADDRESS"
+  employee      User?         @relation("RouteTemplateStopEmployee", fields: [employeeId], references: [id], onDelete: SetNull)
+  pickupType    String? // "PRESET_POINT" | "HOME_ADDRESS"
   pickupPointId String?
-  addressId     String?  // pickup address snapshot (id) at learn time
-  pickupTime    String?  // "HH:mm" as finalized
-  employeeLabel String?  // employee fullName snapshot
-  stopLabel     String?  // pickup point / address label snapshot
+  addressId     String? // pickup address snapshot (id) at learn time
+  pickupTime    String? // "HH:mm" as finalized
+  employeeLabel String? // employee fullName snapshot
+  stopLabel     String? // pickup point / address label snapshot
 
   @@unique([templateId, seq])
   @@index([employeeId])
+}
+
+// ── AUDIT / ABUSE PROTECTION ─────────────────────────────────
+
+// Append-only audit trail: every create/update/approve/reject/delete by any
+// role. actorId is a plain string (no FK) so history survives user deletes.
+// Retention: keep >= 3 years (see scripts/maintenance for archiving).
+model AuditLog {
+  id          String   @id @default(cuid())
+  actorId     String?
+  actorRole   String?
+  action      String // verb, e.g. "APPROVE_ADHOC_REQUEST", "DELETE_USER"
+  entityType  String // e.g. "User", "AdHocRequest"
+  entityId    String?
+  before      Json?
+  after       Json?
+  description String // human-readable summary
+  createdAt   DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([actorId, createdAt])
+  @@index([entityType, entityId])
+}
+
+// Fixed-window rate-limit counters (login, password reset). DB-backed so the
+// limit holds across serverless instances.
+model RateLimitBucket {
+  key         String   @id
+  count       Int
+  windowStart DateTime
+
+  @@index([windowStart])
 }

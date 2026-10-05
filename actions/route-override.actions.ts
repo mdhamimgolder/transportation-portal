@@ -1,11 +1,12 @@
 "use server";
 
+import { escapeHtml } from "@/lib/html";
 import { after } from "next/server";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { requireRole } from "@/lib/rbac/guards";
 import { Role } from "@/lib/constants/enums";
-import { sendMailBackground } from "@/lib/mailer";
+import { trySendMail } from "@/lib/mailer";
 import { arrivalMinutesForLabel } from "@/lib/constants/route-shifts";
 import { officeCoordinatesFor } from "@/lib/constants/office-locations";
 import { ensurePickupPointSchedule, loadLearnedLegs, LEARN_MIN_SAMPLES } from "@/lib/routing/pickup-schedule";
@@ -16,108 +17,11 @@ import {
   learnRouteTemplateFromAssignments,
   mirrorRouteEditsAcrossWeek,
 } from "@/lib/routing/route-pattern";
-import { errorMessage, DYNAMIC_GROUP_CAPACITY } from "@/lib/routing/algorithms";
-
-/**
- * Reassign an employee to a different vehicle
- */
-export async function reassignEmployeeToVehicle(
-  tripAssignmentId: string,
-  newVehicleId: string,
-  reason?: string
-) {
-  try {
-    const session = await requireRole([Role.FACILITIES, Role.SUPER_ADMIN]);
-
-    // Get current assignment
-    const currentAssignment = await prisma.tripAssignment.findUniqueOrThrow({
-      where: { id: tripAssignmentId },
-      include: {
-        routePlan: true,
-        vehicle: true,
-        employee: true,
-      },
-    });
-
-    // Validate new vehicle exists and has capacity
-    const newVehicle = await prisma.vehicle.findUniqueOrThrow({
-      where: { id: newVehicleId },
-    });
-
-    // Check capacity for the new vehicle on this route
-    const currentCapacity = await prisma.tripAssignment.count({
-      where: {
-        routePlanId: currentAssignment.routePlanId,
-        vehicleId: newVehicleId,
-      },
-    });
-
-    // Max 5 for dynamic routes (11 PM+), no limit for 10 PM preset
-    const isPreset = currentAssignment.routePlan.routeType === "PRESET_10PM";
-    const maxCapacity = isPreset ? 999 : 5;
-
-    if (currentCapacity >= maxCapacity) {
-      throw new Error(
-        `Vehicle ${newVehicle.vehicleNumber} is at capacity (${currentCapacity}/${maxCapacity})`
-      );
-    }
-
-    // Save override audit
-    const beforeState = {
-      vehicleId: currentAssignment.vehicleId,
-      pickupTime: currentAssignment.pickupTime,
-      sequenceInTrip: currentAssignment.sequenceInTrip,
-    };
-
-    const afterState = {
-      vehicleId: newVehicleId,
-      pickupTime: currentAssignment.pickupTime,
-      sequenceInTrip: currentCapacity + 1, // Will be the last in new vehicle
-    };
-
-    await prisma.routePlanOverride.create({
-      data: {
-        routePlanId: currentAssignment.routePlanId,
-        changedById: session.id,
-        changeType: "VEHICLE_REASSIGN",
-        affectedEmployeeId: currentAssignment.employeeId,
-        beforeState: JSON.stringify(beforeState),
-        afterState: JSON.stringify(afterState),
-        reason,
-      },
-    });
-
-    // Update assignment
-    const updated = await prisma.tripAssignment.update({
-      where: { id: tripAssignmentId },
-      data: {
-        vehicleId: newVehicleId,
-        sequenceInTrip: currentCapacity + 1,
-        manuallyOverridden: true,
-      },
-      include: {
-        vehicle: true,
-        employee: true,
-        routePlan: true,
-      },
-    });
-
-    // Propagate the new shape to the other draft days of this week.
-    await mirrorRouteEditsAcrossWeek(currentAssignment.routePlanId);
-
-    revalidatePath("/facilities/route-planning");
-
-    return {
-      success: true,
-      message: `${updated.employee.fullName} reassigned to ${updated.vehicle.vehicleNumber}`,
-      assignment: updated,
-    };
-  } catch (error) {
-    throw new Error(
-      `Failed to reassign employee: ${errorMessage(error)}`
-    );
-  }
-}
+import { DYNAMIC_GROUP_CAPACITY, errorMessage } from "@/lib/routing/corridor-core";
+import {
+  sanitizedActionMessage,
+  throwSanitizedError,
+} from "@/lib/actions/action-error";
 
 /**
  * Adjust pickup time for an employee
@@ -127,9 +31,9 @@ export async function adjustPickupTime(
   newPickupTime: string,
   reason?: string
 ) {
-  try {
-    const session = await requireRole([Role.FACILITIES, Role.SUPER_ADMIN]);
+  const session = await requireRole([Role.FACILITIES, Role.SUPER_ADMIN]);
 
+  try {
     const currentAssignment = await prisma.tripAssignment.findUniqueOrThrow({
       where: { id: tripAssignmentId },
       include: {
@@ -216,98 +120,17 @@ export async function adjustPickupTime(
     return {
       success: true,
       message: `Pickup time updated for ${updated.employee.fullName} to ${pickupTime}`,
-      assignment: updated,
+      assignment: {
+        id: updated.id,
+        pickupTime: updated.pickupTime,
+        routePlan: { id: updated.routePlan.id },
+      },
     };
   } catch (error) {
-    throw new Error(
-      `Failed to adjust pickup time: ${errorMessage(error)}`
-    );
-  }
-}
-
-/**
- * Swap two employees between vehicles
- */
-export async function swapEmployees(
-  tripAssignmentId1: string,
-  tripAssignmentId2: string,
-  reason?: string
-) {
-  try {
-    const session = await requireRole([Role.FACILITIES, Role.SUPER_ADMIN]);
-
-    const assignment1 = await prisma.tripAssignment.findUniqueOrThrow({
-      where: { id: tripAssignmentId1 },
-      include: { employee: true, vehicle: true, routePlan: true },
-    });
-
-    const assignment2 = await prisma.tripAssignment.findUniqueOrThrow({
-      where: { id: tripAssignmentId2 },
-      include: { employee: true, vehicle: true, routePlan: true },
-    });
-
-    // Can only swap within same route
-    if (assignment1.routePlanId !== assignment2.routePlanId) {
-      throw new Error("Can only swap employees within the same route");
-    }
-
-    const beforeState = {
-      emp1: { vehicleId: assignment1.vehicleId, time: assignment1.pickupTime },
-      emp2: { vehicleId: assignment2.vehicleId, time: assignment2.pickupTime },
-    };
-
-    const afterState = {
-      emp1: { vehicleId: assignment2.vehicleId, time: assignment2.pickupTime },
-      emp2: { vehicleId: assignment1.vehicleId, time: assignment1.pickupTime },
-    };
-
-    await prisma.routePlanOverride.create({
-      data: {
-        routePlanId: assignment1.routePlanId,
-        changedById: session.id,
-        changeType: "EMPLOYEE_SWAP",
-        beforeState: JSON.stringify(beforeState),
-        afterState: JSON.stringify(afterState),
-        reason,
-      },
-    });
-
-    // Swap
-    await prisma.tripAssignment.updateMany({
-      where: {
-        id: { in: [tripAssignmentId1, tripAssignmentId2] },
-      },
-      data: {
-        manuallyOverridden: true,
-        emailSentAt: null,
-      },
-    });
-
-    await prisma.tripAssignment.update({
-      where: { id: tripAssignmentId1 },
-      data: {
-        vehicleId: assignment2.vehicleId,
-        pickupTime: assignment2.pickupTime,
-      },
-    });
-
-    await prisma.tripAssignment.update({
-      where: { id: tripAssignmentId2 },
-      data: {
-        vehicleId: assignment1.vehicleId,
-        pickupTime: assignment1.pickupTime,
-      },
-    });
-
-    revalidatePath("/facilities/route-planning");
-
-    return {
-      success: true,
-      message: `${assignment1.employee.fullName} and ${assignment2.employee.fullName} swapped vehicles`,
-    };
-  } catch (error) {
-    throw new Error(
-      `Failed to swap employees: ${errorMessage(error)}`
+    throwSanitizedError(
+      "adjustPickupTime",
+      error,
+      "Failed to adjust pickup time."
     );
   }
 }
@@ -316,9 +139,9 @@ export async function swapEmployees(
  * Finalize a route and send emails to employees
  */
 export async function finalizeRoute(routePlanId: string) {
-  try {
-    await requireRole([Role.FACILITIES, Role.SUPER_ADMIN]);
+  await requireRole([Role.FACILITIES, Role.SUPER_ADMIN]);
 
+  try {
     const routePlan = await prisma.routePlan.findUniqueOrThrow({
       where: { id: routePlanId },
       include: {
@@ -371,16 +194,17 @@ export async function finalizeRoute(routePlanId: string) {
 
     // Send emails in background after response
     after(async () => {
-      const results = await Promise.allSettled(
-        routePlan.tripAssignments.map((assignment) => {
+      const results = await Promise.all(
+        routePlan.tripAssignments.map(async (assignment) => {
           const pickupLocation =
             assignment.pickupType === "PRESET_POINT" && assignment.pickupPoint
               ? assignment.pickupPoint.address?.addressText || "Pickup Point"
               : assignment.pickupAddress?.addressText || "Home Address";
 
-          return sendMailBackground({
+          const subject = `Your transport has been arranged - ${routePlan.arrivalTime}`;
+          const result = await trySendMail({
             to: assignment.employee.email,
-            subject: `Your transport has been arranged - ${routePlan.arrivalTime}`,
+            subject,
             body: `Hi ${assignment.employee.fullName},
 
 Your transport for ${routePlan.dayDate.toDateString()} has been arranged:
@@ -388,7 +212,7 @@ Your transport for ${routePlan.dayDate.toDateString()} has been arranged:
 Arrival Time: ${routePlan.arrivalTime}
 Pickup Time: ${assignment.pickupTime}
 Pickup Location: ${pickupLocation}
-Vehicle: ${routePlan.vehicle.vehicleNumber} (${routePlan.vehicle.vehicleType})
+Vehicle: ${escapeHtml(routePlan.vehicle.vehicleNumber)} (${escapeHtml(routePlan.vehicle.vehicleType)})
 Driver: ${routePlan.vehicle.driverName || "TBD"}
 Driver Contact: ${routePlan.vehicle.driverContact || "N/A"}
 
@@ -399,32 +223,32 @@ Facilities Team`,
             html: `
               <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
                 <h2 style="color: #1a1a2e;">Your Transport Has Been Arranged</h2>
-                <p>Hi <strong>${assignment.employee.fullName}</strong>,</p>
+                <p>Hi <strong>${escapeHtml(assignment.employee.fullName)}</strong>,</p>
                 <p>Your transport for <strong>${routePlan.dayDate.toDateString()}</strong> has been arranged with the following details:</p>
                 <table style="width: 100%; border-collapse: collapse; margin: 16px 0;">
                   <tr style="background: #f8f9fa;">
                     <td style="padding: 10px; border: 1px solid #dee2e6; font-weight: bold;">Arrival Time</td>
-                    <td style="padding: 10px; border: 1px solid #dee2e6;">${routePlan.arrivalTime}</td>
+                    <td style="padding: 10px; border: 1px solid #dee2e6;">${escapeHtml(routePlan.arrivalTime)}</td>
                   </tr>
                   <tr>
                     <td style="padding: 10px; border: 1px solid #dee2e6; font-weight: bold;">Pickup Time</td>
-                    <td style="padding: 10px; border: 1px solid #dee2e6;">${assignment.pickupTime}</td>
+                    <td style="padding: 10px; border: 1px solid #dee2e6;">${escapeHtml(assignment.pickupTime)}</td>
                   </tr>
                   <tr style="background: #f8f9fa;">
                     <td style="padding: 10px; border: 1px solid #dee2e6; font-weight: bold;">Pickup Location</td>
-                    <td style="padding: 10px; border: 1px solid #dee2e6;">${pickupLocation}</td>
+                    <td style="padding: 10px; border: 1px solid #dee2e6;">${escapeHtml(pickupLocation)}</td>
                   </tr>
                   <tr>
                     <td style="padding: 10px; border: 1px solid #dee2e6; font-weight: bold;">Vehicle</td>
-                    <td style="padding: 10px; border: 1px solid #dee2e6;">${routePlan.vehicle.vehicleNumber} (${routePlan.vehicle.vehicleType})</td>
+                    <td style="padding: 10px; border: 1px solid #dee2e6;">${escapeHtml(routePlan.vehicle.vehicleNumber)} (${escapeHtml(routePlan.vehicle.vehicleType)})</td>
                   </tr>
                   <tr style="background: #f8f9fa;">
                     <td style="padding: 10px; border: 1px solid #dee2e6; font-weight: bold;">Driver</td>
-                    <td style="padding: 10px; border: 1px solid #dee2e6;">${routePlan.vehicle.driverName || "TBD"}</td>
+                    <td style="padding: 10px; border: 1px solid #dee2e6;">${escapeHtml(routePlan.vehicle.driverName || "TBD")}</td>
                   </tr>
                   <tr>
                     <td style="padding: 10px; border: 1px solid #dee2e6; font-weight: bold;">Driver Contact</td>
-                    <td style="padding: 10px; border: 1px solid #dee2e6;">${routePlan.vehicle.driverContact || "N/A"}</td>
+                    <td style="padding: 10px; border: 1px solid #dee2e6;">${escapeHtml(routePlan.vehicle.driverContact || "N/A")}</td>
                   </tr>
                 </table>
                 <p>Please be ready at the pickup location at the scheduled time.</p>
@@ -432,16 +256,39 @@ Facilities Team`,
               </div>
             `,
           });
+          return {
+            assignmentId: assignment.id,
+            recipient: assignment.employee.email,
+            recipientName: assignment.employee.fullName,
+            subject,
+            ...result,
+          };
         })
       );
 
-      const sentCount = results.filter((r) => r.status === "fulfilled").length;
-      if (sentCount > 0) {
+      const sentIds = results
+        .filter((result) => result.status === "SENT")
+        .map((result) => result.assignmentId);
+      if (sentIds.length > 0) {
         await prisma.tripAssignment.updateMany({
-          where: { routePlanId },
+          where: { id: { in: sentIds } },
           data: { emailSentAt: new Date() },
         });
       }
+      if (results.length > 0) {
+        await prisma.emailNotificationLog.createMany({
+          data: results.map((result) => ({
+            kind: "ROUTE_PLAN_FINALIZE",
+            recipient: result.recipient,
+            recipientName: result.recipientName,
+            subject: result.subject,
+            status: result.status,
+            error: result.error ?? null,
+            routeAssignmentId: result.assignmentId,
+          })),
+        });
+      }
+      const sentCount = sentIds.length;
       console.log(
         `[MAILER] Finalized route ${routePlanId}: ${sentCount}/${routePlan.tripAssignments.length} emails sent`
       );
@@ -455,89 +302,7 @@ Facilities Team`,
       route: updated,
     };
   } catch (error) {
-    throw new Error(
-      `Failed to finalize route: ${errorMessage(error)}`
-    );
-  }
-}
-
-/**
- * Reject/cancel a draft route
- */
-export async function cancelRoute(routePlanId: string, reason?: string) {
-  try {
-    await requireRole([Role.FACILITIES, Role.SUPER_ADMIN]);
-    void reason;
-
-    const routePlan = await prisma.routePlan.findUniqueOrThrow({
-      where: { id: routePlanId },
-      include: { vehicle: { select: { vehicleNumber: true } } },
-    });
-
-    if (routePlan.status !== "DRAFT" && routePlan.status !== "UNDER_REVIEW") {
-      throw new Error(
-        `Cannot cancel route with status ${routePlan.status}. Only DRAFT or UNDER_REVIEW routes can be cancelled.`
-      );
-    }
-
-    // Delete all trip assignments for this route
-    await prisma.tripAssignment.deleteMany({
-      where: { routePlanId },
-    });
-
-    // Delete the route plan
-    await prisma.routePlan.delete({
-      where: { id: routePlanId },
-    });
-
-    revalidatePath("/facilities/route-planning");
-
-    return {
-      success: true,
-      message: `Route cancelled: ${routePlan.vehicle.vehicleNumber || routePlan.id}`,
-    };
-  } catch (error) {
-    throw new Error(
-      `Failed to cancel route: ${errorMessage(error)}`
-    );
-  }
-}
-
-/**
- * Get route details with all assignments
- */
-export async function getRouteDetails(routePlanId: string) {
-  try {
-    await requireRole([Role.FACILITIES, Role.SUPER_ADMIN]);
-
-    const route = await prisma.routePlan.findUniqueOrThrow({
-      where: { id: routePlanId },
-      include: {
-        vehicle: true,
-        tripAssignments: {
-          include: {
-            employee: true,
-            pickupAddress: true,
-            pickupPoint: {
-              include: { address: true },
-            },
-          },
-          orderBy: { sequenceInTrip: "asc" },
-        },
-        overrides: {
-          orderBy: { createdAt: "desc" },
-        },
-        previousRoutePlan: {
-          include: { vehicle: true },
-        },
-      },
-    });
-
-    return route;
-  } catch (error) {
-    throw new Error(
-      `Failed to fetch route details: ${errorMessage(error)}`
-    );
+    throwSanitizedError("finalizeRoute", error, "Failed to finalize route.");
   }
 }
 
@@ -910,8 +675,9 @@ export async function reorderRouteTrips(
   routePlanId: string,
   orderedTripIds: string[]
 ): Promise<{ success: boolean; message?: string; error?: string }> {
+  const session = await requireRole([Role.FACILITIES, Role.SUPER_ADMIN]);
+
   try {
-    const session = await requireRole([Role.FACILITIES, Role.SUPER_ADMIN]);
     const plan = await prisma.routePlan.findUnique({
       where: { id: routePlanId },
       include: {
@@ -1039,7 +805,11 @@ export async function reorderRouteTrips(
   } catch (error) {
     return {
       success: false,
-      error: errorMessage(error) || "Failed to reorder the route rows.",
+      error: sanitizedActionMessage(
+        "reorderRouteTrips",
+        error,
+        "Failed to reorder the route rows."
+      ),
     };
   }
 }
@@ -1055,9 +825,9 @@ export async function moveTripToRoute(
   targetRoutePlanId: string,
   options?: { insertBeforeTripId?: string }
 ): Promise<{ success: boolean; message?: string; error?: string }> {
-  try {
-    const session = await requireRole([Role.FACILITIES, Role.SUPER_ADMIN]);
+  const session = await requireRole([Role.FACILITIES, Role.SUPER_ADMIN]);
 
+  try {
     // Load the trip with BOTH routes' full assignment lists (incl. pickup
     // geometry) up front so we can validate AND pre-compute every re-time
     // before writing a single row.
@@ -1262,7 +1032,11 @@ export async function moveTripToRoute(
   } catch (error) {
     return {
       success: false,
-      error: errorMessage(error) || "Failed to move the employee.",
+      error: sanitizedActionMessage(
+        "moveTripToRoute",
+        error,
+        "Failed to move the employee."
+      ),
     };
   }
 }
@@ -1281,9 +1055,9 @@ export async function moveTripToUnusedVehicle(
   targetVehicleId: string
 ): Promise<{ success: boolean; message?: string; error?: string }> {
   let targetRoutePlanId: string | null = null;
-  try {
-    const session = await requireRole([Role.FACILITIES, Role.SUPER_ADMIN]);
+  const session = await requireRole([Role.FACILITIES, Role.SUPER_ADMIN]);
 
+  try {
     // NOTE: RoutePlan has NO `vehicleShiftAssignment` relation — the pin is
     // fetched separately below (prisma.vehicleShiftAssignment.findFirst keyed
     // on vehicleId + week), so it must NOT appear in this include.
@@ -1392,7 +1166,11 @@ export async function moveTripToUnusedVehicle(
     }
     return {
       success: false,
-      error: errorMessage(error) || "Failed to move the employee.",
+      error: sanitizedActionMessage(
+        "moveTripToUnusedVehicle",
+        error,
+        "Failed to move the employee."
+      ),
     };
   }
 }

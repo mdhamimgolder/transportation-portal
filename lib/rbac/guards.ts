@@ -18,10 +18,16 @@ export async function requireAuth(): Promise<SessionUser> {
 /**
  * Requires an authenticated session AND that its role is in `allowedRoles`.
  * Redirects to /403 if the role doesn't match -- this is the authoritative,
- * DB-backed check that runs alongside the faster JWT-only check in middleware.ts.
+ * DB-backed check that runs alongside the faster JWT-only check in proxy.ts.
  */
 export async function requireRole(allowedRoles: Role[]): Promise<SessionUser> {
   const session = await requireAuth();
+  // A temporary password must be replaced before ANY role capability is
+  // used. The proxy enforces this for page navigation; this covers Server
+  // Actions, which can be POSTed from any path.
+  if (session.mustChangePassword) {
+    redirect("/force-change-password");
+  }
   if (!allowedRoles.includes(session.role)) {
     redirect("/403");
   }

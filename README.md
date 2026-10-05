@@ -27,7 +27,7 @@ npm run dev                      # http://localhost:3000
 | `npm run start` | Serve the production build |
 | `npm run typecheck` | `tsc --noEmit` over the whole repo |
 | `npm run lint` / `lint:fix` | ESLint (next/core-web-vitals + TS) |
-| `npm run verify` | `typecheck` + `lint` — the gate before a commit |
+| `npm run verify` | `typecheck` + `lint` + unit tests — the gate before a commit |
 | `npm run db:migrate` / `db:deploy` | Prisma migrate (dev / production) |
 | `npm run db:studio` / `db:generate` | Prisma Studio / regenerate the client |
 | `npm run clean` | Delete `.next` |
@@ -54,7 +54,7 @@ proxy.ts        Edge middleware: JWT-only route/role gate (Next 16 naming)
 | `docs/RUNBOOK.md` | Local setup, env vars, migrations, deploy, restart/troubleshooting |
 | `docs/CONTRIBUTING.md` | How to add a feature the way the codebase expects |
 | `AGENTS.md` | Rules for AI agents working in this repo |
-| `CLAUDE.md` | Original product spec (business rules, role matrix) |
+| `CLAUDE.md` | Active project instructions, business decisions, and coding conventions |
 | `SESSION_MEMORY.md` | Live session log — current state, decisions, open threads |
 | `docs/archive/` | Historical docs from the retired FastAPI/Vite scaffold |
 

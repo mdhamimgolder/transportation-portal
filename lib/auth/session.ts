@@ -1,6 +1,7 @@
 import "server-only";
 import { cache } from "react";
 import { cookies } from "next/headers";
+import { after } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { withDbRetry } from "@/lib/db/retry";
 import { env } from "@/lib/env";
@@ -51,7 +52,11 @@ export async function createSession(user: UserForSession): Promise<void> {
     },
   });
 
-  void deleteExpiredSessions();
+  // Housekeeping runs after the response so login never waits on it (and the
+  // work isn't dropped when a serverless instance freezes).
+  after(async () => {
+    await deleteExpiredSessions().catch(() => undefined);
+  });
 
   const token = await signSessionToken({
     sub: user.id,
@@ -98,7 +103,18 @@ export const getSession = cache(
     const session = await withDbRetry("session", () =>
       prisma.session.findUnique({
         where: { sessionToken: payload.jti },
-        include: { user: true },
+        include: {
+          user: {
+            select: {
+              id: true,
+              email: true,
+              fullName: true,
+              role: true,
+              mustChangePassword: true,
+              isActive: true,
+            },
+          },
+        },
       })
     );
 
@@ -131,6 +147,30 @@ export async function destroySession(): Promise<void> {
   }
 
   cookieStore.delete(SESSION_COOKIE_NAME);
+}
+
+/**
+ * Revokes every session a user holds — call after any credential, role, or
+ * activation change so a stolen or stale session can't outlive the change.
+ * `exceptCurrent` keeps the caller's own session (self password change).
+ */
+export async function revokeUserSessions(
+  userId: string,
+  options: { exceptCurrent?: boolean } = {}
+): Promise<void> {
+  let keepJti: string | undefined;
+  if (options.exceptCurrent) {
+    const cookieStore = await cookies();
+    const token = cookieStore.get(SESSION_COOKIE_NAME)?.value;
+    const payload = token ? await verifySessionToken(token) : null;
+    keepJti = payload?.jti;
+  }
+  await prisma.session.deleteMany({
+    where: {
+      userId,
+      ...(keepJti ? { sessionToken: { not: keepJti } } : {}),
+    },
+  });
 }
 
 /**

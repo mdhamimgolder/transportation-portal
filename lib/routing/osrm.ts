@@ -12,9 +12,13 @@
  * for production-grade performance and coverage.
  */
 
+import "server-only";
 import { prisma } from "@/lib/prisma";
 import { env } from "@/lib/env";
+import { logger } from "@/lib/logger";
+import { buildMatrixBatches } from "./matrix-core";
 import {
+  bearingDegrees,
   haversineDistance,
   waypointBearingParam,
   bearingsParam,
@@ -99,35 +103,48 @@ export class OsrmError extends Error {
 export { parseNoSegmentIndex };
 
 const MIN_REQUEST_GAP_MS = 350; // public demo server is rate-limited
-// A custom OSRM_SERVER_URL points at a self-hosted instance — no public rate
-// limit applies, so the inter-request gap is skipped and independent requests
-// run with bounded concurrency (generation gets several times faster). The
-// default public demo server keeps the throttled, strictly-spaced behavior.
-// Read lazily so importing this module never validates env.
-function throttleRequests(): boolean {
-  return !process.env.OSRM_SERVER_URL;
-}
-let lastRequestAt = 0;
+const REQUEST_TIMEOUT_MS = 10_000; // a hung socket must never stall RUN MAPPING
+const MAX_ATTEMPTS = 4;
+const PUBLIC_OSRM_HOST = "router.project-osrm.org";
 
-/** Great-circle bearing (degrees clockwise from north) from a → b. Local copy
- * used to build per-waypoint heading lists for the OSRM bearings param. */
-function bearingDegLocal(
-  a: { lat: number; lng: number },
-  b: { lat: number; lng: number }
-): number {
-  const toRad = (x: number) => (x * Math.PI) / 180;
-  const toDeg = (x: number) => (x * 180) / Math.PI;
-  const y = Math.sin(toRad(b.lng - a.lng)) * Math.cos(toRad(b.lat));
-  const x =
-    Math.cos(toRad(a.lat)) * Math.sin(toRad(b.lat)) -
-    Math.sin(toRad(a.lat)) *
-      Math.cos(toRad(b.lat)) *
-      Math.cos(toRad(b.lng - a.lng));
-  return (toDeg(Math.atan2(y, x)) + 360) % 360;
+/**
+ * The public demo server is rate-limited, so requests to it are spaced
+ * MIN_REQUEST_GAP_MS apart. Decided by HOSTNAME, not by whether the env var is
+ * set — `.env.example` sets OSRM_SERVER_URL to the public server, and that
+ * must still be throttled. A self-hosted instance runs unthrottled.
+ */
+function throttleRequests(): boolean {
+  try {
+    return new URL(osrmBase()).hostname === PUBLIC_OSRM_HOST;
+  } catch {
+    return true;
+  }
+}
+
+let lastRequestAt = 0;
+// Promise-chain mutex: concurrent callers queue for a slot instead of all
+// reading the same `lastRequestAt` and firing together.
+let throttleChain: Promise<void> = Promise.resolve();
+
+function acquireRequestSlot(): Promise<void> {
+  const slot = throttleChain.then(async () => {
+    const sinceLast = Date.now() - lastRequestAt;
+    if (sinceLast < MIN_REQUEST_GAP_MS) {
+      await sleep(MIN_REQUEST_GAP_MS - sinceLast);
+    }
+    lastRequestAt = Date.now();
+  });
+  throttleChain = slot.catch(() => undefined);
+  return slot;
 }
 
 async function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Exponential backoff with jitter: ~400ms, 800ms, 1.6s (+0-250ms). */
+function backoffMs(attempt: number): number {
+  return 400 * 2 ** (attempt - 1) + Math.floor(Math.random() * 250);
 }
 
 async function osrmFetch(
@@ -135,17 +152,35 @@ async function osrmFetch(
   attempt = 1
 ): Promise<Record<string, unknown>> {
   if (throttleRequests()) {
-    const sinceLast = Date.now() - lastRequestAt;
-    if (sinceLast < MIN_REQUEST_GAP_MS) {
-      await sleep(MIN_REQUEST_GAP_MS - sinceLast);
-    }
-    lastRequestAt = Date.now();
+    await acquireRequestSlot();
   }
 
-  const response = await fetch(`${osrmBase()}${path}`, { cache: "no-store" });
+  let response: Response;
+  try {
+    response = await fetch(`${osrmBase()}${path}`, {
+      cache: "no-store",
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+  } catch (error) {
+    // Network failure or timeout — transient, so retry with backoff.
+    if (attempt < MAX_ATTEMPTS) {
+      logger.warn("osrm", "request failed, retrying", {
+        attempt,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      await sleep(backoffMs(attempt));
+      return osrmFetch(path, attempt + 1);
+    }
+    throw new Error(
+      `OSRM request failed after ${MAX_ATTEMPTS} attempts: ${
+        error instanceof Error ? error.message : String(error)
+      }`
+    );
+  }
+
   if (!response.ok) {
-    if ((response.status === 429 || response.status >= 500) && attempt < 4) {
-      await sleep(500 * attempt);
+    if ((response.status === 429 || response.status >= 500) && attempt < MAX_ATTEMPTS) {
+      await sleep(backoffMs(attempt));
       return osrmFetch(path, attempt + 1);
     }
     // OSRM answers 400 with `{ code, message }` (NoSegment / NoRoute /
@@ -174,8 +209,8 @@ async function osrmFetch(
     return (await response.json()) as Record<string, unknown>;
   } catch {
     // Empty / non-JSON body is usually a rate-limit hiccup — retry.
-    if (attempt < 4) {
-      await sleep(500 * attempt);
+    if (attempt < MAX_ATTEMPTS) {
+      await sleep(backoffMs(attempt));
       return osrmFetch(path, attempt + 1);
     }
     throw new Error("OSRM returned an unreadable response body");
@@ -288,6 +323,13 @@ async function persistPairs(
     }
   }
   if (rows.length === 0) return;
+  // Expired rows still occupy the unique key, so `skipDuplicates` below would
+  // silently keep them and those pairs would miss the cache forever. Sweep
+  // expired rows first (indexed on expiresAt) — this doubles as the cache
+  // cleanup job.
+  await prisma.distanceMatrixCache.deleteMany({
+    where: { provider: CACHE_PROVIDER, expiresAt: { lte: now } },
+  });
   // Batched instead of one upsert per pair (N×M round-trips). persistPairs
   // only runs for pairs that were MISSING from the cache, so they are inserts;
   // duplicates inside one batch (two riders sharing an address) carry the same
@@ -332,43 +374,54 @@ export async function getDistanceMatrix(
 
   const hasMissing = rows.some((row) => row.some((el) => el === null));
   if (hasMissing) {
-    const coords = [...origins, ...destinations]
-      .map((l) => `${l.lng},${l.lat}`)
-      .join(";");
-    const sources = origins.map((_, i) => i).join(";");
-    const destinationsIdx = destinations
-      .map((_, i) => origins.length + i)
-      .join(";");
-    const url = `/table/v1/driving/${coords}?annotations=distance,duration&sources=${sources}&destinations=${destinationsIdx}`;
-    const data = (await osrmFetch(url)) as {
-      code?: string;
-      durations?: (number | null)[][];
-      distances?: (number | null)[][];
-    };
+    for (const batch of buildMatrixBatches(origins, destinations)) {
+      const needsBatch = batch.origins.some((_, rowIndex) =>
+        batch.destinations.some(
+          (_, columnIndex) =>
+            rows[batch.originOffset + rowIndex][batch.destinationOffset + columnIndex] === null
+        )
+      );
+      if (!needsBatch) continue;
 
-    if (!data.durations || !data.distances) {
-      throw new Error(`OSRM table returned no matrix (code: ${data.code ?? "unknown"})`);
-    }
+      const coords = batch.coordinates
+        .map((location) => `${location.lng},${location.lat}`)
+        .join(";");
+      const url = `/table/v1/driving/${coords}?annotations=distance,duration&sources=${batch.sourceIndices.join(";")}&destinations=${batch.destinationIndices.join(";")}`;
+      const data = (await osrmFetch(url)) as {
+        code?: string;
+        durations?: (number | null)[][];
+        distances?: (number | null)[][];
+      };
 
-    for (let i = 0; i < origins.length; i++) {
-      for (let j = 0; j < destinations.length; j++) {
-        if (rows[i][j] !== null) continue;
-        const durationSec = data.durations?.[i]?.[j];
-        const distanceMeters = data.distances?.[i]?.[j];
-        if (durationSec == null || distanceMeters == null) {
-          rows[i][j] = fallbackElement(origins[i], destinations[j]);
-        } else {
-          rows[i][j] = {
-            distance: {
-              value: Math.round(distanceMeters),
-              text: formatKm(distanceMeters),
-            },
-            duration: {
-              value: Math.round(durationSec),
-              text: formatMin(durationSec),
-            },
-            status: "OK",
-          };
+      if (!data.durations || !data.distances) {
+        throw new Error(`OSRM table returned no matrix (code: ${data.code ?? "unknown"})`);
+      }
+
+      for (let i = 0; i < batch.origins.length; i++) {
+        for (let j = 0; j < batch.destinations.length; j++) {
+          const originIndex = batch.originOffset + i;
+          const destinationIndex = batch.destinationOffset + j;
+          if (rows[originIndex][destinationIndex] !== null) continue;
+          const durationSec = data.durations[batch.sourceIndices[i]]?.[batch.destinationIndices[j]];
+          const distanceMeters = data.distances[batch.sourceIndices[i]]?.[batch.destinationIndices[j]];
+          if (durationSec == null || distanceMeters == null) {
+            rows[originIndex][destinationIndex] = fallbackElement(
+              origins[originIndex],
+              destinations[destinationIndex]
+            );
+          } else {
+            rows[originIndex][destinationIndex] = {
+              distance: {
+                value: Math.round(distanceMeters),
+                text: formatKm(distanceMeters),
+              },
+              duration: {
+                value: Math.round(durationSec),
+                text: formatMin(durationSec),
+              },
+              status: "OK",
+            };
+          }
         }
       }
     }
@@ -384,186 +437,120 @@ export async function getDistanceMatrix(
   };
 }
 
-function findLocationIndex(locations: Location[], lng: number, lat: number): number {
-  for (let i = 0; i < locations.length; i++) {
-    if (
-      Math.abs(locations[i].lng - lng) < 1e-6 &&
-      Math.abs(locations[i].lat - lat) < 1e-6
-    ) {
-      return i;
-    }
-  }
-  return -1;
-}
-
-export interface OptimizedRoute {
-  route: number[];
-  totalDistance: number;
-  totalDuration: number;
-  /** Travel time (minutes) for each consecutive leg in `route` order. */
-  legDurationsMinutes: number[];
-}
-
-/**
- * Fallback ordering when OSRM /trip is unavailable: nearest-neighbour over
- * great-circle distances. Never throws.
- */
-function nearestNeighborOrder(locations: Location[], startIndex: number): OptimizedRoute {
-  const visited = new Set<number>([startIndex]);
-  const route = [startIndex];
-  const legDurationsMinutes: number[] = [];
-  let current = startIndex;
-  let totalKm = 0;
-  let totalMin = 0;
-
-  while (visited.size < locations.length) {
-    let nearest = -1;
-    let nearestKm = Infinity;
-    for (let i = 0; i < locations.length; i++) {
-      if (visited.has(i)) continue;
-      const km = haversineDistance(
-        locations[current].lat,
-        locations[current].lng,
-        locations[i].lat,
-        locations[i].lng
-      );
-      if (km < nearestKm) {
-        nearestKm = km;
-        nearest = i;
-      }
-    }
-    if (nearest === -1) break;
-    route.push(nearest);
-    const legMin = (nearestKm / 25) * 60;
-    legDurationsMinutes.push(legMin);
-    totalKm += nearestKm;
-    totalMin += legMin;
-    visited.add(nearest);
-    current = nearest;
-  }
-
-  return { route, totalDistance: totalKm, totalDuration: totalMin, legDurationsMinutes };
-}
-
-/**
- * Solve a TSP-style pickup order starting at `startIndex` (defaults to index 0,
- * the office). Uses the OSRM /trip endpoint; falls back to great-circle
- * nearest-neighbour ordering if the trip call fails or returns unmappable
- * waypoints.
- */
-export async function optimizeRoute(
-  locations: Location[],
-  startIndex: number = 0,
-  initialBearingDeg?: number | null
-): Promise<OptimizedRoute> {
-  if (locations.length < 2) {
-    return {
-      route: [startIndex],
-      totalDistance: 0,
-      totalDuration: 0,
-      legDurationsMinutes: [],
-    };
-  }
-
-  try {
-    const coords = locations.map((l) => `${l.lng},${l.lat}`).join(";");
-    // NOTE: /trip reorders the stops, so per-waypoint "toward the next stop"
-    // headings cannot be known at request time — only the vehicle's START
-    // heading (toward the caller-provided destination / next point) is
-    // constrained, keeping the wrong-carriageway exclusion at the start.
-    const headings = locations.map((l, i) => {
-      if (i === 0) {
-        if (initialBearingDeg != null) return initialBearingDeg;
-        const next = locations[1];
-        if (
-          !next ||
-          (Math.abs(l.lat - next.lat) < 1e-9 &&
-            Math.abs(l.lng - next.lng) < 1e-9)
-        ) {
-          return null;
-        }
-        return bearingDegLocal(l, next);
-      }
-      return null;
-    });
-    const bearings = waypointBearingParam(headings, INITIAL_BEARING_RANGE);
-    const url = `/trip/v1/driving/${coords}?roundtrip=true&source=first&destination=last&annotations=distance,duration&overview=simplified${bearings ? `&bearings=${bearings}` : ""}`;
-    const data = (await osrmFetch(url)) as {
-      code?: string;
-      trips?: Array<{
-        distance?: number;
-        duration?: number;
-        legs?: Array<{ duration?: number }>;
-      }>;
-      waypoints?: Array<{
-        trips_index?: number;
-        waypoint_index?: number;
-        location?: [number, number];
-      }>;
-    };
-
-    const firstTrip = Array.isArray(data.trips) ? data.trips[0] : undefined;
-    if (data.code !== "Ok" || !firstTrip) {
-      throw new Error(`OSRM trip returned code ${data.code ?? "unknown"}`);
-    }
-
-    const waypoints = (data.waypoints ?? [])
-      .filter((w) => w.trips_index === 0)
-      .sort((a, b) => (a.waypoint_index ?? 0) - (b.waypoint_index ?? 0));
-
-    const route = waypoints.map((w) =>
-      w.location
-        ? findLocationIndex(locations, w.location[0], w.location[1])
-        : -1
-    );
-
-    if (route.some((idx) => idx === -1)) {
-      throw new Error("Unable to map trip waypoints back to input locations");
-    }
-
-    // Rotate so the trip starts at the requested start location (office).
-    const startPos = route.indexOf(startIndex);
-    const ordered =
-      startPos > 0
-        ? [...route.slice(startPos), ...route.slice(0, startPos)]
-        : route;
-
-    // Legs in the same order as `ordered`. A closed loop has one leg per
-    // waypoint (leg i runs waypoint[i] -> waypoint[(i+1) mod N]); an open
-    // chain has N-1 legs (leg j runs route[j] -> route[j+1]).
-    const legDurations = (firstTrip.legs ?? []).map((leg) =>
-      leg.duration != null ? leg.duration / 60 : 0
-    );
-    let rotatedLegs = legDurations;
-    if (startPos > 0) {
-      if (legDurations.length === ordered.length) {
-        rotatedLegs = [
-          ...legDurations.slice(startPos),
-          ...legDurations.slice(0, startPos),
-        ];
-      } else {
-        rotatedLegs = legDurations.slice(startPos);
-      }
-    }
-
-    return {
-      route: ordered,
-      totalDistance: (firstTrip.distance ?? 0) / 1000,
-      totalDuration: (firstTrip.duration ?? 0) / 60,
-      legDurationsMinutes: rotatedLegs,
-    };
-  } catch {
-    return nearestNeighborOrder(locations, startIndex);
-  }
-}
-
 /** In-memory cache of decoded driving polylines per leg (per process). */
 const polylineCache = new Map<string, Array<{ lat: number; lng: number }>>();
+/** Upper bound on cached legs so a long-lived process can't grow unbounded. */
+const POLYLINE_CACHE_MAX = 20_000;
+
+function rememberPolyline(key: string, points: Array<{ lat: number; lng: number }>): void {
+  if (polylineCache.size >= POLYLINE_CACHE_MAX) {
+    // Map iterates in insertion order — drop the oldest entry.
+    const oldest = polylineCache.keys().next().value;
+    if (oldest !== undefined) polylineCache.delete(oldest);
+  }
+  polylineCache.set(key, points);
+}
 /** In-flight polyline fetches — identical concurrent requests share one call. */
 const polylineInFlight = new Map<
   string,
   Promise<Array<{ lat: number; lng: number }>>
 >();
+
+export type RoadPath = {
+  line: [number, number][];
+  totalKm: number;
+  totalMin: number;
+  legMinutes: number[];
+};
+
+const routePathCache = new Map<string, RoadPath>();
+const ROUTE_PATH_CACHE_MAX = 500;
+
+/** Server-side multi-waypoint route lookup shared by map clients. */
+export async function getRoadPath(
+  points: Location[],
+  options: { constrainBearings?: boolean; overview?: "full" | "simplified" } = {}
+): Promise<RoadPath | null> {
+  if (points.length < 2 || points.length > 100) return null;
+
+  const overview = options.overview ?? "full";
+  const headings = points.map((point, index) => {
+    const next = points[index + 1];
+    if (!options.constrainBearings || !next) return null;
+    if (point.lat === next.lat && point.lng === next.lng) return null;
+    return bearingDegrees(point, next);
+  });
+  const bearings = options.constrainBearings
+    ? waypointBearingParam(headings, 45)
+    : "";
+  const cacheKey = JSON.stringify([
+    overview,
+    bearings,
+    points.map(({ lat, lng }) => [lat, lng]),
+  ]);
+  const cached = routePathCache.get(cacheKey);
+  if (cached) return cached;
+
+  const coordinates = points
+    .map((point) => `${point.lng.toFixed(6)},${point.lat.toFixed(6)}`)
+    .join(";");
+  const query = new URLSearchParams({
+    overview,
+    geometries: "geojson",
+    alternatives: "false",
+    steps: "false",
+    continue_straight: "true",
+  });
+  if (bearings) query.set("bearings", bearings);
+
+  try {
+    const data = (await osrmFetch(
+      `/route/v1/driving/${coordinates}?${query.toString()}`
+    )) as {
+      code?: string;
+      routes?: Array<{
+        distance?: number;
+        duration?: number;
+        geometry?: { coordinates?: number[][] };
+        legs?: Array<{ duration?: number }>;
+      }>;
+    };
+    const route = data.routes?.[0];
+    const coordinatesOut = route?.geometry?.coordinates;
+    if (
+      data.code !== "Ok" ||
+      !route ||
+      !Array.isArray(coordinatesOut) ||
+      coordinatesOut.length < 2 ||
+      !Number.isFinite(route.distance) ||
+      !Number.isFinite(route.duration)
+    ) {
+      return null;
+    }
+
+    const result: RoadPath = {
+      line: coordinatesOut
+        .filter((coordinate) =>
+          Number.isFinite(coordinate[0]) && Number.isFinite(coordinate[1])
+        )
+        .map((coordinate) => [coordinate[1], coordinate[0]]),
+      totalKm: route.distance! / 1000,
+      totalMin: route.duration! / 60,
+      legMinutes: (route.legs ?? []).map((leg) =>
+        Math.max(1, Math.round((leg.duration ?? 0) / 60))
+      ),
+    };
+    if (result.line.length < 2) return null;
+    if (routePathCache.size >= ROUTE_PATH_CACHE_MAX) {
+      const oldestKey = routePathCache.keys().next().value;
+      if (oldestKey !== undefined) routePathCache.delete(oldestKey);
+    }
+    routePathCache.set(cacheKey, result);
+    return result;
+  } catch {
+    return null;
+  }
+}
 
 /** Decode a persisted geometry JSON value into [{ lat, lng }] points. Accepts
  * both the current convention (`[[lat, lng], ...]`) and the legacy object
@@ -678,10 +665,10 @@ export async function warmPolylineCache(keys: PolylineWarmKey[]): Promise<void> 
       [k.initialBearingDeg ?? null, null],
       range
     );
-    const memKey = `${k.from.lat.toFixed(6)},${k.from.lng.toFixed(6)}|${k.to.lat.toFixed(6)},${k.to.lng.toFixed(6)}|${bearings}`;
+    const memKey = polylineMemKey(k.from, k.to, bearings);
     if (polylineCache.has(memKey)) continue;
     const points = byPair.get(`${k.from.lat},${k.from.lng}|${k.to.lat},${k.to.lng}`);
-    if (points) polylineCache.set(memKey, points);
+    if (points) rememberPolyline(memKey, points);
   }
 }
 
@@ -716,6 +703,43 @@ function persistPolyline(
       },
     })
     .catch(() => undefined);
+}
+
+const PREFETCH_CONCURRENCY = 8;
+
+/**
+ * Fetches every polyline in `keys` that is not yet in the in-memory cache,
+ * with bounded concurrency. Only runs against a self-hosted (unthrottled)
+ * OSRM; on the public demo server it returns immediately so legs keep being
+ * fetched lazily and spaced out. Failures are ignored — callers fall back
+ * per leg.
+ */
+export async function prefetchRoutePolylines(keys: PolylineWarmKey[]): Promise<void> {
+  if (throttleRequests()) return;
+  const pending = keys.filter((k) => {
+    const bearings = waypointBearingParam(
+      [k.initialBearingDeg ?? null, null],
+      k.bearingRangeDeg ?? INITIAL_BEARING_RANGE
+    );
+    return !polylineCache.has(polylineMemKey(k.from, k.to, bearings));
+  });
+  let next = 0;
+  const worker = async () => {
+    while (next < pending.length) {
+      const key = pending[next++];
+      await getRoutePolyline(key.from, key.to, {
+        initialBearingDeg: key.initialBearingDeg ?? null,
+        bearingRangeDeg: key.bearingRangeDeg,
+      }).catch(() => undefined);
+    }
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(PREFETCH_CONCURRENCY, pending.length) }, worker)
+  );
+}
+
+function polylineMemKey(from: Location, to: Location, bearings: string): string {
+  return `${from.lat.toFixed(6)},${from.lng.toFixed(6)}|${to.lat.toFixed(6)},${to.lng.toFixed(6)}|${bearings}`;
 }
 
 /**
@@ -758,19 +782,24 @@ export async function getRoutePolyline(
   const initialBearing = options?.initialBearingDeg ?? null;
   const range = options?.bearingRangeDeg ?? INITIAL_BEARING_RANGE;
   const bearings = waypointBearingParam([initialBearing, null], range);
-  const key = `${from.lat.toFixed(6)},${from.lng.toFixed(6)}|${to.lat.toFixed(6)},${to.lng.toFixed(6)}|${bearings}`;
+  const key = polylineMemKey(from, to, bearings);
   const hit = polylineCache.get(key);
   if (hit) return hit;
 
   const inFlight = polylineInFlight.get(key);
   if (inFlight) return inFlight;
 
+  // The persisted cache is keyed by endpoints only. That is consistent
+  // because the planner always derives the initial bearing from the same two
+  // endpoints (`bearingDegrees(from, to)`), so one endpoint pair maps to one
+  // geometry. A caller passing a different bearing for the same pair must not
+  // share this cache.
   const task = (async () => {
     // Persisted cache first (parity with the distance matrix): re-runs and
     // post-restart runs skip the OSRM round-trip entirely.
     const dbHit = await loadCachedPolyline(from, to);
     if (dbHit) {
-      polylineCache.set(key, dbHit);
+      rememberPolyline(key, dbHit);
       return dbHit;
     }
 
@@ -783,7 +812,7 @@ export async function getRoutePolyline(
       | undefined;
     const line = routes?.[0]?.geometry?.coordinates ?? [];
     const points = line.map(([lng, lat]) => ({ lat, lng }));
-    polylineCache.set(key, points);
+    rememberPolyline(key, points);
     if (points.length >= 2) persistPolyline(from, to, points);
     return points;
   })();
@@ -951,62 +980,4 @@ export async function getRouteDetailed(
       name: w.name ?? "",
     })),
   };
-}
-
-/**
- * Pickup times from a departure time and per-leg travel durations.
- * @param departureTime - Vehicle departure time "HH:mm"
- * @param legDurationsMinutes - Travel time of each consecutive stop in route order
- */
-export function pickupTimesFromLegs(
-  departureTime: string,
-  legDurationsMinutes: number[]
-): string[] {
-  const [hours, minutes] = departureTime.split(":").map(Number);
-  const departureMinutes = hours * 60 + minutes;
-  let cumulativeMinutes = 0;
-
-  return legDurationsMinutes.map((legMin) => {
-    cumulativeMinutes += legMin;
-    const totalMinutes = departureMinutes + cumulativeMinutes;
-    const pickupHours = Math.floor(totalMinutes / 60) % 24;
-    const pickupMins = Math.floor(totalMinutes % 60);
-    return `${String(pickupHours).padStart(2, "0")}:${String(pickupMins).padStart(2, "0")}`;
-  });
-}
-
-/**
- * Pickup times based on cumulative travel duration along an optimized route,
- * reading leg times from a *full* n×n distance matrix (rows = all locations).
- * @param route - Ordered location indices (already rotated to start with office)
- * @param distanceMatrix - Full distance matrix for all locations
- * @param departureTime - Vehicle departure time "HH:mm"
- */
-export function calculatePickupTimes(
-  route: number[],
-  distanceMatrix: DistanceMatrixResponse,
-  departureTime: string
-): string[] {
-  const [hours, minutes] = departureTime.split(":").map(Number);
-  const departureMinutes = hours * 60 + minutes;
-  const pickupTimes: string[] = [];
-  let cumulativeMinutes = 0;
-
-  for (let i = 1; i < route.length; i++) {
-    const row = distanceMatrix.rows[route[i - 1]];
-    const element = row?.elements[route[i]];
-    if (element) {
-      cumulativeMinutes += element.duration.value / 60;
-    } else {
-      cumulativeMinutes += 5; // unknown leg -- keep a small buffer
-    }
-    const totalMinutes = departureMinutes + cumulativeMinutes;
-    const pickupHours = Math.floor(totalMinutes / 60) % 24;
-    const pickupMins = Math.floor(totalMinutes % 60);
-    pickupTimes.push(
-      `${String(pickupHours).padStart(2, "0")}:${String(pickupMins).padStart(2, "0")}`
-    );
-  }
-
-  return pickupTimes;
 }

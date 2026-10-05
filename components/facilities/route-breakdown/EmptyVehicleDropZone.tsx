@@ -1,7 +1,6 @@
 "use client";
 
 import { Truck, Plus, MapPin, ArrowDown } from "lucide-react";
-import { useState } from "react";
 import { useDroppable } from "@dnd-kit/core";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
@@ -16,10 +15,7 @@ interface EmptyVehicleDropZoneProps {
 export function EmptyVehicleDropZone({
   group,
   isDragActive,
-  onDrop,
 }: EmptyVehicleDropZoneProps) {
-  const [isHovered, setIsHovered] = useState(false);
-
   const { setNodeRef } = useDroppable({
     id: `vehicle-${group.vehicleId}`,
     disabled: !isDragActive,
@@ -38,13 +34,13 @@ export function EmptyVehicleDropZone({
         isDragActive
           ? "border-teal/50 bg-teal/5 shadow-lg"
           : "border-border hover:border-teal/30"
-      } ${isHovered ? "bg-teal/10 border-teal" : ""}`}
+      }`}
     >
       <CardContent className="py-8 px-6">
         <div className="flex flex-col items-center gap-4 text-center">
           <div
             className={`flex items-center justify-center size-16 rounded-full transition-all duration-200 ${
-              isDragActive || isHovered
+              isDragActive
                 ? "bg-teal/10 text-teal border-2 border-teal/50"
                 : "bg-muted/50 text-muted-foreground"
             }`}

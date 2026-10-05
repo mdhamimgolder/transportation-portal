@@ -33,13 +33,36 @@ export async function getAssignmentReportRows(
 ): Promise<AssignmentReportRow[]> {
   const range = parseDateRange(from, to);
 
+  // The date range is applied IN the query (before `take`); filtering after
+  // the row cap silently returned nothing for older ranges.
+  const dateFilter =
+    range.from || range.to
+      ? {
+          ...(range.from ? { gte: range.from } : {}),
+          ...(range.to ? { lte: range.to } : {}),
+        }
+      : undefined;
+  const employeeSelect = {
+    select: { fullName: true, employeeCode: true, address: true, contactNumber: true },
+  } as const;
+
   const assignments = await prisma.routeAssignment.findMany({
-    include: {
-      vehicleDriver: true,
+    where: dateFilter
+      ? {
+          OR: [
+            { weeklyScheduleDay: { date: dateFilter } },
+            { adHocRequest: { date: dateFilter } },
+          ],
+        }
+      : undefined,
+    select: {
+      id: true,
+      pickupTime: true,
+      vehicleDriver: { select: { driverName: true, contactNumber: true } },
       weeklyScheduleDay: {
-        include: { weeklySchedule: { include: { employee: true } } },
+        select: { date: true, weeklySchedule: { select: { employee: employeeSelect } } },
       },
-      adHocRequest: { include: { employee: true } },
+      adHocRequest: { select: { date: true, employee: employeeSelect } },
     },
     orderBy: { assignedAt: "desc" },
     take: MAX_UNFILTERED_ROWS,

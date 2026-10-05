@@ -33,7 +33,7 @@ copy .env.example .env.local
 npm run db:deploy           # apply the committed migrations
 npm run db:seed             # optional reference/settings data
 npm run dev                 # http://localhost:3000
-npm run verify              # typecheck + lint, before you commit
+npm run verify              # typecheck + lint + tests, before you commit
 ```
 
 ## 4. Day-to-day

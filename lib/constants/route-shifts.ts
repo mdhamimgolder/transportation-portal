@@ -9,8 +9,6 @@ export const SHIFT_LABELS: Record<ShiftKey, string> = {
   "12AM-6AM": "12 AM-6 AM",
 };
 
-export const PICKUP_SHIFT = "10 PM";
-
 export type PinState = {
   vehicleId: string;
   shifts: ShiftKey[];
@@ -87,15 +85,4 @@ export function arrivalMinutesForLabel(
     "6AM": 30 * 60,
   };
   return map[norm] ?? null;
-}
-
-/** Which shift a stored "HH:mm" arrival value belongs to (null if unknown). */
-export function shiftKeyForArrivalTime(
-  arrivalTime: string | null | undefined
-): ShiftKey | null {
-  if (!arrivalTime) return null;
-  for (const key of SHIFT_KEYS) {
-    if (ARRIVAL_TIMES_BY_SHIFT[key].includes(arrivalTime)) return key;
-  }
-  return null;
 }

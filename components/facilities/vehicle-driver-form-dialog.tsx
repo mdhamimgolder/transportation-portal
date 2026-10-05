@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useEffect, useState } from "react";
+import { useActionState, useState } from "react";
 import { useFormStatus } from "react-dom";
 import {
   createVehicleDriver,
@@ -47,9 +47,13 @@ export function VehicleDriverFormDialog({
   const action = record ? updateVehicleDriver : createVehicleDriver;
   const [state, formAction] = useActionState(action, initialState);
 
-  useEffect(() => {
+  // Adjust state during render when a new action result arrives
+  // (https://react.dev/learn/you-might-not-need-an-effect#adjusting-some-state-when-a-prop-changes).
+  const [prevState, setPrevState] = useState(state);
+  if (state !== prevState) {
+    setPrevState(state);
     if (state !== initialState && !state.error) setOpen(false);
-  }, [state]);
+  }
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>

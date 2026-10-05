@@ -28,6 +28,10 @@ const envSchema = z.object({
     .string()
     .min(16, "SESSION_SECRET is required and must be at least 16 characters"),
 
+  // Public base URL used in emailed links (password reset). Never derived from
+  // the request Host header, which an attacker controls.
+  APP_URL: z.string().url().optional(),
+
   // Schema CLI only (Prisma Migrate needs the un-pooled connection) ----------
   DIRECT_URL: z.string().optional(),
 
@@ -100,6 +104,20 @@ export const env = new Proxy({} as Env, {
 export const isProduction = () => env.NODE_ENV === "production";
 
 /**
+ * Base URL for links in outgoing email. Uses the configured APP_URL, then the
+ * Vercel-provided production hostname (set by the platform, not the client),
+ * and finally localhost in development. Returns null when none is trustworthy.
+ */
+export function appBaseUrl(): string | null {
+  const configured = env.APP_URL;
+  if (configured) return configured.replace(/\/+$/, "");
+  const vercelHost = process.env.VERCEL_PROJECT_PRODUCTION_URL;
+  if (vercelHost) return `https://${vercelHost}`;
+  if (env.NODE_ENV !== "production") return "http://localhost:3000";
+  return null;
+}
+
+/**
  * Non-fatal configuration gaps worth surfacing in production. Used by
  * /api/health so a misconfigured deployment is visible without breaking.
  */
@@ -114,6 +132,9 @@ export function productionWarnings(): string[] {
   if (raw.NODE_ENV === "production") {
     if (!raw.SMTP_USER || !raw.SMTP_PASS) {
       warnings.push("SMTP_USER/SMTP_PASS are not set — outgoing email is disabled");
+    }
+    if (!raw.APP_URL) {
+      warnings.push("APP_URL is not set — password-reset emails cannot include a link");
     }
     if (!raw.DIRECT_URL) {
       warnings.push(

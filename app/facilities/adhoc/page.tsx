@@ -1,6 +1,7 @@
 import { requireRole } from "@/lib/rbac/guards";
 import { Role, AdHocStatus } from "@/lib/constants/enums";
 import { prisma } from "@/lib/prisma";
+import { getActiveVehicleDrivers } from "@/lib/queries/fleet";
 import { AdHocList } from "@/components/facilities/adhoc-list";
 
 export default async function FacilitiesAdHocPage() {
@@ -20,11 +21,11 @@ export default async function FacilitiesAdHocPage() {
         routeAssignment: { include: { vehicleDriver: true } },
       },
       orderBy: { createdAt: "desc" },
+      // Bounded: rejected rows accumulate forever; the newest 500 cover
+      // every realistic working set.
+      take: 500,
     }),
-    prisma.vehicleDriver.findMany({
-      where: { isActive: true },
-      orderBy: { driverName: "asc" },
-    }),
+    getActiveVehicleDrivers(),
   ]);
 
   const options = vehicleDrivers.map((v) => ({

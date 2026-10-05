@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useEffect, useState } from "react";
+import { useActionState, useState } from "react";
 import { useFormStatus } from "react-dom";
 import {
   approvePickupPointChange,
@@ -61,9 +61,13 @@ function RejectDialog({ requestId, employeeName }: { requestId: string; employee
   const [open, setOpen] = useState(false);
   const [state, formAction] = useActionState(rejectPickupPointChange, rejectInitialState);
 
-  useEffect(() => {
+  // Adjust state during render when a new action result arrives
+  // (https://react.dev/learn/you-might-not-need-an-effect#adjusting-some-state-when-a-prop-changes).
+  const [prevState, setPrevState] = useState(state);
+  if (state !== prevState) {
+    setPrevState(state);
     if (state.success) setOpen(false);
-  }, [state.success]);
+  }
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>

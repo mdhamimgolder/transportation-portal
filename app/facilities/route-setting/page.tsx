@@ -2,6 +2,7 @@ import { requireRole } from "@/lib/rbac/guards";
 import { Role } from "@/lib/constants/enums";
 import { getMondayOfWeek, getSubmissionWindow } from "@/lib/date/week";
 import { prisma } from "@/lib/prisma";
+import { getActiveVehicleDrivers } from "@/lib/queries/fleet";
 import { getVehicleShiftPins } from "@/actions/route-setting.actions";
 import { RouteSettingClient } from "@/components/facilities/route-setting/route-setting-client";
 
@@ -27,11 +28,7 @@ export default async function RouteSettingPage({
 
   // Pickup-point coordinates page fetches named addresses via these two queries
   const [vehicleDrivers, pins, pickupPointNames, linkedPointAddressIds] = await Promise.all([
-    prisma.vehicleDriver.findMany({
-      where: { isActive: true },
-      select: { driverName: true, contactNumber: true, vehicleNumber: true },
-      orderBy: { driverName: "asc" },
-    }),
+    getActiveVehicleDrivers(),
     getVehicleShiftPins(weekStart.toISOString().split("T")[0]),
     prisma.user.findMany({
       where: { role: { in: [Role.EMPLOYEE, Role.FIXED_ARRIVAL] }, pickupPoint: { not: null } },
@@ -68,27 +65,8 @@ export default async function RouteSettingPage({
     orderBy: { addressText: "asc" },
   });
 
-  await Promise.all(
-    vehicleDrivers.map((record) =>
-      prisma.vehicle.upsert({
-        where: { vehicleNumber: record.vehicleNumber.trim() },
-        update: {
-          driverName: record.driverName,
-          driverContact: record.contactNumber,
-          isActive: true,
-        },
-        create: {
-          vehicleNumber: record.vehicleNumber.trim(),
-          vehicleType: "STANDARD",
-          capacity: 4,
-          driverName: record.driverName,
-          driverContact: record.contactNumber,
-          officeLocation: "Regnum",
-        },
-      })
-    )
-  );
-
+  // VehicleDriver → Vehicle is kept in sync by the vehicle-driver mutations
+  // (actions/vehicle-driver.actions.ts) — this page only reads.
   const vehicles = await prisma.vehicle.findMany({
     where: {
       isActive: true,

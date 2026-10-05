@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { dhakaDateTimeFromMinutes } from "@/lib/date/week";
 import type { Prisma } from "@/lib/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
 import { requireRole } from "@/lib/rbac/guards";
@@ -10,7 +11,10 @@ import {
   computeRouteAnalysis,
   loadAnalysisInput,
 } from "@/lib/routing/route-analysis";
-import { errorMessage } from "@/lib/routing/algorithms";
+import {
+  sanitizedActionError,
+  sanitizedActionMessage,
+} from "@/lib/actions/action-error";
 import type {
   CandidateId,
   RouteAnalysis,
@@ -21,6 +25,11 @@ import { backCalculatePickupMinutes } from "@/lib/routing/schedule-math";
 import { minutesToTimeString } from "@/lib/routing/utils";
 import { reorderPickupPoints } from "@/actions/route-setting.actions";
 import { mirrorRouteEditsAcrossWeek } from "@/lib/routing/route-pattern";
+import {
+  analyzeRoutePlanOptionsSchema,
+  manualRouteGeometrySchema,
+  routePlanIdSchema,
+} from "@/lib/validation/schemas";
 
 export type AnalyzeRouteResult =
   | { success: true; analysis: RouteAnalysis; cached: boolean }
@@ -44,13 +53,19 @@ export async function analyzeRoutePlan(
   routePlanId: string,
   options?: { force?: boolean }
 ): Promise<AnalyzeRouteResult> {
-  try {
-    await requireRole([Role.FACILITIES, Role.SUPER_ADMIN]);
+  await requireRole([Role.FACILITIES, Role.SUPER_ADMIN]);
 
-    const input = await loadAnalysisInput(routePlanId);
-    if (!options?.force) {
+  const parsed = routePlanIdSchema.safeParse(routePlanId);
+  const parsedOptions = analyzeRoutePlanOptionsSchema.safeParse(options);
+  if (!parsed.success || !parsedOptions.success) {
+    return { success: false, error: "Invalid route analysis request." };
+  }
+
+  try {
+    const input = await loadAnalysisInput(parsed.data);
+    if (!parsedOptions.data?.force) {
       const plan = await prisma.routePlan.findUnique({
-        where: { id: routePlanId },
+        where: { id: parsed.data },
         select: { routeAnalysis: true },
       });
       const cached = plan?.routeAnalysis;
@@ -61,14 +76,14 @@ export async function analyzeRoutePlan(
 
     const analysis = await computeRouteAnalysis(input);
     await prisma.routePlan.update({
-      where: { id: routePlanId },
+      where: { id: parsed.data },
       data: { routeAnalysis: analysis as unknown as Prisma.InputJsonValue },
     });
     return { success: true, analysis, cached: false };
   } catch (error) {
     return {
       success: false,
-      error: errorMessage(error),
+      error: sanitizedActionMessage("analyzeRoutePlan", error),
     };
   }
 }
@@ -89,11 +104,24 @@ export async function saveManualGeometryAdjustment(
   viaPoints: ViaPoint[],
   totals: { minutes: number; km: number }
 ): Promise<SaveManualAdjustmentResult> {
-  try {
-    const session = await requireRole([Role.FACILITIES, Role.SUPER_ADMIN]);
+  const session = await requireRole([Role.FACILITIES, Role.SUPER_ADMIN]);
 
+  const parsed = manualRouteGeometrySchema.safeParse({
+    routePlanId,
+    geometry,
+    viaPoints,
+    totals,
+  });
+  if (!parsed.success) {
+    return {
+      success: false,
+      error: parsed.error.issues[0]?.message ?? "Invalid route geometry.",
+    };
+  }
+
+  try {
     const plan = await prisma.routePlan.findUnique({
-      where: { id: routePlanId },
+      where: { id: parsed.data.routePlanId },
       include: {
         tripAssignments: { select: { id: true }, orderBy: { sequenceInTrip: "asc" } },
       },
@@ -101,9 +129,6 @@ export async function saveManualGeometryAdjustment(
     if (!plan) return { success: false, error: "Route plan not found." };
     if (plan.status === "EXECUTED") {
       return { success: false, error: "An executed route cannot be changed." };
-    }
-    if (!Array.isArray(geometry) || geometry.length < 2) {
-      return { success: false, error: "The adjusted path has no geometry." };
     }
     if (!isRouteAnalysis(plan.routeAnalysis)) {
       return { success: false, error: "Analyze the route first." };
@@ -124,14 +149,14 @@ export async function saveManualGeometryAdjustment(
       id: "manual",
       label: "Manual route",
       description:
-        viaPoints.length > 0
-          ? `Adjusted by Facilities on the map (${viaPoints.length} via point${viaPoints.length > 1 ? "s" : ""}).`
+        parsed.data.viaPoints.length > 0
+          ? `Adjusted by Facilities on the map (${parsed.data.viaPoints.length} via point${parsed.data.viaPoints.length > 1 ? "s" : ""}).`
           : "Adjusted by Facilities on the map.",
-      geometry,
+      geometry: parsed.data.geometry,
       metrics: {
         ...baseCandidate.metrics,
-        durationMin: Math.max(0, totals.minutes),
-        distanceKm: Math.max(0, totals.km),
+        durationMin: parsed.data.totals.minutes,
+        distanceKm: parsed.data.totals.km,
       },
       score: baseCandidate.score + 1,
     };
@@ -141,7 +166,7 @@ export async function saveManualGeometryAdjustment(
 
     await prisma.$transaction([
       prisma.routePlan.update({
-        where: { id: routePlanId },
+        where: { id: parsed.data.routePlanId },
         data: {
           routeAnalysis: {
             version: analysis.version,
@@ -159,7 +184,7 @@ export async function saveManualGeometryAdjustment(
       }),
       prisma.routePlanOverride.create({
         data: {
-          routePlanId,
+          routePlanId: parsed.data.routePlanId,
           changedById: session.id,
           changeType: "ROUTE_GEOMETRY_ADJUST",
           beforeState: JSON.stringify({
@@ -167,11 +192,11 @@ export async function saveManualGeometryAdjustment(
           }),
           afterState: JSON.stringify({
             appliedCandidateId: "manual",
-            viaPoints,
-            totals,
-            geometryPointCount: geometry.length,
+            viaPoints: parsed.data.viaPoints,
+            totals: parsed.data.totals,
+            geometryPointCount: parsed.data.geometry.length,
           }),
-          reason: `Adjusted route direction on the map (${viaPoints.length} via point${viaPoints.length === 1 ? "" : "s"}).`,
+          reason: `Adjusted route direction on the map (${parsed.data.viaPoints.length} via point${parsed.data.viaPoints.length === 1 ? "" : "s"}).`,
         },
       }),
     ]);
@@ -182,7 +207,7 @@ export async function saveManualGeometryAdjustment(
   } catch (error) {
     return {
       success: false,
-      error: `Failed to save the route adjustment: ${errorMessage(error)}`,
+      ...sanitizedActionError("saveManualGeometryAdjustment", error),
     };
   }
 }
@@ -202,9 +227,9 @@ export async function applyRouteCandidate(
   candidateId: CandidateId,
   options?: { alsoUpdatePresetSequence?: boolean; reason?: string }
 ): Promise<ApplyCandidateResult> {
-  try {
-    const session = await requireRole([Role.FACILITIES, Role.SUPER_ADMIN]);
+  const session = await requireRole([Role.FACILITIES, Role.SUPER_ADMIN]);
 
+  try {
     const plan = await prisma.routePlan.findUnique({
       where: { id: routePlanId },
       include: {
@@ -313,12 +338,7 @@ export async function applyRouteCandidate(
 
     const departureDate =
       departureMinutes != null && plan.routeType !== "PRESET_10PM"
-        ? (() => {
-            const d = new Date(plan.dayDate);
-            d.setHours(0, 0, 0, 0);
-            d.setMinutes(Math.max(0, departureMinutes));
-            return d;
-          })()
+        ? dhakaDateTimeFromMinutes(plan.dayDate, Math.max(0, departureMinutes))
         : undefined;
 
     await prisma.$transaction([
@@ -392,7 +412,7 @@ export async function applyRouteCandidate(
   } catch (error) {
     return {
       success: false,
-      error: `Failed to apply the route candidate: ${errorMessage(error)}`,
+      ...sanitizedActionError("applyRouteCandidate", error),
     };
   }
 }

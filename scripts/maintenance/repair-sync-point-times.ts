@@ -23,7 +23,6 @@ async function main() {
     },
   });
 
-  const DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri"];
   let repaired = 0;
 
   for (const plan of plans) {

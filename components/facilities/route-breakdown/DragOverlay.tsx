@@ -30,8 +30,7 @@ export function CustomDragOverlay({
   activeDrag,
   vehicleGroups,
 }: DragOverlayProps) {
-  const { tripId, routeId, employeeName } = activeDrag ?? {
-    tripId: "",
+  const { routeId, employeeName } = activeDrag ?? {
     routeId: "",
     employeeName: "",
   };
@@ -46,12 +45,12 @@ export function CustomDragOverlay({
       }
     }
     return null;
-  }, [vehicleGroups, routeId]);
+  }, [activeDrag, vehicleGroups, routeId]);
 
   const otherVehicles = useMemo(() => {
     if (!currentVehicle) return [];
     return vehicleGroups.filter((g) => g.vehicleId !== currentVehicle?.vehicleId);
-  }, [vehicleGroups, currentVehicle?.vehicleId]);
+  }, [vehicleGroups, currentVehicle]);
 
   const renderOverlay = (props: DragOverlayRenderProps): React.ReactNode => {
     const { rect, transform, transition } = props;

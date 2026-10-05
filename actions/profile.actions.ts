@@ -1,5 +1,6 @@
 "use server";
 
+import { escapeHtml } from "@/lib/html";
 import { revalidatePath } from "next/cache";
 import { after } from "next/server";
 import { prisma } from "@/lib/prisma";
@@ -14,6 +15,8 @@ import {
   notificationRecipients,
 } from "@/lib/constants/notification-recipients";
 import { sendMailBackground } from "@/lib/mailer";
+import { sanitizedActionMessage } from "@/lib/actions/action-error";
+import { audit } from "@/lib/audit";
 
 export type UpdateProfileState = {
   errors?: {
@@ -37,6 +40,7 @@ export async function updateProfile(
 ): Promise<UpdateProfileState> {
   const session = await requireRole([Role.EMPLOYEE, Role.CORPORATE_EMPLOYEE]);
 
+  try {
   const pickupPointRaw = formData.get("pickupPoint");
   const addressRaw = formData.get("address");
   const contactNumberRaw = formData.get("contactNumber");
@@ -63,12 +67,20 @@ export async function updateProfile(
         errors.pickupPoint =
           "You already have a pending pick-up point change request. Please wait for it to be reviewed.";
       } else {
-        await prisma.pickupPointChangeRequest.create({
+        const changeRequest = await prisma.pickupPointChangeRequest.create({
           data: {
             employeeId: session.id,
             oldPickupPoint: user.pickupPoint ?? "",
             newPickupPoint,
           },
+        });
+        await audit(session, {
+          action: "REQUEST_PICKUP_POINT_CHANGE",
+          entityType: "PickupPointChangeRequest",
+          entityId: changeRequest.id,
+          before: { pickupPoint: user.pickupPoint },
+          after: { pickupPoint: newPickupPoint },
+          description: `${user.fullName} requested a pick-up point change to "${newPickupPoint}"`,
         });
 
         successMessages.push("Pick-up point change request submitted for review.");
@@ -92,6 +104,14 @@ export async function updateProfile(
           where: { id: session.id },
           data: { address: newAddress, addressChangedAt: new Date() },
         });
+        await audit(session, {
+          action: "CHANGE_ADDRESS",
+          entityType: "User",
+          entityId: session.id,
+          before: { address: user.address, addressChangedAt: user.addressChangedAt },
+          after: { address: newAddress, addressChangedAt: updated.addressChangedAt },
+          description: `${updated.fullName} changed their address`,
+        });
 
         const recipients = [
           notificationRecipients.facilitiesNotificationEmail,
@@ -109,15 +129,15 @@ export async function updateProfile(
                     <div style="height: 4px; background: #70bccc; border-radius: 4px 4px 0 0;"></div>
                     <div style="border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 4px 4px; padding: 32px;">
                       <h2 style="color: #1a1a2e; margin: 0 0 8px;">Address Changed</h2>
-                      <p><strong>${updated.fullName}</strong> (${updated.email}) has changed their address.</p>
+                      <p><strong>${escapeHtml(updated.fullName)}</strong> (${escapeHtml(updated.email)}) has changed their address.</p>
                       <table style="width: 100%; border-collapse: collapse; margin: 16px 0;">
                         <tr style="background: #f8f9fa;">
                           <td style="padding: 10px; border: 1px solid #dee2e6; font-weight: bold; width: 120px;">Old address</td>
-                          <td style="padding: 10px; border: 1px solid #dee2e6;">${oldAddress || "—"}</td>
+                          <td style="padding: 10px; border: 1px solid #dee2e6;">${escapeHtml(oldAddress || "—")}</td>
                         </tr>
                         <tr style="background: #f8f9fa;">
                           <td style="padding: 10px; border: 1px solid #dee2e6; font-weight: bold;">New address</td>
-                          <td style="padding: 10px; border: 1px solid #dee2e6;">${newAddress}</td>
+                          <td style="padding: 10px; border: 1px solid #dee2e6;">${escapeHtml(newAddress)}</td>
                         </tr>
                       </table>
                       <p style="color: #6c757d; margin-top: 24px;">Best regards,<br><strong>Transportation Team</strong></p>
@@ -145,6 +165,14 @@ export async function updateProfile(
         where: { id: session.id },
         data: { contactNumber: newContactNumber },
       });
+      await audit(session, {
+        action: "UPDATE_PROFILE",
+        entityType: "User",
+        entityId: session.id,
+        before: { contactNumber: user.contactNumber },
+        after: { contactNumber: newContactNumber },
+        description: `${user.fullName} updated their contact number`,
+      });
       successMessages.push("Your contact number has been updated.");
     }
   }
@@ -161,6 +189,14 @@ export async function updateProfile(
             where: { id: session.id },
             data: { officeLocation: newOfficeLocation },
           });
+          await audit(session, {
+            action: "UPDATE_PROFILE",
+            entityType: "User",
+            entityId: session.id,
+            before: { officeLocation: user.officeLocation },
+            after: { officeLocation: newOfficeLocation },
+            description: `${user.fullName} updated their office location`,
+          });
           successMessages.push("Your office location has been updated.");
         }
       }
@@ -174,4 +210,9 @@ export async function updateProfile(
     errors: Object.keys(errors).length > 0 ? errors : undefined,
     successMessages,
   };
+  } catch (error) {
+    return {
+      errors: { address: sanitizedActionMessage("updateProfile", error) },
+    };
+  }
 }

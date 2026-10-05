@@ -2,6 +2,7 @@
 // transport outside the normal flow. Read lazily (getters, never module-level
 // constants) so importing this module never triggers env validation — the
 // values are only resolved inside the server action that sends the mail.
+import "server-only";
 import { env } from "@/lib/env";
 
 const DEFAULT_FACILITIES_NOTIFICATION_EMAIL = "ax-facilities-bd@commure.com";
@@ -17,10 +18,3 @@ export const notificationRecipients = {
     return env.OPERATIONS_NOTIFICATION_EMAIL || "";
   },
 };
-
-/** @deprecated Prefer `notificationRecipients.facilitiesNotificationEmail`. */
-export const FACILITIES_NOTIFICATION_EMAIL =
-  DEFAULT_FACILITIES_NOTIFICATION_EMAIL;
-
-/** @deprecated Prefer `notificationRecipients.operationsNotificationEmail`. */
-export const OPERATIONS_NOTIFICATION_EMAIL = "";

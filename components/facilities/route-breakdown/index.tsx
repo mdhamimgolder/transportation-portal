@@ -43,7 +43,6 @@ interface RouteBreakdownProps {
 export function RouteBreakdown({
   routes,
   activeRouteId,
-  onRouteSelect,
   onRefresh,
   isLoading,
   onChanged,
@@ -97,38 +96,21 @@ export function RouteBreakdown({
       }
 
       try {
-        const coords = stops
-          .map((s) => `${s.lng.toFixed(6)},${s.lat.toFixed(6)}`)
-          .join(";");
-
         const destination = route.destination;
-        const allCoords = destination
-          ? `${coords};${destination.lng.toFixed(6)},${destination.lat.toFixed(6)}`
-          : coords;
-
-        const res = await fetch(
-          `https://router.project-osrm.org/route/v1/driving/${allCoords}?overview=simplified&geometries=geojson&alternatives=false&steps=false`,
-          { signal: AbortSignal.timeout(10000) }
-        );
+        const points: [number, number][] = stops.map((stop) => [stop.lat, stop.lng]);
+        if (destination) points.push([destination.lat, destination.lng]);
+        const params = new URLSearchParams({
+          points: JSON.stringify(points),
+          overview: "simplified",
+        });
+        const res = await fetch(`/api/routing/route?${params}`, {
+          signal: AbortSignal.timeout(10000),
+        });
 
         if (!res.ok) return null;
         const data = await res.json();
-        if (data?.code !== "Ok") return null;
-
-        const geometry = data.routes?.[0]?.geometry?.coordinates;
-        if (!geometry || geometry.length < 2) return null;
-
-        const line: [number, number][] = geometry.map((c: number[]) => [c[1], c[0]]);
-
-        const legMinutes: number[] = [];
-        const routeData = data.routes[0];
-        if (routeData?.legs) {
-          for (const leg of routeData.legs) {
-            legMinutes.push(Math.max(1, Math.round(leg.duration / 60)));
-          }
-        }
-
-        return { geometry: line, legMinutes };
+        if (!Array.isArray(data?.line) || data.line.length < 2) return null;
+        return { geometry: data.line, legMinutes: data.legMinutes ?? [] };
       } catch {
         return null;
       }

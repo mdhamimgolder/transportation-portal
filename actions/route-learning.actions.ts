@@ -1,17 +1,22 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { dhakaMinutesOfDay } from "@/lib/date/week";
 import { prisma } from "@/lib/prisma";
 import { requireRole } from "@/lib/rbac/guards";
 import { Role } from "@/lib/constants/enums";
-import { LEARN_MIN_SAMPLES } from "@/lib/routing/pickup-schedule";
+import { LEARN_MIN_SAMPLES, invalidateLearnedLegs } from "@/lib/routing/pickup-schedule";
 import { legObservationsFromManualEntries } from "@/lib/routing/manual-plan-training";
-import { errorMessage } from "@/lib/routing/algorithms";
+import {
+  sanitizedActionError,
+  sanitizedActionMessage,
+  throwSanitizedError,
+} from "@/lib/actions/action-error";
 
 /**
  * "Skill-up" data mining.
  *
- * `trainRoutePlannerFromHistory` scans every historical RoutePlan and derives,
+ * `trainRoutePlannerFromHistory` scans every FINALIZED/EXECUTED RoutePlan and derives,
  * per ordered stop pair, the actual elapsed pickup-pickup (and office->first /
  * last->office) gap — the real signal Facilities tuned day after day. The
  * per-leg medians are stored in `RouteLegLearning`. The scheduler REQUIRES a
@@ -24,6 +29,9 @@ import { errorMessage } from "@/lib/routing/algorithms";
  * history" manually. It is idempotent — a run fully replaces the learned set
  * from the current history.
  */
+
+/** Plans whose pickup times are human-confirmed ground truth. */
+const LEARNABLE_PLAN_STATUSES = ["FINALIZED", "EXECUTED"];
 
 type LegAgg = {
   fromKey: string;
@@ -45,7 +53,7 @@ function hhmmToMinutes(time: string | null | undefined): number | null {
 
 function dateMinutes(d: Date | null | undefined): number | null {
   if (!d) return null;
-  return d.getHours() * 60 + d.getMinutes();
+  return dhakaMinutesOfDay(d);
 }
 
 /** Map a RoutePlan arrival label to its minutes-from-midnight. */
@@ -111,16 +119,31 @@ export type LearnFromHistoryResult = {
 
 /** Scan all historical route plans and rebuild the learned pickup-leg set. */
 export async function trainRoutePlannerFromHistory(): Promise<LearnFromHistoryResult> {
-  try {
-    await requireRole([Role.FACILITIES, Role.SUPER_ADMIN]);
+  await requireRole([Role.FACILITIES, Role.SUPER_ADMIN]);
 
+  try {
+    // Learn ONLY from routes Facilities signed off (plus manual-plan rows
+    // below). DRAFT plans are the planner's own output — mining them fed the
+    // generator its previous guesses back as "observed" drive times.
+    // `select` keeps this to the few columns the aggregation reads (the full
+    // history otherwise drags every rider row + routeAnalysis JSON along).
     const plans = await prisma.routePlan.findMany({
-      include: {
+      where: { status: { in: LEARNABLE_PLAN_STATUSES } },
+      select: {
+        arrivalTime: true,
+        routeType: true,
+        officeLocation: true,
+        departureTime: true,
         tripAssignments: {
-          include: {
-            employee: true,
-            pickupAddress: true,
-            pickupPoint: { include: { address: true } },
+          select: {
+            sequenceInTrip: true,
+            pickupTime: true,
+            pickupType: true,
+            pickupPointId: true,
+            pickupAddressId: true,
+            pickupPoint: { select: { name: true, addressId: true } },
+            pickupAddress: { select: { addressText: true } },
+            employee: { select: { address: true } },
           },
         },
       },
@@ -171,10 +194,11 @@ export async function trainRoutePlannerFromHistory(): Promise<LearnFromHistoryRe
       const officeKey = `office:${officeName}`;
       const arrival = arrivalMinutesFromLabel(plan.arrivalTime);
 
-      // office -> first pickup (from departureTime when recorded)
+      // PRESET_10PM stores 20:00 as a placeholder, not an observed departure.
+      // Learning this as a real leg would poison the office-to-first-stop data.
       const dep = dateMinutes(plan.departureTime);
       const first = hhmmToMinutes(stops[0].pickupTime);
-      if (dep !== null && first !== null) {
+      if (plan.routeType !== "PRESET_10PM" && dep !== null && first !== null) {
         record(officeKey, officeName, stopKey(stops[0]), stopLabel(stops[0]), (first - dep + 1440) % 1440, shiftKey);
       }
 
@@ -199,7 +223,20 @@ export async function trainRoutePlannerFromHistory(): Promise<LearnFromHistoryRe
     // ── Manual-plan knowledge ("Teach from manual plan" CSV rows) ──────
     // Ground-truth rows Facilities uploaded by hand are merged into the same
     // aggregate so a retrain never wipes the hand-tuned leg times.
-    const manualEntries = await prisma.manualRoutePlanEntry.findMany();
+    const manualEntries = await prisma.manualRoutePlanEntry.findMany({
+      select: {
+        id: true,
+        date: true,
+        shiftKey: true,
+        vehicleNumber: true,
+        addressId: true,
+        pickupLabel: true,
+        pickupMinutes: true,
+        orderIndex: true,
+        officeLabel: true,
+        arrivalMinutes: true,
+      },
+    });
     const manual = legObservationsFromManualEntries(
       manualEntries.map((e) => ({
         id: e.id,
@@ -230,10 +267,14 @@ export async function trainRoutePlannerFromHistory(): Promise<LearnFromHistoryRe
       maxMinutes: agg.max,
     }));
 
-    await prisma.routeLegLearning.deleteMany({});
-    if (rows.length > 0) {
-      await prisma.routeLegLearning.createMany({ data: rows });
-    }
+    // Atomic swap: a concurrent RUN MAPPING must never observe the table
+    // empty between the delete and the insert (every leg would read as
+    // untrained and every route would error).
+    await prisma.$transaction([
+      prisma.routeLegLearning.deleteMany({}),
+      ...(rows.length > 0 ? [prisma.routeLegLearning.createMany({ data: rows })] : []),
+    ]);
+    invalidateLearnedLegs();
 
     const perShift: Record<string, { legs: number; observations: number }> = {};
     const confidentLegs = rows.filter((r) => r.sampleCount >= LEARN_MIN_SAMPLES).length;
@@ -255,7 +296,7 @@ export async function trainRoutePlannerFromHistory(): Promise<LearnFromHistoryRe
   } catch (error) {
     return {
       success: false,
-      error: errorMessage(error),
+      error: sanitizedActionMessage("trainRoutePlannerFromHistory", error),
       legCount: 0,
       observationCount: 0,
       confidentLegs: 0,
@@ -283,33 +324,38 @@ export type RouteLearningStats = {
 /** Current learned-set summary for the auto route planner UI. */
 export async function getRouteLearningStats(): Promise<RouteLearningStats> {
   await requireRole([Role.FACILITIES, Role.SUPER_ADMIN]);
-  const [all, manualEntryCount] = await Promise.all([
-    prisma.routeLegLearning.findMany({
-      orderBy: [{ sampleCount: "desc" }, { avgMinutes: "asc" }],
-    }),
-    prisma.manualRoutePlanEntry.count(),
-  ]);
-  let lastTrainedAt: string | null = null;
-  for (const row of all) {
-    const ts = row.updatedAt.getTime();
-    if (!lastTrainedAt || ts > new Date(lastTrainedAt).getTime()) {
-      lastTrainedAt = row.updatedAt.toISOString();
+
+  try {
+    const [all, manualEntryCount] = await Promise.all([
+      prisma.routeLegLearning.findMany({
+        orderBy: [{ sampleCount: "desc" }, { avgMinutes: "asc" }],
+      }),
+      prisma.manualRoutePlanEntry.count(),
+    ]);
+    let lastTrainedAt: string | null = null;
+    for (const row of all) {
+      const ts = row.updatedAt.getTime();
+      if (!lastTrainedAt || ts > new Date(lastTrainedAt).getTime()) {
+        lastTrainedAt = row.updatedAt.toISOString();
+      }
     }
+    return {
+      legCount: all.length,
+      observationCount: all.reduce((sum, r) => sum + r.sampleCount, 0),
+      confidentLegs: all.filter((r) => r.sampleCount >= LEARN_MIN_SAMPLES).length,
+      lastTrainedAt,
+      manualEntryCount,
+      sample: all.slice(0, 8).map((r) => ({
+        from: r.fromLabel,
+        to: r.toLabel,
+        avgMinutes: r.avgMinutes,
+        sampleCount: r.sampleCount,
+        shiftKey: r.shiftKey,
+      })),
+    };
+  } catch (error) {
+    throwSanitizedError("getRouteLearningStats", error);
   }
-  return {
-    legCount: all.length,
-    observationCount: all.reduce((sum, r) => sum + r.sampleCount, 0),
-    confidentLegs: all.filter((r) => r.sampleCount >= LEARN_MIN_SAMPLES).length,
-    lastTrainedAt,
-    manualEntryCount,
-    sample: all.slice(0, 8).map((r) => ({
-      from: r.fromLabel,
-      to: r.toLabel,
-      avgMinutes: r.avgMinutes,
-      sampleCount: r.sampleCount,
-      shiftKey: r.shiftKey,
-    })),
-  };
 }
 
 export type RouteLegDiagnostic = {
@@ -343,8 +389,9 @@ export type RouteMemoryDiagnostic =
  * trusted or not, with its observations and the rules the planner applies.
  */
 export async function getRouteMemoryDiagnostic(): Promise<RouteMemoryDiagnostic> {
+  await requireRole([Role.FACILITIES, Role.SUPER_ADMIN]);
+
   try {
-    await requireRole([Role.FACILITIES, Role.SUPER_ADMIN]);
     const [legs, manualEntryCount] = await Promise.all([
       prisma.routeLegLearning.findMany({
         orderBy: [
@@ -392,7 +439,7 @@ export async function getRouteMemoryDiagnostic(): Promise<RouteMemoryDiagnostic>
   } catch (error) {
     return {
       success: false,
-      error: errorMessage(error),
+      ...sanitizedActionError("getRouteMemoryDiagnostic", error),
     };
   }
 }

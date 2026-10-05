@@ -10,6 +10,7 @@ export default async function OperationsAdHocPage() {
   const requests = await prisma.adHocRequest.findMany({
     include: { employee: true, routeAssignment: true },
     orderBy: { createdAt: "desc" },
+    take: 500,
   });
 
   const reviewerNames = await getUserNamesByIds(requests.map((r) => r.reviewedById));

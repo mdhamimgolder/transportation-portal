@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { requireRole } from "@/lib/rbac/guards";
 import { Role } from "@/lib/constants/enums";
+import { sanitizedActionError } from "@/lib/actions/action-error";
 import { getMondayOfWeek, toUtcMidnight } from "@/lib/date/week";
 import { normalizeOfficeLocation } from "@/lib/constants/office-locations";
 import { SHIFT_KEYS } from "@/lib/constants/route-shifts";
@@ -46,9 +47,9 @@ export async function reorderPickupPoints(
   vehicleId: string,
   orderedPointIds: string[]
 ): Promise<ReorderResult> {
-  try {
-    await requireRole([Role.FACILITIES, Role.SUPER_ADMIN]);
+  await requireRole([Role.FACILITIES, Role.SUPER_ADMIN]);
 
+  try {
     if (orderedPointIds.length === 0) return { success: false, error: "No points given." };
 
     const points = await prisma.pickupPoint.findMany({
@@ -112,26 +113,11 @@ export async function reorderPickupPoints(
   } catch (error) {
     return {
       success: false,
-      error: error instanceof Error ? error.message : "Failed to reorder pickup points.",
-    };
-  }
-}
-
-/** Toggle a vehicle-driver pickup point's active flag (soft delete path). */
-export async function setPickupPointActive(
-  pointId: string,
-  isActive: boolean
-): Promise<ReorderResult> {
-  try {
-    await requireRole([Role.FACILITIES, Role.SUPER_ADMIN]);
-    await prisma.pickupPoint.update({ where: { id: pointId }, data: { isActive } });
-    revalidatePath("/facilities/vehicles");
-    revalidatePath("/facilities/route-setting");
-    return { success: true };
-  } catch (error) {
-    return {
-      success: false,
-      error: error instanceof Error ? error.message : "Failed to update pickup point.",
+      ...sanitizedActionError(
+        "reorderPickupPoints",
+        error,
+        "Failed to reorder pickup points."
+      ),
     };
   }
 }
@@ -147,9 +133,9 @@ export async function toggleVehicleShiftPin(
   weekStartDateStr: string,
   shiftKey: ShiftKey
 ): Promise<{ success: boolean; pin: PinState | null; error?: string }> {
-  try {
-    await requireRole([Role.FACILITIES, Role.SUPER_ADMIN]);
+  await requireRole([Role.FACILITIES, Role.SUPER_ADMIN]);
 
+  try {
     if (!SHIFT_KEYS.includes(shiftKey)) {
       return { success: false, pin: null, error: "Unknown shift." };
     }
@@ -202,7 +188,11 @@ export async function toggleVehicleShiftPin(
     return {
       success: false,
       pin: null,
-      error: error instanceof Error ? error.message : "Failed to update pin.",
+      ...sanitizedActionError(
+        "toggleVehicleShiftPin",
+        error,
+        "Failed to update pin."
+      ),
     };
   }
 }
@@ -211,8 +201,9 @@ export async function toggleVehicleShiftPin(
 export async function getVehicleShiftPins(
   weekStartDateStr: string
 ): Promise<{ pins: PinState[]; error?: string }> {
+  await requireRole([Role.FACILITIES, Role.SUPER_ADMIN]);
+
   try {
-    await requireRole([Role.FACILITIES, Role.SUPER_ADMIN]);
     const weekStart = toUtcMidnight(getMondayOfWeek(parseDayString(weekStartDateStr)));
     const rows = await prisma.vehicleShiftAssignment.findMany({
       where: { startDate: weekStart, isActive: true },
@@ -237,7 +228,11 @@ export async function getVehicleShiftPins(
   } catch (error) {
     return {
       pins: [],
-      error: error instanceof Error ? error.message : "Failed to load pins.",
+      ...sanitizedActionError(
+        "getVehicleShiftPins",
+        error,
+        "Failed to load pins."
+      ),
     };
   }
 }
@@ -249,76 +244,6 @@ export type VehicleFormState = {
   error?: string;
   vehicleId?: string;
 };
-
-export async function createVehicle(formData: FormData): Promise<VehicleFormState> {
-  try {
-    await requireRole([Role.FACILITIES, Role.SUPER_ADMIN]);
-
-    const vehicleNumber = String(formData.get("vehicleNumber") ?? "").trim();
-    const vehicleType = String(formData.get("vehicleType") ?? "").trim();
-    const capacity = Number(formData.get("capacity"));
-    const driverName = String(formData.get("driverName") ?? "").trim();
-    const driverContact = String(formData.get("driverContact") ?? "").trim();
-    const officeLocation = String(formData.get("officeLocation") ?? "Regnum").trim();
-
-    const baseETARaw = String(formData.get("baseETA") ?? "");
-    const baseETA = normalizeHHmm(baseETARaw);
-    if (baseETA === "INVALID") {
-      return { error: "BASE ETA must be a valid time in HH:mm format (e.g. 22:00)." };
-    }
-    if (baseETA !== null && !BASE_ETA_ALLOWED.has(baseETA)) {
-      return { error: "BASE ETA must be 10 PM (22:00) or 11 PM (23:00)." };
-    }
-
-    const firstPickupTime = normalizeHHmm(
-      String(formData.get("firstPickupTime") ?? "")
-    );
-    if (firstPickupTime === "INVALID") {
-      return {
-        error: "First pickup time must be a valid time in HH:mm format (e.g. 20:00).",
-      };
-    }
-
-    if (!vehicleNumber) return { error: "Vehicle number is required." };
-    if (!vehicleType) return { error: "Vehicle type is required." };
-    if (!Number.isInteger(capacity) || capacity <= 0) {
-      return { error: "Capacity must be a positive whole number." };
-    }
-    if (!normalizeOfficeLocation(officeLocation)) {
-      return { error: "Office location must be Regnum or Spectra." };
-    }
-
-    const existing = await prisma.vehicle.findUnique({
-      where: { vehicleNumber },
-    });
-    if (existing) {
-      return { error: `Vehicle ${vehicleNumber} already exists.` };
-    }
-
-    const vehicle = await prisma.vehicle.create({
-      data: {
-        vehicleNumber,
-        vehicleType,
-        capacity,
-        driverName: driverName || null,
-        driverContact: driverContact || null,
-        officeLocation: normalizeOfficeLocation(officeLocation),
-        baseETA: baseETA ?? "22:00",
-        firstPickupTime,
-        isActive: true,
-      },
-    });
-
-    revalidatePath("/facilities/route-setting");
-    revalidatePath("/facilities/vehicles");
-
-    return { success: true, vehicleId: vehicle.id };
-  } catch (error) {
-    return {
-      error: error instanceof Error ? error.message : "Failed to create vehicle.",
-    };
-  }
-}
 
 /** Update an existing advanced-routing vehicle (office, type, capacity, driver). */
 export async function updateVehicle(
@@ -337,9 +262,9 @@ export async function updateVehicle(
   pickupUpdates?: Array<{ id: string; baseETA: string }>;
   error?: string;
 }> {
-  try {
-    await requireRole([Role.FACILITIES, Role.SUPER_ADMIN]);
+  await requireRole([Role.FACILITIES, Role.SUPER_ADMIN]);
 
+  try {
     const vehicle = await prisma.vehicle.findUnique({ where: { id: input.id } });
     if (!vehicle) return { success: false, error: "Vehicle not found." };
 
@@ -420,7 +345,11 @@ export async function updateVehicle(
   } catch (error) {
     return {
       success: false,
-      error: error instanceof Error ? error.message : "Failed to update vehicle.",
+      ...sanitizedActionError(
+        "updateVehicle",
+        error,
+        "Failed to update vehicle."
+      ),
     };
   }
 }
@@ -444,9 +373,9 @@ export async function autoCalcPickupTimes(
   computedOfficeArrival?: string | null;
   error?: string;
 }> {
-  try {
-    await requireRole([Role.FACILITIES, Role.SUPER_ADMIN]);
+  await requireRole([Role.FACILITIES, Role.SUPER_ADMIN]);
 
+  try {
     const result = await syncPickupPointTimes(vehicleId);
     if (!result.success) {
       return { success: false, error: result.error };
@@ -464,10 +393,11 @@ export async function autoCalcPickupTimes(
   } catch (error) {
     return {
       success: false,
-      error:
-        error instanceof Error
-          ? error.message
-          : "Failed to calculate pickup times.",
+      ...sanitizedActionError(
+        "autoCalcPickupTimes",
+        error,
+        "Failed to calculate pickup times."
+      ),
     };
   }
 }

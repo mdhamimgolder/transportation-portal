@@ -1,12 +1,13 @@
 "use server";
 
-import { after } from "next/server";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { requireRole } from "@/lib/rbac/guards";
+import { sendMail } from "@/lib/mailer";
 import { trySendMail } from "@/lib/mailer";
-import { Role, AdHocStatus } from "@/lib/constants/enums";
 import { transportArrangedEmail } from "@/lib/email-templates";
+import { sanitizedActionError } from "@/lib/actions/action-error";
+import { Role, AdHocStatus, WeeklyScheduleStatus } from "@/lib/constants/enums";
 import type { SessionUser } from "@/lib/auth/session";
 
 export type AssignRouteState = {
@@ -14,64 +15,10 @@ export type AssignRouteState = {
   success?: boolean;
 };
 
-type AssignmentEmailKind = "ROUTE_ASSIGNMENT_WEEKLY" | "ROUTE_ASSIGNMENT_ADHOC";
-
-/** Registers the fire-and-forget delivery for one assignment. A PENDING log
- *  row is written synchronously (so the UI shows the attempt immediately),
- *  and the `after()` callback records SENT/FAILED + stamps `emailSentAt` only
- *  when the SMTP send actually succeeded. */
-async function dispatchAssignmentEmail(params: {
-  assignmentId: string;
-  kind: AssignmentEmailKind;
-  employeeName: string;
-  employeeEmail: string;
-  date: Date;
-  driverName: string;
-  driverContact: string;
-  vehicleNumber: string;
-  pickupTime: string;
-}) {
-  const email = transportArrangedEmail({
-    kind: params.kind === "ROUTE_ASSIGNMENT_ADHOC" ? "ADHOC" : "WEEKLY",
-    employeeName: params.employeeName,
-    date: params.date,
-    driverName: params.driverName,
-    contactNumber: params.driverContact,
-    vehicleNumber: params.vehicleNumber,
-    pickupTime: params.pickupTime,
-  });
-
-  const log = await prisma.emailNotificationLog.create({
-    data: {
-      kind: params.kind,
-      recipient: params.employeeEmail,
-      recipientName: params.employeeName,
-      subject: email.subject,
-      routeAssignmentId: params.assignmentId,
-      status: "PENDING",
-    },
-  });
-
-  after(async () => {
-    const outcome = await trySendMail({
-      to: params.employeeEmail,
-      subject: email.subject,
-      body: email.body,
-      html: email.html,
-    });
-    await prisma.emailNotificationLog.update({
-      where: { id: log.id },
-      data: { status: outcome.status, error: outcome.error ?? null },
-    });
-    if (outcome.status === "SENT") {
-      await prisma.routeAssignment.update({
-        where: { id: params.assignmentId },
-        data: { emailSentAt: new Date() },
-      });
-    }
-    revalidatePath("/facilities/route-planning");
-  });
-}
+export type ResendEmailState = {
+  error?: string;
+  status?: "SENT" | "SKIPPED_DEV" | "FAILED";
+};
 
 async function upsertAssignmentForWeeklyDay(params: {
   weeklyScheduleDayId: string;
@@ -86,6 +33,12 @@ async function upsertAssignmentForWeeklyDay(params: {
     include: { weeklySchedule: { include: { employee: true } } },
   });
   if (!day) throw new Error("Day not found.");
+  if (day.weeklySchedule.status !== WeeklyScheduleStatus.APPROVED) {
+    throw new Error("This weekly schedule is not approved yet.");
+  }
+  if (!day.needsTransport) {
+    throw new Error("The employee does not need transport on this day.");
+  }
 
   const vehicleDriver = await prisma.vehicleDriver.findUnique({
     where: { id: vehicleDriverId },
@@ -99,39 +52,23 @@ async function upsertAssignmentForWeeklyDay(params: {
       pickupTime,
       assignedById: actor.id,
       assignedAt: new Date(),
+      emailSentAt: new Date(),
     },
     create: {
       weeklyScheduleDayId,
       vehicleDriverId,
       pickupTime,
       assignedById: actor.id,
+      emailSentAt: new Date(),
     },
   });
 
   const employee = day.weeklySchedule.employee;
-
-  const existing = await prisma.routeAssignment.findUnique({
-    where: { weeklyScheduleDayId: day.id },
+  await sendMail({
+    to: employee.email,
+    subject: "Your transport has been arranged",
+    body: `Hi ${employee.fullName},\n\nYour transport for ${day.date.toDateString()} has been arranged:\nDriver: ${vehicleDriver.driverName} (${vehicleDriver.contactNumber})\nVehicle: ${vehicleDriver.vehicleNumber}\nPickup time: ${pickupTime}\n\n- Facilities Team`,
   });
-  const detailsChanged =
-    !existing ||
-    existing.vehicleDriverId !== vehicleDriverId ||
-    existing.pickupTime !== pickupTime ||
-    !existing.emailSentAt;
-
-  if (detailsChanged) {
-    await dispatchAssignmentEmail({
-      assignmentId: assignment.id,
-      kind: "ROUTE_ASSIGNMENT_WEEKLY",
-      employeeName: employee.fullName,
-      employeeEmail: employee.email,
-      date: day.date,
-      driverName: vehicleDriver.driverName,
-      driverContact: vehicleDriver.contactNumber,
-      vehicleNumber: vehicleDriver.vehicleNumber,
-      pickupTime,
-    });
-  }
 
   return assignment;
 }
@@ -162,12 +99,14 @@ async function upsertAssignmentForAdHoc(params: {
       pickupTime,
       assignedById: actor.id,
       assignedAt: new Date(),
+      emailSentAt: new Date(),
     },
     create: {
       adHocRequestId,
       vehicleDriverId,
       pickupTime,
       assignedById: actor.id,
+      emailSentAt: new Date(),
     },
   });
 
@@ -176,28 +115,11 @@ async function upsertAssignmentForAdHoc(params: {
     data: { status: AdHocStatus.ASSIGNED },
   });
 
-  const existing = await prisma.routeAssignment.findUnique({
-    where: { adHocRequestId: adHocRequestId },
+  await sendMail({
+    to: request.employee.email,
+    subject: "Your ad-hoc transport has been arranged",
+    body: `Hi ${request.employee.fullName},\n\nYour ad-hoc transport for ${request.date.toDateString()} has been arranged:\nDriver: ${vehicleDriver.driverName} (${vehicleDriver.contactNumber})\nVehicle: ${vehicleDriver.vehicleNumber}\nPickup time: ${pickupTime}\n\n- Facilities Team`,
   });
-  const detailsChanged =
-    !existing ||
-    existing.vehicleDriverId !== vehicleDriverId ||
-    existing.pickupTime !== pickupTime ||
-    !existing.emailSentAt;
-
-  if (detailsChanged) {
-    await dispatchAssignmentEmail({
-      assignmentId: assignment.id,
-      kind: "ROUTE_ASSIGNMENT_ADHOC",
-      employeeName: request.employee.fullName,
-      employeeEmail: request.employee.email,
-      date: request.date,
-      driverName: vehicleDriver.driverName,
-      driverContact: vehicleDriver.contactNumber,
-      vehicleNumber: vehicleDriver.vehicleNumber,
-      pickupTime,
-    });
-  }
 
   return assignment;
 }
@@ -266,13 +188,209 @@ export async function assignRoute(
   return { success: true };
 }
 
+export async function resendRouteAssignmentEmail(
+  _prevState: ResendEmailState,
+  formData: FormData
+): Promise<ResendEmailState> {
+  await requireRole([Role.FACILITIES, Role.SUPER_ADMIN]);
+
+  const routeAssignmentId = formData.get("routeAssignmentId");
+  if (typeof routeAssignmentId !== "string" || !routeAssignmentId) {
+    return { error: "Missing assignment." };
+  }
+
+  try {
+    const assignment = await prisma.routeAssignment.findUnique({
+      where: { id: routeAssignmentId },
+      include: {
+        vehicleDriver: true,
+        weeklyScheduleDay: {
+          include: { weeklySchedule: { include: { employee: true } } },
+        },
+        adHocRequest: { include: { employee: true } },
+      },
+    });
+    if (!assignment) return { error: "Assignment not found." };
+
+    const employee =
+      assignment.weeklyScheduleDay?.weeklySchedule.employee ??
+      assignment.adHocRequest?.employee;
+    const date =
+      assignment.weeklyScheduleDay?.date ?? assignment.adHocRequest?.date;
+    if (!employee || !date) return { error: "Assignment details are incomplete." };
+
+    const email = transportArrangedEmail({
+      kind: assignment.adHocRequestId ? "ADHOC" : "WEEKLY",
+      employeeName: employee.fullName,
+      date,
+      driverName: assignment.vehicleDriver.driverName,
+      contactNumber: assignment.vehicleDriver.contactNumber,
+      vehicleNumber: assignment.vehicleDriver.vehicleNumber,
+      pickupTime: assignment.pickupTime,
+    });
+    const outcome = await trySendMail({
+      to: employee.email,
+      subject: email.subject,
+      body: email.body,
+      html: email.html,
+    });
+
+    await prisma.$transaction([
+      prisma.emailNotificationLog.create({
+        data: {
+          kind: "ROUTE_ASSIGNMENT_RESEND",
+          recipient: employee.email,
+          recipientName: employee.fullName,
+          subject: email.subject,
+          routeAssignmentId: assignment.id,
+          status: outcome.status,
+          error: outcome.error ?? null,
+        },
+      }),
+      ...(outcome.status === "SENT"
+        ? [
+            prisma.routeAssignment.update({
+              where: { id: assignment.id },
+              data: { emailSentAt: new Date() },
+              select: { id: true },
+            }),
+          ]
+        : []),
+    ]);
+
+    revalidatePath("/facilities/route-planning");
+    revalidatePath("/facilities/email-log");
+    return { status: outcome.status, error: outcome.error };
+  } catch (error) {
+    return sanitizedActionError("resendRouteAssignmentEmail", error);
+  }
+}
+
 export type SaveDaySheetState = {
   error?: string;
   savedCount?: number;
   skipped?: { employeeName: string; reason: string }[];
 };
 
+export type AutomatedPlannerState = {
+  error?: string;
+  weekLabel?: string;
+  created?: number;
+  updated?: number;
+  skipped?: { employeeName: string; reason: string }[];
+};
 
+function arrivalWindow(arrivalTime: string | null): "pickup-point" | "home" | null {
+  if (!arrivalTime) return null;
+  const hour = Number(arrivalTime.split(":")[0]);
+  if (!Number.isInteger(hour) || hour < 0 || hour > 23) return null;
+  if (hour === 22) return "pickup-point";
+  if (hour === 23 || hour <= 6) return "home";
+  return null;
+}
+
+export async function runAutomatedRoutePlanner(
+  previousState: AutomatedPlannerState,
+  formData: FormData
+): Promise<AutomatedPlannerState> {
+  void previousState;
+  void formData;
+  const session = await requireRole([Role.FACILITIES]);
+  const schedules = await prisma.weeklySchedule.findMany({
+    where: { status: WeeklyScheduleStatus.APPROVED },
+    orderBy: { weekStartDate: "desc" },
+    include: {
+      employee: { include: { homeAddress: true, pickupAddress: true } },
+      days: { orderBy: { dayOfWeek: "asc" } },
+    },
+  });
+
+  if (schedules.length === 0) return { error: "No approved weekly schedule is ready to plan." };
+  const latestWeek = schedules[0].weekStartDate;
+  const weekSchedules = schedules.filter(
+    (schedule) => schedule.weekStartDate.getTime() === latestWeek.getTime()
+  );
+
+  const vehicles = await prisma.vehicleDriver.findMany({
+    where: { isActive: true },
+    orderBy: { vehicleNumber: "asc" },
+  });
+  if (vehicles.length === 0) {
+    return { error: "Add at least one active vehicle and driver before planning." };
+  }
+
+  let created = 0;
+  let updated = 0;
+  const skipped: { employeeName: string; reason: string }[] = [];
+  const emails: Promise<unknown>[] = [];
+
+  for (const schedule of weekSchedules) for (const day of schedule.days) {
+    if (!day.needsTransport) continue;
+    const window = arrivalWindow(day.arrivalTime);
+    const address = window === "pickup-point" ? schedule.employee.pickupAddress : schedule.employee.homeAddress;
+    if (!window) {
+      skipped.push({ employeeName: schedule.employee.fullName, reason: "Invalid arrival time." });
+      continue;
+    }
+    if (!address) {
+      skipped.push({
+        employeeName: schedule.employee.fullName,
+        reason: `Missing geocoded ${window === "pickup-point" ? "pick-up point" : "home address"}.`,
+      });
+      continue;
+    }
+
+    const existing = await prisma.routeAssignment.findUnique({
+      where: { weeklyScheduleDayId: day.id },
+    });
+    const vehicle = vehicles[day.dayOfWeek % vehicles.length];
+    const assignment = await prisma.routeAssignment.upsert({
+      where: { weeklyScheduleDayId: day.id },
+      update: {
+        vehicleDriverId: vehicle.id,
+        pickupTime: day.arrivalTime ?? "",
+        assignedById: session.id,
+        assignedAt: new Date(),
+        emailSentAt: new Date(),
+        vehicleType: window === "pickup-point" ? "4-seater" : "10-seater",
+        pickupLat: address.latitude,
+        pickupLng: address.longitude,
+        pickupAddress: address.addressText,
+      },
+      create: {
+        weeklyScheduleDayId: day.id,
+        vehicleDriverId: vehicle.id,
+        pickupTime: day.arrivalTime ?? "",
+        assignedById: session.id,
+        emailSentAt: new Date(),
+        vehicleType: window === "pickup-point" ? "4-seater" : "10-seater",
+        pickupLat: address.latitude,
+        pickupLng: address.longitude,
+        pickupAddress: address.addressText,
+      },
+    });
+
+    if (existing) updated++;
+    else created++;
+    emails.push(
+      sendMail({
+        to: schedule.employee.email,
+        subject: "Your transport has been arranged",
+        body: `Hi ${schedule.employee.fullName},\n\nYour transport for ${day.date.toDateString()} has been arranged:\nPick-up point: ${address.addressText}\nCoordinates: ${address.latitude}, ${address.longitude}\nDriver: ${vehicle.driverName} (${vehicle.contactNumber})\nVehicle: ${vehicle.vehicleNumber} (${assignment.vehicleType})\nPickup time: ${assignment.pickupTime}\n\n- Facilities Team`,
+      })
+    );
+  }
+
+  await Promise.all(emails);
+  revalidatePath("/facilities/automated-route-planner");
+  revalidatePath("/facilities/route-planning");
+  return {
+    weekLabel: `Week of ${latestWeek.toLocaleDateString()}`,
+    created,
+    updated,
+    skipped,
+  };
+}
 
 /**
  * Bulk-saves the day-first planning sheet: Facilities fills in Pick-up Time
@@ -425,85 +543,4 @@ export async function copyLastWeekRoutes(formData: FormData): Promise<void> {
   }
 
   revalidatePath("/facilities/route-planning");
-}
-
-export type ResendEmailState = {
-  error?: string;
-  status?: "SENT" | "SKIPPED_DEV" | "FAILED";
-};
-
-/** One-off re-dispatch of an employee notification for a saved assignment.
- *  Unlike the bulk flow this AWAITS the send so Facilities gets the outcome
- *  right away (a single email is fast). */
-export async function resendRouteAssignmentEmail(
-  _prevState: ResendEmailState,
-  formData: FormData
-): Promise<ResendEmailState> {
-  await requireRole([Role.FACILITIES, Role.SUPER_ADMIN]);
-
-  const routeAssignmentId = formData.get("routeAssignmentId");
-  if (typeof routeAssignmentId !== "string" || !routeAssignmentId) {
-    return { error: "Missing assignment." };
-  }
-
-  const assignment = await prisma.routeAssignment.findUnique({
-    where: { id: routeAssignmentId },
-    include: {
-      vehicleDriver: true,
-      weeklyScheduleDay: {
-        include: { weeklySchedule: { include: { employee: true } } },
-      },
-      adHocRequest: { include: { employee: true } },
-    },
-  });
-  if (!assignment) return { error: "Assignment not found." };
-
-  const employee =
-    assignment.weeklyScheduleDay?.weeklySchedule.employee ??
-    assignment.adHocRequest?.employee;
-  if (!employee) return { error: "Employee not linked to this assignment." };
-
-  const date =
-    assignment.weeklyScheduleDay?.date ?? assignment.adHocRequest?.date;
-  if (!date) return { error: "Assignment has no travel date." };
-
-  const email = transportArrangedEmail({
-    kind: assignment.adHocRequestId ? "ADHOC" : "WEEKLY",
-    employeeName: employee.fullName,
-    date,
-    driverName: assignment.vehicleDriver.driverName,
-    contactNumber: assignment.vehicleDriver.contactNumber,
-    vehicleNumber: assignment.vehicleDriver.vehicleNumber,
-    pickupTime: assignment.pickupTime,
-  });
-
-  const outcome = await trySendMail({
-    to: employee.email,
-    subject: email.subject,
-    body: email.body,
-    html: email.html,
-  });
-
-  await prisma.emailNotificationLog.create({
-    data: {
-      kind: "ROUTE_ASSIGNMENT_RESEND",
-      recipient: employee.email,
-      recipientName: employee.fullName,
-      subject: email.subject,
-      routeAssignmentId: assignment.id,
-      status: outcome.status,
-      error: outcome.error ?? null,
-    },
-  });
-
-  if (outcome.status === "SENT") {
-    await prisma.routeAssignment.update({
-      where: { id: assignment.id },
-      data: { emailSentAt: new Date() },
-    });
-  }
-
-  revalidatePath("/facilities/route-planning");
-  revalidatePath("/facilities/email-log");
-  return { status: outcome.status, error: outcome.error };
 }

@@ -5,7 +5,6 @@ import { ROLE_HOME, ROLE_PATH_PREFIX, Role } from "@/lib/constants/enums";
 
 const PUBLIC_PATHS = [
   "/login",
-  "/register",
   "/forgot-password",
   "/reset-password",
   "/403",
@@ -16,7 +15,7 @@ const PUBLIC_PATHS = [
  * mirror the layouts exactly, otherwise the edge gate and the DB-backed guard
  * disagree and a user gets bounced to /403 on a page they are allowed to see.
  * Facilities is the elevated area: app/facilities/layout.tsx accepts
- * [FACILITIES, SUPER_ADMIN] and so do all 41 Facilities actions.
+ * [FACILITIES, SUPER_ADMIN] and so does every Facilities server action.
  */
 const SUPER_ADMIN_EXTRA_PREFIXES = ["/facilities"];
 

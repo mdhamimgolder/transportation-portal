@@ -1,3 +1,4 @@
+import "server-only";
 import { PrismaNeon } from "@prisma/adapter-neon";
 import { PrismaClient } from "@/lib/generated/prisma/client";
 import { env } from "@/lib/env";
@@ -6,16 +7,24 @@ import { logger } from "@/lib/logger";
 const KEEP_ALIVE_INTERVAL_MS = 60_000;
 const KEEP_ALIVE_FLAG = "__neonKeepAliveStarted";
 
-const globalForPrisma = globalThis as unknown as {
-  prisma: PrismaClient | undefined;
-};
+/**
+ * Credential columns are omitted from EVERY query by default (including nested
+ * `include: { employee: true }` relations), so a password hash or a live reset
+ * token can never be serialized into a client component or a Server Action
+ * response by accident. The few auth paths that genuinely need them opt back
+ * in per query with `omit: { passwordHash: false }`.
+ */
+const SENSITIVE_USER_FIELDS = {
+  passwordHash: true,
+  passwordResetToken: true,
+  passwordResetExpires: true,
+} as const;
 
-let singleton: PrismaClient | null = null;
-
-function createClient(): PrismaClient {
+function createClient() {
   const adapter = new PrismaNeon({ connectionString: env.DATABASE_URL });
   return new PrismaClient({
     adapter,
+    omit: { user: SENSITIVE_USER_FIELDS },
     // Batch transactions (e.g. re-timing a whole route, week-mirroring all
     // sibling days) routinely exceed Prisma's 5 s default timeout once a route
     // has many stops — raise it so multi-row writes never expire mid-commit.
@@ -26,7 +35,15 @@ function createClient(): PrismaClient {
   });
 }
 
-function getPrisma(): PrismaClient {
+export type AppPrismaClient = ReturnType<typeof createClient>;
+
+const globalForPrisma = globalThis as unknown as {
+  prisma: AppPrismaClient | undefined;
+};
+
+let singleton: AppPrismaClient | null = null;
+
+function getPrisma(): AppPrismaClient {
   if (globalForPrisma.prisma) return globalForPrisma.prisma;
   if (!singleton) {
     singleton = createClient();
@@ -50,7 +67,7 @@ function getPrisma(): PrismaClient {
  * the REAL client — this matters for `prisma.$queryRaw`, which is a tagged
  * template calling `this`.
  */
-const prismaHandler: ProxyHandler<PrismaClient> = {
+const prismaHandler: ProxyHandler<AppPrismaClient> = {
   get(_target, property) {
     const client = getPrisma();
     const value = Reflect.get(
@@ -63,7 +80,7 @@ const prismaHandler: ProxyHandler<PrismaClient> = {
   },
 };
 
-export const prisma = new Proxy({} as PrismaClient, prismaHandler);
+export const prisma = new Proxy({} as AppPrismaClient, prismaHandler);
 
 if (process.env.NODE_ENV !== "production") {
   startDevKeepAlive();

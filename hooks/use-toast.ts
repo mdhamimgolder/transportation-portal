@@ -10,7 +10,6 @@ export function useToast() {
   const [toasts, setToasts] = useState<Toast[]>([]);
 
   const toast = (message: Toast) => {
-    const id = Date.now();
     setToasts((prev) => [...prev, message]);
 
     // Auto-remove after 3 seconds

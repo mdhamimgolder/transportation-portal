@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { prisma } from "@/lib/prisma";
+import { isResetTokenValid } from "@/lib/auth/reset-token";
 import { ResetPasswordForm } from "@/components/auth/reset-password-form";
 
 export default async function ResetPasswordPage({
@@ -9,12 +9,7 @@ export default async function ResetPasswordPage({
 }) {
   const { token } = await params;
 
-  const user = await prisma.user.findUnique({ where: { passwordResetToken: token } });
-  const isValid =
-    !!user &&
-    user.isActive &&
-    !!user.passwordResetExpires &&
-    user.passwordResetExpires.getTime() > Date.now();
+  const isValid = await isResetTokenValid(token);
 
   if (!isValid) {
     return (
