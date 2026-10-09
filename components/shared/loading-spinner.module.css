@@ -1,0 +1,21 @@
+/* Concentric-orbit loader: each satellite group rotates around the viewBox
+   center (transform-box: view-box), carrying its dot along the ring. */
+.loader .orbit {
+  transform-box: view-box;
+  transform-origin: center;
+  animation-name: commure-orbit;
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
+}
+
+@keyframes commure-orbit {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .loader .orbit {
+    animation: none;
+  }
+}

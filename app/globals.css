@@ -397,3 +397,6 @@ body {
     animation: none !important;
   }
 }
+
+/* Loading spinner styles live with the component
+   (components/shared/loading-spinner.module.css). */

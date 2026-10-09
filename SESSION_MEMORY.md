@@ -2437,3 +2437,18 @@ item (not add a 4th).
 - geocoder.ts: in-flight dedup map — concurrent same-term geocodeAddress calls share one throttled Nominatim request (failure behavior unchanged: warn, no cache, null). Only caller is resolveHomeAddress.
 - Behavior deltas to know: none in planning judgments; error ORDER across offices now deterministic by office iteration order (previously also serial order — same).
 
+
+
+## 2026-10-09 — Loading spinner (user-supplied ring rig)
+- New components/shared/loading-spinner.tsx (+ .module.css): user's 5-SVG rotate16 rig transcribed to JSX, frame scaled to ~190px; ring keyframes + #out2/#out3/#inner/#center1 rules appended to app/globals.css; reduced-motion disables all of it.
+- Neon strokes sit on a bg-ink disc so they read on the light paper theme; app/loading.tsx now centers the spinner (shell kept). Reusable via <LoadingSpinner label>. tsc clean, eslint clean, dev server 200s clean.
+
+
+- Loading spinner swapped per user request: ring rig deleted, replaced with Uiverse two-block spinner (blue #005bba / yellow #fed500, 30px blocks, up/down 2.4s keyframes scoped in loading-spinner.module.css; old rotate16 globals removed). Server 200 clean.
+
+
+- Loading spinner rebuilt to match Commure.jpeg: black rounded tile, 5 thin white orbit rings, one cyan satellite per ring counter-rotating (4-9s periods) via transform-box:view-box CSS orbits + small center knot. Two-block Uiverse spinner deleted. tsc/eslint clean, server 200.
+
+
+- Loader restyle per user: white tile + black orbit rings, Commure knot centered (public/commure-logo.jpeg 227px square, inverted to black-on-white, cover + 1.7x zoom crop in 64px badge). Cyan satellites unchanged. Clean verify, server 200.
+
