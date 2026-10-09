@@ -670,9 +670,19 @@ export async function bulkUploadWeeklySchedules(
     ).map((s) => [s.employeeId, s.createdAt] as const)
   );
 
-  // Emails are collected here and sent AFTER the response (via `after`),
-  // instead of one awaited SMTP round trip per row inside the loop.
-  const notices: SubmitNoticeArgs[] = [];
+  // Validated rows are collected here and written in TWO batched statements
+  // below (one createMany per table) instead of a per-row create + 5 upserts
+  // (was: ~6 sequential writes per row — 200 rows ≈ 1,200 round trips).
+  // Emails are collected alongside and sent AFTER the response (via `after`).
+  const validRows: {
+    employee: { id: string; email: string; fullName: string };
+    dayValues: string[];
+  }[] = [];
+  // Tracks employees already accepted from this file so a repeated email is
+  // still reported as a duplicate (the DB pre-read above can't see them).
+  const seenEmployeeIds = new Set<string>();
+  const now = new Date();
+  const todayStamp = now.toISOString().split("T")[0];
 
   for (let r = 1; r < rows.length; r++) {
     const row = rows[r];
@@ -736,70 +746,89 @@ export async function bulkUploadWeeklySchedules(
       });
       continue;
     }
+    if (seenEmployeeIds.has(employee.id)) {
+      skipped.push({
+        line,
+        reason: `Duplicate entry for "${rawEmail}" — schedule for this week already exists (created ${todayStamp}).`,
+      });
+      continue;
+    }
+    seenEmployeeIds.add(employee.id);
 
-    // Create new schedule (no upsert — duplicates are caught above).
-    const now = new Date();
-    const schedule = await prisma.weeklySchedule.create({
-      data: {
-        employeeId: employee.id,
+    // Deferred to the batched writes below (no upsert — duplicates are
+    // caught above).
+    validRows.push({
+      employee: { id: employee.id, email: employee.email, fullName: employee.fullName },
+      dayValues,
+    });
+  }
+
+  // Two batched statements for the whole file: schedules first (days need
+  // their IDs — createMany returns only a count, so IDs are re-read by the
+  // same unique key), then all 5N day rows in one createMany. Fresh schedules
+  // have no days yet, so plain creates are correct — no upserts needed.
+  if (validRows.length > 0) {
+    await prisma.weeklySchedule.createMany({
+      data: validRows.map((v) => ({
+        employeeId: v.employee.id,
         weekStartDate,
         status: WeeklyScheduleStatus.APPROVED,
         rejectReason: null,
         submittedAt: now,
         reviewedById: session.id,
         reviewedAt: now,
-      },
-      select: { id: true, createdAt: true },
+      })),
     });
-    const scheduleId = schedule.id;
-    existingSchedulesByEmployee.set(employee.id, schedule.createdAt);
+    const scheduleIdByEmployee = new Map(
+      (
+        await prisma.weeklySchedule.findMany({
+          where: {
+            employeeId: { in: validRows.map((v) => v.employee.id) },
+            weekStartDate,
+          },
+          select: { id: true, employeeId: true },
+        })
+      ).map((s) => [s.employeeId, s.id] as const)
+    );
+    const dayRows = validRows.flatMap((v) => {
+      const scheduleId = scheduleIdByEmployee.get(v.employee.id);
+      if (!scheduleId) return [];
+      return [0, 1, 2, 3, 4].map((d) => {
+        const value = v.dayValues[d];
+        const needsTransport = value !== NO_TRANSPORT_VALUE;
+        return {
+          weeklyScheduleId: scheduleId,
+          dayOfWeek: d + 1,
+          date: weekDates[d],
+          needsTransport,
+          arrivalTime: needsTransport ? value : null,
+        };
+      });
+    });
+    if (dayRows.length !== validRows.length * 5) {
+      throw new Error("Bulk upload wrote an incomplete week. Retry the upload.");
+    }
+    await prisma.weeklyScheduleDay.createMany({ data: dayRows });
+  }
 
-    const uploadedDays: SubmitNoticeArgs["days"] = [];
-    for (let d = 0; d < 5; d++) {
-      const value = dayValues[d];
+  const notices: SubmitNoticeArgs[] = validRows.map((v) => ({
+    to: v.employee.email,
+    fullName: v.employee.fullName,
+    weekStartDate,
+    days: [0, 1, 2, 3, 4].map((d) => {
+      const value = v.dayValues[d];
       const needsTransport = value !== NO_TRANSPORT_VALUE;
-      uploadedDays.push({
+      return {
         dayOfWeek: d + 1,
         date: weekDates[d],
         needsTransport,
         arrivalTime: needsTransport ? value : null,
-      });
-    }
+      };
+    }),
+  }));
 
-    // All 5 day-upserts fire together instead of awaited one-by-one.
-    await Promise.all(
-      uploadedDays.map((d) =>
-        prisma.weeklyScheduleDay.upsert({
-          where: {
-            weeklyScheduleId_dayOfWeek: {
-              weeklyScheduleId: scheduleId,
-              dayOfWeek: d.dayOfWeek,
-            },
-          },
-          update: {
-            needsTransport: d.needsTransport,
-            arrivalTime: d.arrivalTime,
-            date: d.date,
-          },
-          create: {
-            weeklyScheduleId: scheduleId,
-            dayOfWeek: d.dayOfWeek,
-            date: d.date,
-            needsTransport: d.needsTransport,
-            arrivalTime: d.arrivalTime,
-          },
-        })
-      )
-    );
-
-    notices.push({
-      to: employee.email,
-      fullName: employee.fullName,
-      weekStartDate,
-      days: uploadedDays,
-    });
-
-    created.push({ employeeName: employee.fullName, email: employee.email });
+  for (const v of validRows) {
+    created.push({ employeeName: v.employee.fullName, email: v.employee.email });
   }
 
   // Send all schedule emails after the response is returned (was: awaited per

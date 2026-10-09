@@ -15,6 +15,7 @@ import {
   type LearnFromHistoryResult,
 } from "@/actions/route-learning.actions";
 import { sanitizedActionError } from "@/lib/actions/action-error";
+import { mapWithConcurrency } from "@/lib/concurrency";
 
 /**
  * "Teach from manual plan" — ingest a MANUALLY made route plan as CSV.
@@ -284,6 +285,24 @@ export async function importManualRoutePlanCsv(
       })
     ).map((e) => rowKey(e, e.employeeId))
   );
+
+  // Validated rows are partitioned into creates vs updates using the key set
+  // above — no per-row existence check needed at write time.
+  type EntryWrite = {
+    date: Date;
+    shiftKey: string;
+    vehicleNumber: string;
+    employeeId: string;
+    addressId: string | null;
+    pickupLabel: string;
+    pickupMinutes: number;
+    orderIndex: number | null;
+    officeLabel: string;
+    arrivalMinutes: number;
+    sourceFile: string;
+  };
+  const creates: EntryWrite[] = [];
+  const updates: EntryWrite[] = [];
   for (const row of parsed) {
     const user = row.email ? byEmail.get(row.email) : byName.get(row.name.trim().toLowerCase());
     if (!user) {
@@ -305,7 +324,7 @@ export async function importManualRoutePlanCsv(
       address?.label?.trim() ||
       address?.addressText?.trim() ||
       user.fullName;
-    const data = {
+    const data: EntryWrite = {
       date: row.date,
       shiftKey: row.shiftKey,
       vehicleNumber: row.vehicleNumber,
@@ -320,26 +339,61 @@ export async function importManualRoutePlanCsv(
       sourceFile: file.name.slice(0, 120),
     };
     const key = rowKey(row, user.id);
-    const isUpdate = touchedKeys.has(key);
-    await prisma.manualRoutePlanEntry.upsert({
-      where: {
-        date_shiftKey_vehicleNumber_employeeId: {
-          date: row.date,
-          shiftKey: row.shiftKey,
-          vehicleNumber: row.vehicleNumber,
-          employeeId: user.id,
-        },
-      },
-      update: data,
-      create: data,
-    });
-    touchedKeys.add(key);
-    if (isUpdate) {
+    if (touchedKeys.has(key)) {
+      updates.push(data);
       updated += 1;
     } else {
+      creates.push(data);
       stored += 1;
     }
+    touchedKeys.add(key);
   }
+
+  // One INSERT for every new row (was: one upsert round trip per row).
+  // Fresh uploads are almost entirely creates, so this is usually the only
+  // write statement. A P2002 here means a concurrent upload inserted the same
+  // key after our pre-read — fall back to per-row upserts (last wins), the
+  // same outcome the old serial loop produced under a race.
+  if (creates.length > 0) {
+    try {
+      await prisma.manualRoutePlanEntry.createMany({ data: creates });
+    } catch (error) {
+      const code =
+        error && typeof error === "object" && "code" in error
+          ? (error as { code: unknown }).code
+          : null;
+      if (code !== "P2002") throw error;
+      await mapWithConcurrency(creates, 8, (data) =>
+        prisma.manualRoutePlanEntry.upsert({
+          where: {
+            date_shiftKey_vehicleNumber_employeeId: {
+              date: data.date,
+              shiftKey: data.shiftKey,
+              vehicleNumber: data.vehicleNumber,
+              employeeId: data.employeeId,
+            },
+          },
+          update: data,
+          create: data,
+        })
+      );
+    }
+  }
+  // Updates carry distinct per-row data, so they stay individual statements —
+  // but bounded-parallel instead of serial.
+  await mapWithConcurrency(updates, 8, (data) =>
+    prisma.manualRoutePlanEntry.update({
+      where: {
+        date_shiftKey_vehicleNumber_employeeId: {
+          date: data.date,
+          shiftKey: data.shiftKey,
+          vehicleNumber: data.vehicleNumber,
+          employeeId: data.employeeId,
+        },
+      },
+      data,
+    })
+  );
 
   // Rebuild the learned set immediately so the planner picks up the new
   // ground truth without waiting for the next RUN MAPPING.

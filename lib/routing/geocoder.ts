@@ -28,6 +28,11 @@ const EMPTY_RESULT_TTL_MS = 10 * 60 * 1000; // re-try unresolved terms later
 type CacheEntry = { results: GeocodeResult[]; expiresAt: number };
 const cache = new Map<string, CacheEntry>();
 
+// In-flight lookups by normalized term: concurrent callers asking for the
+// same address share one request instead of each queueing a throttled
+// Nominatim call (matters now that home resolution runs concurrently).
+const inflight = new Map<string, Promise<GeocodeResult | null>>();
+
 let lastRequestAt = 0;
 let throttleChain: Promise<void> = Promise.resolve();
 
@@ -121,16 +126,25 @@ export async function geocodeAddress(term: string): Promise<GeocodeResult | null
   const cached = cache.get(key);
   if (cached && cached.expiresAt > Date.now()) return cached.results[0] ?? null;
 
-  try {
-    const results = await nominatimSearch(term, 3);
-    remember(key, results);
-    return results[0] ?? null;
-  } catch (error) {
-    // Outage / timeout: degrade gracefully (the caller falls back), and don't
-    // cache — the next run retries.
-    logger.warn("geocoder", "lookup failed", {
-      error: error instanceof Error ? error.message : String(error),
-    });
-    return null;
-  }
+  const running = inflight.get(key);
+  if (running) return running;
+
+  const task: Promise<GeocodeResult | null> = nominatimSearch(term, 3).then(
+    (results) => {
+      remember(key, results);
+      return results[0] ?? null;
+    },
+    (error) => {
+      // Outage / timeout: degrade gracefully (the caller falls back), and
+      // don't cache — the next run retries.
+      logger.warn("geocoder", "lookup failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return null;
+    }
+  ).finally(() => {
+    if (inflight.get(key) === task) inflight.delete(key);
+  });
+  inflight.set(key, task);
+  return task;
 }

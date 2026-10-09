@@ -11,6 +11,7 @@ import { audit, auditEntry } from "@/lib/audit";
 import { parseCsv } from "@/lib/csv";
 import { sendCredentialsEmail, sendCredentialsEmailNow } from "@/lib/mailer";
 import { randomBytes } from "node:crypto";
+import { mapWithConcurrency } from "@/lib/concurrency";
 import { Role, ALL_ROLES, OFFICE_LOCATIONS } from "@/lib/constants/enums";
 import {
   sanitizedActionError,
@@ -78,6 +79,16 @@ function canManageRole(actorRole: Role, targetRole: string): boolean {
 
 const STAFF_ACCOUNT_ERROR =
   "Facilities can only manage employee accounts (Employee, Corporate Employee, Fixed Arrival).";
+
+/** True for Prisma unique-constraint violations (email / employeeCode races). */
+function isDuplicateKeyError(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    (error as { code: unknown }).code === "P2002"
+  );
+}
 
 /** Upload guards: Next caps the action body too, these give a clear message. */
 const MAX_UPLOAD_BYTES = 2 * 1024 * 1024;
@@ -363,37 +374,53 @@ export async function bulkCreateUsersAction(
     // the event loop.
     const usersWithRevokedCredentials: string[] = [];
 
-    // One address upsert per UNIQUE address text + coordinate variant (was:
-    // per row). Coordinates optional — see the hasCoords comment above.
-    const addressIds = new Map<string, string | null>();
+    // employeeCode → owning email, seeded from the DB pre-read and extended
+    // as rows claim codes — a code claimed twice in one file becomes a
+    // deterministic skip instead of a mid-loop P2002 with partial writes.
+    const codeClaims = new Map(codeOwnerByEmail);
 
-    // Resolve (and optionally update) the Address row for a CSV address text.
-    // Coordinates provided → the upsert writes them; absent → the existing
-    // address is linked untouched, or null for a brand-new text.
-    const resolveHomeAddressId = async (
-      addressText: string,
-      withCoords: boolean,
-      lat: number,
-      lng: number
-    ): Promise<string | null> => {
-      const coordKey = withCoords ? `${lat},${lng}` : "keep-as-is";
-      const cacheKey = `${addressText}::${coordKey}`;
-      if (addressIds.has(cacheKey)) return addressIds.get(cacheKey) ?? null;
-      let resolvedId: string | null = null;
-      if (withCoords) {
-        const row = await prisma.address.upsert({
-          where: { addressText },
-          update: { latitude: lat, longitude: lng },
-          create: { addressText, latitude: lat, longitude: lng },
-        });
-        resolvedId = row.id;
-      } else {
-        resolvedId =
-          (await prisma.address.findUnique({ where: { addressText } }))?.id ?? null;
-      }
-      addressIds.set(cacheKey, resolvedId);
-      return resolvedId;
-    };
+    // Phase 1 below only validates + collects: no DB writes, no bcrypt.
+    // Phases 2-4 (after the loop) resolve addresses, hash, and write in bulk.
+    type ValidatedUserRow =
+      | {
+          kind: "update";
+          line: number;
+          userId: string;
+          email: string;
+          base: {
+            fullName?: string;
+            role?: Role;
+            department?: string;
+            contactNumber?: string;
+            pickupPoint?: string;
+            employeeCode?: string;
+            fixedArrivalTime?: string | null;
+          };
+          roleChanged: boolean;
+          password: string | null;
+          addressText: string | null;
+          withCoords: boolean;
+          lat: number;
+          lng: number;
+        }
+      | {
+          kind: "create";
+          line: number;
+          email: string;
+          fullName: string;
+          role: Role;
+          employeeCode: string | null;
+          department: string | null;
+          contactNumber: string | null;
+          addressText: string | null;
+          pickupPoint: string | null;
+          fixedArrivalTime: string | null | undefined;
+          password: string | null;
+          withCoords: boolean;
+          lat: number;
+          lng: number;
+        };
+    const validOps: ValidatedUserRow[] = [];
 
     let updatedAccounts = 0;
 
@@ -531,7 +558,7 @@ export async function bulkCreateUsersAction(
       }
       const updates: {
         fullName?: string;
-        role?: string;
+        role?: Role;
         department?: string;
         contactNumber?: string;
         pickupPoint?: string;
@@ -549,7 +576,7 @@ export async function bulkCreateUsersAction(
       if (pickupPoint) updates.pickupPoint = pickupPoint;
       if (fixedArrivalTime !== undefined) updates.fixedArrivalTime = fixedArrivalTime;
       if (employeeCode && employeeCode !== existingUser.employeeCode) {
-        const owner = codeOwnerByEmail.get(employeeCode);
+        const owner = codeClaims.get(employeeCode);
         if (owner && owner !== email) {
           skipped.push({
             line,
@@ -559,77 +586,242 @@ export async function bulkCreateUsersAction(
         }
         updates.employeeCode = employeeCode;
       }
-      if (password) {
-        updates.passwordHash = await hashPassword(password);
-        updates.mustChangePassword = true;
-      }
-      if (address) {
-        updates.address = address;
-        const linked = await resolveHomeAddressId(address, hasCoords, coordLat, coordLng);
-        if (linked) updates.homeAddressId = linked;
-      }
-      if (Object.keys(updates).length > 0) {
-        await prisma.user.update({
-          where: { id: existingUser.id },
-          data: updates,
-          select: { id: true },
-        });
-        if (updates.passwordHash || updates.role) {
-          usersWithRevokedCredentials.push(existingUser.id);
-        }
-        updatedAccounts += 1;
-      }
+      if (updates.employeeCode) codeClaims.set(updates.employeeCode, email);
+      else if (existingUser.employeeCode) codeClaims.set(existingUser.employeeCode, email);
+      // Collect-only: password hashing and the address link + user update
+      // happen in the batched phases below, not one row at a time here.
+      // (password/address keys are attached by phase 4 — `updates` only
+      // carries profile fields at this point.)
+      validOps.push({
+        kind: "update",
+        line,
+        userId: existingUser.id,
+        email,
+        base: updates,
+        roleChanged: Boolean(updates.role),
+        password: password || null,
+        addressText: address,
+        withCoords: hasCoords,
+        lat: coordLat,
+        lng: coordLng,
+      });
       emailsInFile.add(email);
       continue;
     }
 
-    const homeAddressId = address
-      ? await resolveHomeAddressId(address, hasCoords, coordLat, coordLng)
-      : null;
-
-    // Blank password → a random temporary one is generated and emailed; the
-    // user must change it after logging in.
-    const plainPassword = password || `Tmp-${randomBytes(6).toString("base64url")}`;
-    const passwordHash = await hashPassword(plainPassword);
-
-    let user;
-    try {
-      user = await prisma.user.create({
-        data: {
-          email,
-          fullName,
-          role,
-          employeeCode,
-          department,
-          contactNumber,
-          address,
-          homeAddressId,
-          pickupPoint,
-          passwordHash,
-          mustChangePassword: true,
-          isBulkCreated: true,
-          fixedArrivalTime: fixedArrivalTime ?? undefined,
-        },
-        select: { email: true, fullName: true },
-      });
-    } catch (error) {
-      if (error && typeof error === "object" && "code" in error && error.code === "P2002") {
+    // A code already owned (DB snapshot or claimed by an earlier row) can
+    // never insert — skip eagerly with the same message the old P2002 catch
+    // produced, instead of failing the whole batch at write time.
+    if (employeeCode) {
+      if (codeClaims.has(employeeCode)) {
         skipped.push({ line, reason: `Email or employee ID already exists (${email}, ${employeeCode}).` });
         continue;
       }
-      throw error;
+      codeClaims.set(employeeCode, email);
     }
 
-    created.push({ email: user.email, fullName: user.fullName });
-    createdCredentials.push({
-      email: user.email,
-      fullName: user.fullName,
-      // The plain password that was actually hashed — a provided one, or the
-      // generated temporary one when the CSV cell was blank.
-      password: plainPassword,
+    // Collect-only: password generation/hashing and the address link +
+    // user create happen in the batched phases below.
+    validOps.push({
+      kind: "create",
+      line,
+      email,
+      fullName,
+      role,
+      employeeCode,
+      department,
+      contactNumber,
+      addressText: address,
+      pickupPoint,
+      fixedArrivalTime: fixedArrivalTime ?? undefined,
+      password: password || null,
+      withCoords: hasCoords,
+      lat: coordLat,
+      lng: coordLng,
     });
     emailsInFile.add(email);
     if (employeeCode) employeeCodesInFile.add(employeeCode);
+  }
+
+  // ── Phase 2: resolve addresses in bulk ───────────────────────────────
+  // One statement per UNIQUE address text (was: an upsert/findUnique per
+  // row). A text WITH coordinates keeps the LAST row's pair — the old serial
+  // loop ended with the last writer's values. A text never given coordinates
+  // links the existing row untouched, or null for brand-new text.
+  const lastCoordsByText = new Map<string, { lat: number; lng: number }>();
+  const linkedTexts = new Set<string>();
+  for (const op of validOps) {
+    if (!op.addressText) continue;
+    linkedTexts.add(op.addressText);
+    if (op.withCoords) lastCoordsByText.set(op.addressText, { lat: op.lat, lng: op.lng });
+  }
+  const plainTexts = [...linkedTexts].filter((t) => !lastCoordsByText.has(t));
+  const resolvedAddressIds = new Map<string, string | null>();
+  if (plainTexts.length > 0) {
+    for (const a of await prisma.address.findMany({
+      where: { addressText: { in: plainTexts } },
+      select: { id: true, addressText: true },
+    })) {
+      resolvedAddressIds.set(a.addressText, a.id);
+    }
+  }
+  await mapWithConcurrency([...lastCoordsByText], 8, async ([text, coords]) => {
+    const row = await prisma.address.upsert({
+      where: { addressText: text },
+      update: { latitude: coords.lat, longitude: coords.lng },
+      create: { addressText: text, latitude: coords.lat, longitude: coords.lng },
+    });
+    resolvedAddressIds.set(text, row.id);
+  });
+
+  // ── Phase 3: hash passwords with bounded concurrency ─────────────────
+  // bcrypt is CPU-bound (~80 ms/row serially). Hashed under a small cap:
+  // bcryptjs yields between blocks, so a low limit overlaps the work without
+  // starving the event loop — never an unbounded fan-out.
+  const hashTargets: { index: number; plain: string }[] = [];
+  const createPlainByIndex = new Map<number, string>();
+  validOps.forEach((op, index) => {
+    if (op.kind === "update") {
+      if (op.password) hashTargets.push({ index, plain: op.password });
+    } else {
+      // Blank password → a random temporary one is generated and emailed;
+      // the user must change it after logging in.
+      const plain = op.password || `Tmp-${randomBytes(6).toString("base64url")}`;
+      createPlainByIndex.set(index, plain);
+      hashTargets.push({ index, plain });
+    }
+  });
+  const passwordHashByIndex = new Map<number, string>();
+  await mapWithConcurrency(hashTargets, 4, async (t) => ({
+    index: t.index,
+    hash: await hashPassword(t.plain),
+  })).then((hashed) => {
+    for (const h of hashed) passwordHashByIndex.set(h.index, h.hash);
+  });
+
+  // ── Phase 4: write users ─────────────────────────────────────────────
+  // Updates carry distinct per-row data — individual statements, but
+  // bounded-parallel instead of serial.
+  await mapWithConcurrency(
+    validOps.map((op, index) => ({ op, index })).filter((x) => x.op.kind === "update"),
+    8,
+    async ({ op, index }) => {
+      if (op.kind !== "update") return;
+      const data: {
+        fullName?: string;
+        role?: Role;
+        department?: string;
+        contactNumber?: string;
+        pickupPoint?: string;
+        employeeCode?: string;
+        fixedArrivalTime?: string | null;
+        address?: string;
+        homeAddressId?: string;
+        passwordHash?: string;
+        mustChangePassword?: boolean;
+      } = { ...op.base };
+      if (op.addressText) {
+        data.address = op.addressText;
+        const linked = resolvedAddressIds.get(op.addressText) ?? null;
+        if (linked) data.homeAddressId = linked;
+      }
+      const hash = passwordHashByIndex.get(index);
+      if (hash) {
+        data.passwordHash = hash;
+        data.mustChangePassword = true;
+      }
+      if (Object.keys(data).length === 0) return;
+      await prisma.user.update({
+        where: { id: op.userId },
+        data,
+        select: { id: true },
+      });
+      if (hash || op.roleChanged) usersWithRevokedCredentials.push(op.userId);
+      updatedAccounts += 1;
+    }
+  );
+
+  // Creates share no per-row logic — a single INSERT for the whole file
+  // (was: one create round trip per row). A P2002 here means a concurrent
+  // writer inserted the same email/code after our pre-read: fall back to
+  // per-row creates so the file still lands with the old per-row skip
+  // accounting instead of failing the entire upload.
+  type CreateEntry = {
+    op: Extract<ValidatedUserRow, { kind: "create" }>;
+    plain: string;
+    data: {
+      email: string;
+      fullName: string;
+      role: Role;
+      employeeCode: string | null;
+      department: string | null;
+      contactNumber: string | null;
+      address: string | null;
+      homeAddressId: string | null;
+      pickupPoint: string | null;
+      passwordHash: string;
+      mustChangePassword: boolean;
+      isBulkCreated: boolean;
+      fixedArrivalTime?: string | null;
+    };
+  };
+  const createEntries: CreateEntry[] = [];
+  validOps.forEach((op, index) => {
+    if (op.kind !== "create") return;
+    const hash = passwordHashByIndex.get(index);
+    const plain = createPlainByIndex.get(index);
+    if (!hash || !plain) {
+      throw new Error("Password hashing failed for a bulk-upload row. Retry the upload.");
+    }
+    createEntries.push({
+      op,
+      plain,
+      data: {
+        email: op.email,
+        fullName: op.fullName,
+        role: op.role,
+        employeeCode: op.employeeCode,
+        department: op.department,
+        contactNumber: op.contactNumber,
+        address: op.addressText,
+        homeAddressId: op.addressText ? (resolvedAddressIds.get(op.addressText) ?? null) : null,
+        pickupPoint: op.pickupPoint,
+        passwordHash: hash,
+        mustChangePassword: true,
+        isBulkCreated: true,
+        fixedArrivalTime: op.fixedArrivalTime ?? undefined,
+      },
+    });
+  });
+  const recordCreated = (entry: CreateEntry) => {
+    created.push({ email: entry.op.email, fullName: entry.op.fullName });
+    createdCredentials.push({
+      email: entry.op.email,
+      fullName: entry.op.fullName,
+      // The plain password that was actually hashed — a provided one, or the
+      // generated temporary one when the CSV cell was blank.
+      password: entry.plain,
+    });
+  };
+  if (createEntries.length > 0) {
+    try {
+      await prisma.user.createMany({ data: createEntries.map((e) => e.data) });
+      for (const e of createEntries) recordCreated(e);
+    } catch (error) {
+      if (!isDuplicateKeyError(error)) throw error;
+      for (const e of createEntries) {
+        try {
+          await prisma.user.create({ data: e.data });
+        } catch (rowError) {
+          if (isDuplicateKeyError(rowError)) {
+            skipped.push({ line: e.op.line, reason: `Email or employee ID already exists (${e.op.email}, ${e.op.employeeCode}).` });
+            continue;
+          }
+          throw rowError;
+        }
+        recordCreated(e);
+      }
+    }
   }
 
   // Credential/role changes invalidate the affected users' sessions.

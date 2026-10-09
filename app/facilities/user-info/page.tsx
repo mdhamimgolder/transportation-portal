@@ -22,7 +22,7 @@ export default async function FacilitiesUserInfoPage({
 }: {
   searchParams: Promise<{ q?: string; page?: string }>;
 }) {
-  await requireRole([Role.FACILITIES]);
+  await requireRole([Role.FACILITIES, Role.SUPER_ADMIN]);
   const { q, page: pageParam } = await searchParams;
   const result = await getEmployeeDirectory(q, Number(pageParam ?? 1));
   const paginationHref = (page: number) => {

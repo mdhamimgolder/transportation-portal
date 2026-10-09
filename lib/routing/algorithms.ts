@@ -44,6 +44,7 @@ import {
 import {
   ARRIVAL_TIMES_BY_SHIFT,
   LABEL_FOR_ARRIVAL_VALUE,
+  arrivalMinutesForLabel,
 } from "@/lib/constants/route-shifts";
 import {
   normalizeOfficeLocation,
@@ -58,7 +59,6 @@ import {
   LEARN_MIN_SAMPLES,
 } from "./pickup-schedule";
 import {
-  arrivalMinutesFromLabel,
   dateForArrivalMinutes,
   distancePointToPolylineKm as distanceToPolylineKm,
   errorMessage,
@@ -125,7 +125,8 @@ async function pinnedVehicleIdsForShift(
  * when the pickup point has no usable coordinates (and otherwise behaves
  * exactly as before for regular employees). */
 async function resolveHomeAddress(
-  employee: EmployeeShape
+  employee: EmployeeShape,
+  preloaded: Map<string, HomeAddressShape>
 ): Promise<HomeAddressShape | null> {
   const pickup = employee.pickupAddress;
   if (
@@ -140,6 +141,20 @@ async function resolveHomeAddress(
   const text = employee.address?.trim();
 
   if ((!home || (home.latitude === 0 && home.longitude === 0)) && text) {
+    // Preloaded hit: another flow already geocoded this exact text — link
+    // it without paying the throttled Nominatim round trip.
+    const known = preloaded.get(text);
+    if (known && !(known.latitude === 0 && known.longitude === 0)) {
+      try {
+        await prisma.user.update({
+          where: { id: employee.id },
+          data: { homeAddressId: known.id },
+        });
+      } catch {
+        // best-effort; the caller records a human-readable error
+      }
+      return known;
+    }
     try {
       const geocoded = await geocodeAddress(text);
       if (geocoded) {
@@ -572,6 +587,258 @@ async function planCorridorRoutesWithRoadIndex(args: {
 }
 
 /**
+ * Fetch-heavy front half of one office's corridor pass: vehicle pool, home
+ * resolution, OSRM matrix, polyline warm/prefetch, pure plan, and the
+ * template/existing-plan prefetch. Per-office inputs are disjoint (distinct
+ * employees/vehicles), so offices run under bounded concurrency and merge
+ * back in office order — error/plan ordering stays deterministic. The route
+ * writes stay with the caller (serial, fast local DB ops).
+ */
+type OfficeCorridorFetch =
+  | {
+      ok: true;
+      office: OfficeCoords;
+      planned: { routes: PlannedCorridorRoute[]; errors: string[] };
+      templateByVehicle: Map<
+        string,
+        { stops: Array<{ employeeId: string | null; pickupTime: string | null }> }
+      >;
+      existingPlanByVehicle: Map<string, { id: string; status: string }>;
+      reuseById: Map<string, string | null>;
+      errors: string[];
+    }
+  | { ok: false; errors: string[] };
+
+async function fetchOfficeCorridor(args: {
+  officeKey: string;
+  officeSchedules: ScheduleAgg[];
+  dayDate: Date;
+  arrivalLabel: string;
+  corridorEligibleVehicles: VehiclePoolShape[];
+  pinnedIds: string[];
+  reuse10PM: boolean;
+  completed10PM: Array<{ id: string; vehicleId: string }>;
+  preloadedAddresses: Map<string, HomeAddressShape>;
+}): Promise<OfficeCorridorFetch> {
+  const {
+    officeKey,
+    officeSchedules,
+    dayDate,
+    arrivalLabel,
+    corridorEligibleVehicles,
+    pinnedIds,
+    reuse10PM,
+    completed10PM,
+    preloadedAddresses,
+  } = args;
+  const errors: string[] = [];
+  const office = officeCoordinatesFor(officeKey);
+
+  try {
+    // Vehicle pool for this office: pinned (exclusive) → dedicated (non-10 PM)
+    // office vehicles (see corridorEligibleVehicles — preset owners excluded
+    // unless pinned for this shift).
+    let pool = poolForOfficeCore(
+      officeKey,
+      corridorEligibleVehicles,
+      pinnedIds,
+      (vehicleOffice, key) => normalizeOfficeLocation(vehicleOffice) === key
+    );
+    const reuseById = new Map<string, string | null>();
+    if (reuse10PM) {
+      const completedForOffice = completed10PM.map((plan) => {
+        const vehicle = corridorEligibleVehicles.find((v) => v.id === plan.vehicleId);
+        return vehicle && normalizeOfficeLocation(vehicle.officeLocation) === officeKey
+          ? { vehicle, previousId: plan.id }
+          : null;
+      }).filter((x): x is { vehicle: VehiclePoolShape; previousId: string } => Boolean(x));
+
+      const reused = pinnedIds.length > 0
+        ? completedForOffice.filter((r) => pinnedIds.includes(r.vehicle.id))
+        : [];
+      if (reused.length > 0) {
+        pool = [...new Map(reused.map((r) => [r.vehicle.id, r.vehicle])).values()];
+        for (const r of reused) reuseById.set(r.vehicle.id, r.previousId);
+      }
+    }
+
+    if (pool.length === 0) {
+      errors.push(
+        `${arrivalLabel}: no active vehicles for the ${officeKey} office`
+      );
+      return { ok: false, errors };
+    }
+
+    // Resolve home coordinates concurrently (cap 5): relation/DB hits resolve
+    // without I/O; true geocode misses serialize inside the geocoder's own
+    // 1 req/s throttle but overlap the address upserts + user links.
+    // Order-preserving, so member order (and hence plans) matches a serial
+    // run exactly.
+    const resolved = await mapWithConcurrency(
+      officeSchedules,
+      5,
+      async (schedule) => {
+        const employee = schedule.weeklySchedule.employee;
+        const home = await resolveHomeAddress(employee, preloadedAddresses);
+        return { schedule, employee, home };
+      }
+    );
+    const members: ClusterMember[] = [];
+    for (const { schedule, employee, home } of resolved) {
+      if (!home) {
+        errors.push(
+          `${arrivalLabel}: Employee ${employee.fullName || employee.id} has no geocodable home address`
+        );
+        continue;
+      }
+      members.push({
+        schedule,
+        employee,
+        home,
+        matrixIndex: 0,
+        toOfficeMin: 0,
+        toOfficeKm: 0,
+      });
+    }
+
+    if (members.length === 0) return { ok: false, errors };
+
+    // One OSRM matrix: office + all homes (cached 30 days by pair).
+    const locations: Location[] = [office];
+    for (const m of members) {
+      m.matrixIndex = locations.length;
+      locations.push({
+        lat: m.home.latitude,
+        lng: m.home.longitude,
+        name: m.employee.id,
+      });
+    }
+    let matrix: Awaited<ReturnType<typeof getDistanceMatrix>>;
+    try {
+      matrix = await getDistanceMatrix(locations, locations);
+    } catch {
+      // OSRM outage (table call) — swap in a great-circle matrix (25 km/h, the
+      // same estimate the matrix readers already use for missing legs) so the
+      // whole day stays mappable instead of killing every corridor route for
+      // it. Rounding/precision degrade; availability never does.
+      errors.push(
+        `${arrivalLabel}: OSRM distance matrix unavailable for ${officeKey}; approximate distances are being used.`
+      );
+      matrix = {
+        originAddresses: [],
+        destinationAddresses: [],
+        status: "OK",
+        rows: locations.map((from) => ({
+          elements: locations.map((to) => {
+            const km = haversineDistance(from.lat, from.lng, to.lat, to.lng);
+            const minutes = (km / 25) * 60;
+            return {
+              distance: {
+                value: Math.max(1, Math.round(km * 1000)),
+                text: `${km.toFixed(1)} km`,
+              },
+              duration: {
+                value: Math.max(1, Math.round(minutes * 60)),
+                text: `${Math.round(minutes)} min`,
+              },
+              status: "NoSegment",
+            };
+          }),
+        })),
+      };
+    }
+    const dMin = (from: number, to: number) =>
+      matrixDurationMin(matrix, locations, from, to);
+    const dKm = (from: number, to: number) =>
+      matrixDistanceKm(matrix, locations, from, to);
+
+    for (const m of members) m.toOfficeMin = dMin(m.matrixIndex, 0);
+    // Far-first ordering metric: road km from the distance matrix.
+    for (const m of members) m.toOfficeKm = dKm(m.matrixIndex, 0);
+
+    // Warm persisted polylines before the pure core asks for missing edges —
+    // ONE batched query instead of a DB round-trip per leg during the sweep.
+    // Seeded entries are byte-identical to per-leg lookups/OSRM results, so
+    // planning judgments are unchanged; only fetch latency is removed (re-runs
+    // and post-restart runs skip OSRM entirely).
+    const sweepLocations: Location[] = [
+      office,
+      ...members.map((m) => ({
+        lat: m.home.latitude,
+        lng: m.home.longitude,
+      })),
+    ];
+    const warmKeys: PolylineWarmKey[] = [];
+    for (const a of sweepLocations) {
+      for (const b of sweepLocations) {
+        if (a === b) continue;
+        warmKeys.push({
+          from: a,
+          to: b,
+          initialBearingDeg: bearingDegrees(a, b),
+        });
+      }
+    }
+    // Best-effort cache warm — a routing outage here must NOT block mapping.
+    // The iterative core adapter below still fetches any required cache misses.
+    try {
+      await warmPolylineCache(warmKeys);
+      // Self-hosted OSRM: fetch the remaining cold legs in parallel up front
+      // instead of one-by-one inside the sweep (no-op on the rate-limited
+      // public server, where requests must stay spaced out).
+      await prefetchRoutePolylines(warmKeys);
+    } catch {
+      // silent — precision/availability degrade per-leg, never globally
+    }
+
+    const planned = await planCorridorRoutesWithRoadIndex({
+      members,
+      pool,
+      allVehicles: corridorEligibleVehicles,
+      officeKey,
+      office,
+      arrivalLabel,
+      dMin,
+      dKm,
+    });
+
+    // Prefetch every planned vehicle's learned template and existing plan
+    // for this day/shift in two queries (was: two lookups per route).
+    const plannedVehicleIds = planned.routes.map((r) => r.vehicle.id);
+    const [templateRows, existingPlanRows] = await Promise.all([
+      prisma.routeTemplate.findMany({
+        where: { arrivalTime: arrivalLabel, vehicleId: { in: plannedVehicleIds } },
+        select: {
+          vehicleId: true,
+          stops: {
+            orderBy: { seq: "asc" },
+            select: { employeeId: true, pickupTime: true },
+          },
+        },
+      }),
+      prisma.routePlan.findMany({
+        where: { dayDate, arrivalTime: arrivalLabel, vehicleId: { in: plannedVehicleIds } },
+        select: { id: true, status: true, vehicleId: true },
+      }),
+    ]);
+    const templateByVehicle = new Map(templateRows.map((t) => [t.vehicleId, t]));
+    const existingPlanByVehicle = new Map(existingPlanRows.map((p) => [p.vehicleId, p]));
+
+    return { ok: true, office, planned, templateByVehicle, existingPlanByVehicle, reuseById, errors };
+  } catch (officeError) {
+    // One office's transient failure (DB pooler blip, OSRM outage) must never
+    // kill the whole shift — the office is reported and the remaining offices
+    // still map.
+    return {
+      ok: false,
+      errors: [
+        `${arrivalLabel}: ${officeKey} office failed to map (${errorMessage(officeError)})`,
+      ],
+    };
+  }
+}
+
+/**
  * Shared corridor-route builder used by the 11 PM and 12 AM-6 AM algorithms.
  *
  * @param arrivalValue    — the stored weeklyScheduleDay.arrivalTime value in
@@ -663,194 +930,65 @@ async function generateCorridorRoutes(
   );
 
   const dayDate = addUtcCalendarDays(weekStartDate, dayOfWeek);
-  const arrivalMinutes = arrivalMinutesFromLabel(arrivalLabel);
+  // Unknown labels must fail loudly: the old fallback silently planned them
+  // as 11 PM. arrivalLabel always derives from a stored HH:mm value, so null
+  // here means unexpected data, not a plannable shift.
+  const arrivalMinutes = arrivalMinutesForLabel(arrivalLabel);
+  if (arrivalMinutes == null) {
+    return {
+      routesCreated: 0,
+      errors: [`${arrivalLabel}: unknown arrival label — cannot plan routes`],
+    };
+  }
 
-  for (const [officeKey, officeSchedules] of employeesByOffice) {
-    const office = officeCoordinatesFor(officeKey);
-
-    // Vehicle pool for this office: pinned (exclusive) → dedicated (non-10 PM)
-    // office vehicles (see corridorEligibleVehicles — preset owners excluded
-    // unless pinned for this shift).
-    let pool = poolForOfficeCore(
-      officeKey,
-      corridorEligibleVehicles,
-      pinnedIds,
-      (vehicleOffice, key) => normalizeOfficeLocation(vehicleOffice) === key
-    );
-    const reuseById = new Map<string, string | null>();
-    if (reuse10PM) {
-      const completedForOffice = completed10PM.map((plan) => {
-        const vehicle = corridorEligibleVehicles.find((v) => v.id === plan.vehicleId);
-        return vehicle && normalizeOfficeLocation(vehicle.officeLocation) === officeKey
-          ? { vehicle, previousId: plan.id }
-          : null;
-      }).filter((x): x is { vehicle: VehiclePoolShape; previousId: string } => Boolean(x));
-
-      const reused = pinnedIds.length > 0
-        ? completedForOffice.filter((r) => pinnedIds.includes(r.vehicle.id))
-        : [];
-      if (reused.length > 0) {
-        pool = [...new Map(reused.map((r) => [r.vehicle.id, r.vehicle])).values()];
-        for (const r of reused) reuseById.set(r.vehicle.id, r.previousId);
-      }
+  // Preload every free-text home address in ONE query: rows another flow
+  // already geocoded resolve without a throttled Nominatim round trip (the
+  // per-member resolver below consults this map before geocoding).
+  const addressTexts = new Set<string>();
+  for (const officeSchedules of employeesByOffice.values()) {
+    for (const schedule of officeSchedules) {
+      const text = schedule.weeklySchedule.employee.address?.trim();
+      if (text) addressTexts.add(text);
     }
+  }
+  const preloadedAddresses = new Map<string, HomeAddressShape>();
+  if (addressTexts.size > 0) {
+    for (const row of await prisma.address.findMany({
+      where: { addressText: { in: [...addressTexts] } },
+    })) {
+      preloadedAddresses.set(row.addressText, row);
+    }
+  }
 
-    if (pool.length === 0) {
-      errors.push(
-        `${arrivalLabel}: no active vehicles for the ${officeKey} office`
-      );
+  // Fetch-heavy front half runs with bounded concurrency across offices
+  // (cap 2): each office's matrix + warm/prefetch + plan is independent.
+  // Results merge back in office order, so error streams stay deterministic;
+  // the route writes below stay serial (fast local DB ops).
+  const fetchedOffices = await mapWithConcurrency(
+    [...employeesByOffice],
+    2,
+    ([officeKey, officeSchedules]) =>
+      fetchOfficeCorridor({
+        officeKey,
+        officeSchedules,
+        dayDate,
+        arrivalLabel,
+        corridorEligibleVehicles,
+        pinnedIds,
+        reuse10PM,
+        completed10PM,
+        preloadedAddresses,
+      })
+  );
+
+  for (const result of fetchedOffices) {
+    if (!result.ok) {
+      errors.push(...result.errors);
       continue;
     }
-
-    // Resolve home coordinates (auto-geocoding best-effort).
-    const members: ClusterMember[] = [];
-    for (const schedule of officeSchedules) {
-      const employee = schedule.weeklySchedule.employee;
-      const home = await resolveHomeAddress(employee);
-      if (!home) {
-        errors.push(
-          `${arrivalLabel}: Employee ${employee.fullName || employee.id} has no geocodable home address`
-        );
-        continue;
-      }
-      members.push({
-        schedule,
-        employee,
-        home,
-        matrixIndex: 0,
-        toOfficeMin: 0,
-        toOfficeKm: 0,
-      });
-    }
-
-    if (members.length === 0) continue;
-
-    // One office's transient failure (DB pooler blip, OSRM outage) must never
-    // kill the whole shift — the office is reported and the remaining offices
-    // still map. Availability derailed days for this exact reason before: a
-    // single Neon/OSRM hiccup aborted the ENTIRE day's corridor pass.
-    try {
-      // One OSRM matrix: office + all homes (cached 30 days by pair).
-      const locations: Location[] = [office];
-      for (const m of members) {
-        m.matrixIndex = locations.length;
-        locations.push({
-          lat: m.home.latitude,
-          lng: m.home.longitude,
-          name: m.employee.id,
-        });
-      }
-    let matrix: Awaited<ReturnType<typeof getDistanceMatrix>>;
-    try {
-      matrix = await getDistanceMatrix(locations, locations);
-    } catch {
-      // OSRM outage (table call) — swap in a great-circle matrix (25 km/h, the
-      // same estimate the matrix readers already use for missing legs) so the
-      // whole day stays mappable instead of killing every corridor route for
-      // it. Rounding/precision degrade; availability never does.
-      errors.push(
-        `${arrivalLabel}: OSRM distance matrix unavailable for ${officeKey}; approximate distances are being used.`
-      );
-      matrix = {
-        originAddresses: [],
-        destinationAddresses: [],
-        status: "OK",
-        rows: locations.map((from) => ({
-          elements: locations.map((to) => {
-            const km = haversineDistance(from.lat, from.lng, to.lat, to.lng);
-            const minutes = (km / 25) * 60;
-            return {
-              distance: {
-                value: Math.max(1, Math.round(km * 1000)),
-                text: `${km.toFixed(1)} km`,
-              },
-              duration: {
-                value: Math.max(1, Math.round(minutes * 60)),
-                text: `${Math.round(minutes)} min`,
-              },
-              status: "NoSegment",
-            };
-          }),
-        })),
-      };
-    }
-    const dMin = (from: number, to: number) =>
-      matrixDurationMin(matrix, locations, from, to);
-    const dKm = (from: number, to: number) =>
-      matrixDistanceKm(matrix, locations, from, to);
-
-    for (const m of members) m.toOfficeMin = dMin(m.matrixIndex, 0);
-    // Far-first ordering metric: road km from the distance matrix.
-    for (const m of members) m.toOfficeKm = dKm(m.matrixIndex, 0);
-
-    // Warm persisted polylines before the pure core asks for missing edges —
-    // ONE batched query instead of a DB round-trip per leg during the sweep.
-    // Seeded entries are byte-identical to per-leg lookups/OSRM results, so
-    // planning judgments are unchanged; only fetch latency is removed (re-runs
-    // and post-restart runs skip OSRM entirely).
-    const sweepLocations: Location[] = [
-      office,
-      ...members.map((m) => ({
-        lat: m.home.latitude,
-        lng: m.home.longitude,
-      })),
-    ];
-    const warmKeys: PolylineWarmKey[] = [];
-    for (const a of sweepLocations) {
-      for (const b of sweepLocations) {
-        if (a === b) continue;
-        warmKeys.push({
-          from: a,
-          to: b,
-          initialBearingDeg: bearingDegrees(a, b),
-        });
-      }
-    }
-    // Best-effort cache warm — a routing outage here must NOT block mapping.
-    // The iterative core adapter below still fetches any required cache misses.
-    try {
-      await warmPolylineCache(warmKeys);
-      // Self-hosted OSRM: fetch the remaining cold legs in parallel up front
-      // instead of one-by-one inside the sweep (no-op on the rate-limited
-      // public server, where requests must stay spaced out).
-      await prefetchRoutePolylines(warmKeys);
-    } catch {
-      // silent — precision/availability degrade per-leg, never globally
-    }
-
-    const planned = await planCorridorRoutesWithRoadIndex({
-      members,
-      pool,
-      allVehicles: corridorEligibleVehicles,
-      officeKey,
-      office,
-      arrivalLabel,
-      dMin,
-      dKm,
-    });
+    const { office, planned, templateByVehicle, existingPlanByVehicle, reuseById } = result;
+    errors.push(...result.errors);
     errors.push(...planned.errors);
-
-    // Prefetch every planned vehicle's learned template and existing plan
-    // for this day/shift in two queries (was: two lookups per route).
-    const plannedVehicleIds = planned.routes.map((r) => r.vehicle.id);
-    const [templateRows, existingPlanRows] = await Promise.all([
-      prisma.routeTemplate.findMany({
-        where: { arrivalTime: arrivalLabel, vehicleId: { in: plannedVehicleIds } },
-        select: {
-          vehicleId: true,
-          stops: {
-            orderBy: { seq: "asc" },
-            select: { employeeId: true, pickupTime: true },
-          },
-        },
-      }),
-      prisma.routePlan.findMany({
-        where: { dayDate, arrivalTime: arrivalLabel, vehicleId: { in: plannedVehicleIds } },
-        select: { id: true, status: true, vehicleId: true },
-      }),
-    ]);
-    const templateByVehicle = new Map(templateRows.map((t) => [t.vehicleId, t]));
-    const existingPlanByVehicle = new Map(existingPlanRows.map((p) => [p.vehicleId, p]));
 
     for (let planIdx = 0; planIdx < planned.routes.length; planIdx++) {
       try {
@@ -1050,12 +1188,6 @@ async function generateCorridorRoutes(
           }): ${errorMessage(error)}`
         );
       }
-    }
-    } catch (officeError) {
-      errors.push(
-        `${arrivalLabel}: ${officeKey} office failed to map (${errorMessage(officeError)})`
-      );
-      continue;
     }
   }
 

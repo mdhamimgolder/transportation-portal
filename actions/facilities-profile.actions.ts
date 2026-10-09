@@ -101,7 +101,7 @@ export async function setPickupPointCoordinatesAction(
   _prevState: PickupPointCoordinatesState,
   formData: FormData
 ): Promise<PickupPointCoordinatesState> {
-  await requireRole([Role.FACILITIES]);
+  await requireRole([Role.FACILITIES, Role.SUPER_ADMIN]);
   const pickupPoint = requiredField(formData, "pickupPoint");
   const latitude = Number(formData.get("latitude"));
   const longitude = Number(formData.get("longitude"));
@@ -142,7 +142,7 @@ export async function updateEmployeeProfileByFacilitiesAction(
   _prevState: UpdateEmployeeProfileState,
   formData: FormData
 ): Promise<UpdateEmployeeProfileState> {
-  await requireRole([Role.FACILITIES]);
+  await requireRole([Role.FACILITIES, Role.SUPER_ADMIN]);
 
   const userId = formData.get("userId");
   if (typeof userId !== "string" || !userId) {

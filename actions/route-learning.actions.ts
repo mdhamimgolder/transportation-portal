@@ -5,6 +5,7 @@ import { dhakaMinutesOfDay } from "@/lib/date/week";
 import { prisma } from "@/lib/prisma";
 import { requireRole } from "@/lib/rbac/guards";
 import { Role } from "@/lib/constants/enums";
+import { arrivalMinutesForLabel } from "@/lib/constants/route-shifts";
 import { LEARN_MIN_SAMPLES, invalidateLearnedLegs } from "@/lib/routing/pickup-schedule";
 import { legObservationsFromManualEntries } from "@/lib/routing/manual-plan-training";
 import {
@@ -56,22 +57,8 @@ function dateMinutes(d: Date | null | undefined): number | null {
   return dhakaMinutesOfDay(d);
 }
 
-/** Map a RoutePlan arrival label to its minutes-from-midnight. */
-function arrivalMinutesFromLabel(arrivalTime: string): number | null {
-  const normalized = (arrivalTime || "").toUpperCase().replace(/\s+/g, "");
-  const map: Record<string, number> = {
-    "10PM": 22 * 60,
-    "11PM": 23 * 60,
-    "12AM": 24 * 60,
-    "1AM": 25 * 60,
-    "2AM": 26 * 60,
-    "3AM": 27 * 60,
-    "4AM": 28 * 60,
-    "5AM": 29 * 60,
-    "6AM": 30 * 60,
-  };
-  return map[normalized] ?? null;
-}
+// Arrival-label → minutes lives in lib/constants/route-shifts.ts
+// (arrivalMinutesForLabel); do not add another copy here.
 
 function shiftKeyForLabel(label: string): string {
   const normalized = (label || "").toUpperCase().replace(/\s+/g, "");
@@ -192,7 +179,7 @@ export async function trainRoutePlannerFromHistory(): Promise<LearnFromHistoryRe
       const shiftKey = shiftKeyForLabel(plan.arrivalTime);
       const officeName = plan.officeLocation?.trim() || "Regnum";
       const officeKey = `office:${officeName}`;
-      const arrival = arrivalMinutesFromLabel(plan.arrivalTime);
+      const arrival = arrivalMinutesForLabel(plan.arrivalTime);
 
       // PRESET_10PM stores 20:00 as a placeholder, not an observed departure.
       // Learning this as a real leg would poison the office-to-first-stop data.

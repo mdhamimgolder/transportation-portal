@@ -12,6 +12,7 @@ import {
   DAY_LABELS,
 } from "@/lib/date/week";
 import { officeCoordinatesFor } from "@/lib/constants/office-locations";
+import { arrivalMinutesForLabel } from "@/lib/constants/route-shifts";
 import {
   generate10PMRoutes,
   generate11PMRoutes,
@@ -143,24 +144,8 @@ async function ensureFixedArrivalSchedules(
 
 const FIXED_ARRIVAL_CONCURRENCY = 5;
 
-/** Minutes-from-midnight reference for each arrival label (same day for 10/11
- * PM; late-night labels fall on the following calendar day, so 1440 + shift). */
-const ARRIVAL_REF_MINUTES: Record<string, number> = {
-  "10PM": 22 * 60,
-  "11PM": 23 * 60,
-  "12AM": 24 * 60,
-  "1AM": 25 * 60,
-  "2AM": 26 * 60,
-  "3AM": 27 * 60,
-  "4AM": 28 * 60,
-  "5AM": 29 * 60,
-  "6AM": 30 * 60,
-};
-
-function arrivalRefMinutes(label: string | null | undefined): number | null {
-  const norm = (label ?? "").toUpperCase().replace(/\s+/g, "");
-  return ARRIVAL_REF_MINUTES[norm] ?? null;
-}
+// Arrival-label → minutes lives in lib/constants/route-shifts.ts
+// (arrivalMinutesForLabel); do not add another copy here.
 
 function hhmmToMinutes(time: string | null | undefined): number | null {
   if (!time) return null;
@@ -581,7 +566,7 @@ function mapPlanToDetail(plan: PlanDetailRow): GeneratedRouteDetail {
   const office = officeCoordinatesFor(
     plan.officeLocation ?? plan.vehicle.officeLocation,
   );
-  const arrivalRef = arrivalRefMinutes(plan.arrivalTime);
+  const arrivalRef = arrivalMinutesForLabel(plan.arrivalTime);
   const tripMinutes = plan.tripAssignments.map((t) =>
     t.pickupTime ? hhmmToMinutes(t.pickupTime) : null,
   );

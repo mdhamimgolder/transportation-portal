@@ -1,6 +1,6 @@
 import "server-only";
 import { prisma } from "@/lib/prisma";
-import { formatShortDate } from "@/lib/date/week";
+import { formatShortDate, toUtcMidnight } from "@/lib/date/week";
 import { MAX_UNFILTERED_ROWS } from "@/lib/constants/limits";
 import { getUserNamesByIds } from "@/lib/queries/user-names";
 
@@ -39,8 +39,13 @@ export async function getAllocationHistory(
   // pulling the whole, potentially years-long, assignment history.
   if (type !== "weekly" && type !== "adhoc") return [];
 
-  const fromDate = from ? new Date(`${from}T00:00:00`) : null;
-  const toDate = to ? new Date(`${to}T23:59:59.999`) : null;
+  // Day keys are stored at UTC midnight: the lower bound is the UTC start of
+  // `from`, the upper bound the end of the UTC day for `to`, so the filter
+  // never depends on the server's timezone.
+  const fromDate = from ? toUtcMidnight(new Date(`${from}T00:00:00`)) : null;
+  const toDate = to
+    ? new Date(toUtcMidnight(new Date(`${to}T00:00:00`)).getTime() + 24 * 60 * 60 * 1000 - 1)
+    : null;
   const dateFilter =
     fromDate || toDate
       ? { ...(fromDate ? { gte: fromDate } : {}), ...(toDate ? { lte: toDate } : {}) }

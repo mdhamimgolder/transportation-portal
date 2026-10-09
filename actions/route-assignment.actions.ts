@@ -6,7 +6,7 @@ import { requireRole } from "@/lib/rbac/guards";
 import { sendMail } from "@/lib/mailer";
 import { trySendMail } from "@/lib/mailer";
 import { transportArrangedEmail } from "@/lib/email-templates";
-import { sanitizedActionError } from "@/lib/actions/action-error";
+import { sanitizedActionError, logActionError } from "@/lib/actions/action-error";
 import { Role, AdHocStatus, WeeklyScheduleStatus } from "@/lib/constants/enums";
 import type { SessionUser } from "@/lib/auth/session";
 
@@ -128,7 +128,7 @@ export async function assignRoute(
   _prevState: AssignRouteState,
   formData: FormData
 ): Promise<AssignRouteState> {
-  const session = await requireRole([Role.FACILITIES]);
+  const session = await requireRole([Role.FACILITIES, Role.SUPER_ADMIN]);
 
   const weeklyScheduleDayId = formData.get("weeklyScheduleDayId");
   const adHocRequestId = formData.get("adHocRequestId");
@@ -180,9 +180,7 @@ export async function assignRoute(
       return { error: "Missing assignment target." };
     }
   } catch (error) {
-    return {
-      error: error instanceof Error ? error.message : "Something went wrong.",
-    };
+    return sanitizedActionError("assignRoute", error);
   }
 
   return { success: true };
@@ -260,6 +258,10 @@ export async function resendRouteAssignmentEmail(
 
     revalidatePath("/facilities/route-planning");
     revalidatePath("/facilities/email-log");
+    // Safe to return verbatim: trySendMail never surfaces raw driver/DB
+    // errors — it returns the fixed generic "The email could not be sent."
+    // (see lib/mailer.ts). If that contract ever changes, hard-code the
+    // generic here instead.
     return { status: outcome.status, error: outcome.error };
   } catch (error) {
     return sanitizedActionError("resendRouteAssignmentEmail", error);
@@ -295,7 +297,7 @@ export async function runAutomatedRoutePlanner(
 ): Promise<AutomatedPlannerState> {
   void previousState;
   void formData;
-  const session = await requireRole([Role.FACILITIES]);
+  const session = await requireRole([Role.FACILITIES, Role.SUPER_ADMIN]);
   const schedules = await prisma.weeklySchedule.findMany({
     where: { status: WeeklyScheduleStatus.APPROVED },
     orderBy: { weekStartDate: "desc" },
@@ -403,7 +405,7 @@ export async function saveDaySheetAssignments(
   _prevState: SaveDaySheetState,
   formData: FormData
 ): Promise<SaveDaySheetState> {
-  const session = await requireRole([Role.FACILITIES]);
+  const session = await requireRole([Role.FACILITIES, Role.SUPER_ADMIN]);
 
   const dayIds = formData.getAll("weeklyScheduleDayId").map(String);
   const employeeNames = formData.getAll("employeeName").map(String);
@@ -454,9 +456,10 @@ export async function saveDaySheetAssignments(
       });
       savedCount++;
     } catch (error) {
+      logActionError("saveDaySheetAssignments", error);
       skipped.push({
         employeeName,
-        reason: error instanceof Error ? error.message : "Failed to save.",
+        reason: "Could not save this row.",
       });
     }
   }
@@ -466,7 +469,7 @@ export async function saveDaySheetAssignments(
 }
 
 export async function replicateAcrossWeek(formData: FormData): Promise<void> {
-  const session = await requireRole([Role.FACILITIES]);
+  const session = await requireRole([Role.FACILITIES, Role.SUPER_ADMIN]);
   const sourceDayId = formData.get("sourceDayId");
   if (typeof sourceDayId !== "string" || !sourceDayId) return;
 
@@ -497,7 +500,7 @@ export async function replicateAcrossWeek(formData: FormData): Promise<void> {
 }
 
 export async function copyLastWeekRoutes(formData: FormData): Promise<void> {
-  const session = await requireRole([Role.FACILITIES]);
+  const session = await requireRole([Role.FACILITIES, Role.SUPER_ADMIN]);
   const weeklyScheduleId = formData.get("weeklyScheduleId");
   if (typeof weeklyScheduleId !== "string" || !weeklyScheduleId) return;
 

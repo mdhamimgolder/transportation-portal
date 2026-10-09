@@ -2413,3 +2413,27 @@ item (not add a 4th).
    - Items 2â€“3 unchanged (ad-hoc awaiting placement; active vehicles & drivers).
    - Weather glass / layout V5 untouched.
 3. tsc + eslint clean (both files). No schema change. Awaiting user visual review.
+
+
+## 2026-10-09 — SYSTEM_AUDIT P0 fixes (4 items, all verified)
+- Fix 1 raw-error leaks (route-assignment.actions.ts): assignRoute catch -> sanitizedActionError('assignRoute', error); saveDaySheetAssignments per-row catch -> logActionError server-side + fixed 'Could not save this row.'; resend contract pinned with comment (trySendMail returns fixed generic, lib/mailer.ts:128).
+- Fix 2 arrival-minutes consolidation on arrivalMinutesForLabel (lib/constants/route-shifts.ts): deleted 23*60-fallback twin arrivalMinutesFromLabel from corridor-core.ts; algorithms.ts imports canonical + null-guard returns shift error instead of silently planning as 11PM; removed ARRIVAL_REF_MINUTES/arrivalRefMinutes (route-generation.actions.ts:584) and local twin (route-learning.actions.ts:195). No code refs to old names remain.
+- Fix 3 UTC-midnight writes: on-behalf.actions.ts ad-hoc date wrapped in toUtcMidnight (eligibility check unaffected — same local calendar day); allocation-history.ts from=UTC-midnight, to=end-of-UTC-day.
+- Fix 4 role unification to [FACILITIES, SUPER_ADMIN]: route-assignment 5 sites, facilities-profile 2 sites, facilities/layout, plus facilities/user-info page (same drift class, not in audit list). proxy.ts comment already described this end-state. Zero [FACILITIES]-only gates left in code.
+- Verify: npx tsc --noEmit clean, eslint clean (10 files), npm test 28/28 pass. Remaining audit P0 not in scope: osrm.ts:370 nullable type, pickup-schedule.ts:508-509 guard.
+
+
+
+## 2026-10-09 — Audit P1: bulk CSV loops refactored (verified: tsc + eslint clean, 28/28 tests pass)
+- weekly-schedule bulkUpload: validation loop now collects validRows (in-file dupes tracked via seenEmployeeIds, same messages); writes are createMany schedules + re-read IDs + createMany days (3 statements for whole file, was ~6N). Mail already in after(). Race P2002 behavior unchanged (hard error, as today).
+- manual-route-plan import: rows partitioned into creates/updates via touchedKeys (same stored/updated accounting); creates go through one createMany, updates through mapWithConcurrency(8) individual updates. P2002 race falls back to per-row upserts (old last-wins outcome).
+- user-management bulkCreate: 4 phases — (1) sequential validate/collect with codeClaims map (code double-claims now deterministic skips, incl. update-vs-update which previously threw mid-loop with partial writes); (2) addresses: one findMany for plain texts + bounded upserts for coord texts (last-coords-wins = old serial final state); (3) bcrypt under mapWithConcurrency(4); (4) updates via mapWithConcurrency(8), creates via one createMany with per-row P2002 fallback preserving exact skip messages. Credential mail already in after(); single-row resendCredentialsAction untouched (must return real send result).
+
+
+
+## 2026-10-09 — Audit P1: cold route generation concurrency (verified: tsc + eslint clean, 28/28 tests pass)
+- Home resolution (lib/routing/algorithms.ts): one findMany preloads all free-text home addresses for the shift; per-member resolveHomeAddress consults the map before geocoding (hits link homeAddressId best-effort); members resolve under mapWithConcurrency(5), order-preserving so plans are identical. Semantics unchanged (pickup fast-path still dead in corridor path — query lacks pickupAddress include; flagged, not changed).
+- Offices now run under mapWithConcurrency(2): fetch-heavy front half extracted to fetchOfficeCorridor (pool, resolve, OSRM matrix, warm/prefetch, pure plan, template/existing prefetch); fetch errors + planned.errors merge back in office order (identical error sequence); route writes stay serial (fast, kind to Neon pool). Per-edge polyline sweep was already concurrent; warm-then-prefetch order kept (prefetch filters on warmed cache).
+- geocoder.ts: in-flight dedup map — concurrent same-term geocodeAddress calls share one throttled Nominatim request (failure behavior unchanged: warn, no cache, null). Only caller is resolveHomeAddress.
+- Behavior deltas to know: none in planning judgments; error ORDER across offices now deterministic by office iteration order (previously also serial order — same).
+

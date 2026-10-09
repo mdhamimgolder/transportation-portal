@@ -5,7 +5,7 @@ import { after } from "next/server";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { requireRole } from "@/lib/rbac/guards";
-import { getSubmissionWindow, getWeekDays, DAY_LABELS, formatShortDate } from "@/lib/date/week";
+import { getSubmissionWindow, getWeekDays, toUtcMidnight, DAY_LABELS, formatShortDate } from "@/lib/date/week";
 import { getTransportSettings } from "@/lib/queries/settings";
 import { NO_TRANSPORT_VALUE, ARRIVAL_TIME_OPTIONS } from "@/lib/constants/arrival-times";
 import { sendMailBackground } from "@/lib/mailer";
@@ -237,10 +237,13 @@ export async function createAdHocRequestOnBehalf(
     return { error: "Please select a valid arrival time." };
   }
 
-  const date = new Date(`${dateValue}T00:00:00`);
-  if (Number.isNaN(date.getTime())) {
+  const parsedDate = new Date(`${dateValue}T00:00:00`);
+  if (Number.isNaN(parsedDate.getTime())) {
     return { error: "Invalid date." };
   }
+  // Day keys are stored at UTC midnight so date lookups never depend on the
+  // server's timezone.
+  const date = toUtcMidnight(parsedDate);
 
   if (!isAdhocArrivalEligible(date, arrivalTime)) {
     return {

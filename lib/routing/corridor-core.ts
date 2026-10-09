@@ -305,27 +305,10 @@ export function legRoadKmFromIndex(
 // ---------------------------------------------------------------------------
 // Clock / label helpers (pure string + Date arithmetic — no wall-clock reads)
 // ---------------------------------------------------------------------------
-
-/**
- * Minutes-from-midnight when a vehicle must arrive at the office for a given
- * arrival label. Late-night labels (12 AM-6 AM) fall on the following calendar
- * day, so they are expressed as 1440 + shift minutes.
- */
-export function arrivalMinutesFromLabel(arrivalTime: string): number {
-  const normalized = (arrivalTime || "").toUpperCase().replace(/\s+/g, "");
-  const map: Record<string, number> = {
-    "10PM": 22 * 60,
-    "11PM": 23 * 60,
-    "12AM": 24 * 60,
-    "1AM": 25 * 60,
-    "2AM": 26 * 60,
-    "3AM": 27 * 60,
-    "4AM": 28 * 60,
-    "5AM": 29 * 60,
-    "6AM": 30 * 60,
-  };
-  return map[normalized] ?? 23 * 60;
-}
+// NOTE: arrival-label → minutes mapping lives in exactly one place:
+// `arrivalMinutesForLabel` in lib/constants/route-shifts.ts (null for unknown
+// labels — never a silent fallback). Import it from there; do not add another
+// copy here.
 
 /** Convert minutes-from-midnight into a Date anchored on `dayDate`. */
 export function dateForArrivalMinutes(dayDate: Date, minutes: number): Date {
