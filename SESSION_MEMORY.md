@@ -4,6 +4,11 @@ Read this at the start of every task so you can continue without re-exploring.
 **Always update it before the session ends** (append/rewrite the Latest Session
 block and bump Work State / Next Move). Do this EVERY session — it is how we
 work fast without interruption.
+## Latest Session (2026-10-13) — Remove device-clock dependency for ad-hoc Dhaka time
+**User request:** why does ad-hoc depend on device clock? It should sync Dhaka timezone from internet.
+**Root cause:** `AdHocRequestForm` filtered slots with `eligibleAdhocArrivalOptions(startOfToday(), new Date())` (device clock), on-behalf dialog used `new Date("…T00:00:00")` host-local parsing, and `resolveAdhocArrival` used host-local `setHours` — so a wrong device time/timezone skewed the 3-hour cutoff and shifted overnight slots.
+**Completed:** `resolveAdhocArrival` now uses explicit Dhaka wall-clock math (`dhakaDateTimeFromMinutes` + next-day shift, no `setHours`); new public `GET /api/time` returns server now + todayKey (server is NTP/internet-synced; `proxy.ts` matcher excludes it); new `useServerDhakaTime` hook syncs once then advances via monotonic `performance.now()` with 30s ticks, device-clock fallback flagged `unsynced`; both employee/corporate `AdHocRequestForm` and operations on-behalf dialog use it, with `parseDayKey` for date inputs; on-behalf server action parses via `parseDayKey`. Server Actions were already server-clock authoritative and remain the final enforcer.
+**Verified:** `npm run verify` passed (typecheck, ESLint, 38/38 tests incl. 2 new `adhoc-arrival-times` timezone tests, also green under TZ=UTC and America/Chicago).
 ## Latest Session (2026-10-05) — Restore Facilities Weekly Export URL
 **User request:** fix the Facilities Weekly Export link's 404.
 **Completed:** added `app/facilities/weekly-export/page.tsx` as a compatibility
@@ -2415,31 +2420,31 @@ item (not add a 4th).
 3. tsc + eslint clean (both files). No schema change. Awaiting user visual review.
 
 
-## 2026-10-09 � SYSTEM_AUDIT P0 fixes (4 items, all verified)
+## 2026-10-09 � SYSTEM_AUDIT P0 fixes (4 items, all verified)
 - Fix 1 raw-error leaks (route-assignment.actions.ts): assignRoute catch -> sanitizedActionError('assignRoute', error); saveDaySheetAssignments per-row catch -> logActionError server-side + fixed 'Could not save this row.'; resend contract pinned with comment (trySendMail returns fixed generic, lib/mailer.ts:128).
 - Fix 2 arrival-minutes consolidation on arrivalMinutesForLabel (lib/constants/route-shifts.ts): deleted 23*60-fallback twin arrivalMinutesFromLabel from corridor-core.ts; algorithms.ts imports canonical + null-guard returns shift error instead of silently planning as 11PM; removed ARRIVAL_REF_MINUTES/arrivalRefMinutes (route-generation.actions.ts:584) and local twin (route-learning.actions.ts:195). No code refs to old names remain.
-- Fix 3 UTC-midnight writes: on-behalf.actions.ts ad-hoc date wrapped in toUtcMidnight (eligibility check unaffected � same local calendar day); allocation-history.ts from=UTC-midnight, to=end-of-UTC-day.
+- Fix 3 UTC-midnight writes: on-behalf.actions.ts ad-hoc date wrapped in toUtcMidnight (eligibility check unaffected � same local calendar day); allocation-history.ts from=UTC-midnight, to=end-of-UTC-day.
 - Fix 4 role unification to [FACILITIES, SUPER_ADMIN]: route-assignment 5 sites, facilities-profile 2 sites, facilities/layout, plus facilities/user-info page (same drift class, not in audit list). proxy.ts comment already described this end-state. Zero [FACILITIES]-only gates left in code.
 - Verify: npx tsc --noEmit clean, eslint clean (10 files), npm test 28/28 pass. Remaining audit P0 not in scope: osrm.ts:370 nullable type, pickup-schedule.ts:508-509 guard.
 
 
 
-## 2026-10-09 � Audit P1: bulk CSV loops refactored (verified: tsc + eslint clean, 28/28 tests pass)
+## 2026-10-09 � Audit P1: bulk CSV loops refactored (verified: tsc + eslint clean, 28/28 tests pass)
 - weekly-schedule bulkUpload: validation loop now collects validRows (in-file dupes tracked via seenEmployeeIds, same messages); writes are createMany schedules + re-read IDs + createMany days (3 statements for whole file, was ~6N). Mail already in after(). Race P2002 behavior unchanged (hard error, as today).
 - manual-route-plan import: rows partitioned into creates/updates via touchedKeys (same stored/updated accounting); creates go through one createMany, updates through mapWithConcurrency(8) individual updates. P2002 race falls back to per-row upserts (old last-wins outcome).
-- user-management bulkCreate: 4 phases � (1) sequential validate/collect with codeClaims map (code double-claims now deterministic skips, incl. update-vs-update which previously threw mid-loop with partial writes); (2) addresses: one findMany for plain texts + bounded upserts for coord texts (last-coords-wins = old serial final state); (3) bcrypt under mapWithConcurrency(4); (4) updates via mapWithConcurrency(8), creates via one createMany with per-row P2002 fallback preserving exact skip messages. Credential mail already in after(); single-row resendCredentialsAction untouched (must return real send result).
+- user-management bulkCreate: 4 phases � (1) sequential validate/collect with codeClaims map (code double-claims now deterministic skips, incl. update-vs-update which previously threw mid-loop with partial writes); (2) addresses: one findMany for plain texts + bounded upserts for coord texts (last-coords-wins = old serial final state); (3) bcrypt under mapWithConcurrency(4); (4) updates via mapWithConcurrency(8), creates via one createMany with per-row P2002 fallback preserving exact skip messages. Credential mail already in after(); single-row resendCredentialsAction untouched (must return real send result).
 
 
 
-## 2026-10-09 � Audit P1: cold route generation concurrency (verified: tsc + eslint clean, 28/28 tests pass)
-- Home resolution (lib/routing/algorithms.ts): one findMany preloads all free-text home addresses for the shift; per-member resolveHomeAddress consults the map before geocoding (hits link homeAddressId best-effort); members resolve under mapWithConcurrency(5), order-preserving so plans are identical. Semantics unchanged (pickup fast-path still dead in corridor path � query lacks pickupAddress include; flagged, not changed).
+## 2026-10-09 � Audit P1: cold route generation concurrency (verified: tsc + eslint clean, 28/28 tests pass)
+- Home resolution (lib/routing/algorithms.ts): one findMany preloads all free-text home addresses for the shift; per-member resolveHomeAddress consults the map before geocoding (hits link homeAddressId best-effort); members resolve under mapWithConcurrency(5), order-preserving so plans are identical. Semantics unchanged (pickup fast-path still dead in corridor path � query lacks pickupAddress include; flagged, not changed).
 - Offices now run under mapWithConcurrency(2): fetch-heavy front half extracted to fetchOfficeCorridor (pool, resolve, OSRM matrix, warm/prefetch, pure plan, template/existing prefetch); fetch errors + planned.errors merge back in office order (identical error sequence); route writes stay serial (fast, kind to Neon pool). Per-edge polyline sweep was already concurrent; warm-then-prefetch order kept (prefetch filters on warmed cache).
-- geocoder.ts: in-flight dedup map � concurrent same-term geocodeAddress calls share one throttled Nominatim request (failure behavior unchanged: warn, no cache, null). Only caller is resolveHomeAddress.
-- Behavior deltas to know: none in planning judgments; error ORDER across offices now deterministic by office iteration order (previously also serial order � same).
+- geocoder.ts: in-flight dedup map � concurrent same-term geocodeAddress calls share one throttled Nominatim request (failure behavior unchanged: warn, no cache, null). Only caller is resolveHomeAddress.
+- Behavior deltas to know: none in planning judgments; error ORDER across offices now deterministic by office iteration order (previously also serial order � same).
 
 
 
-## 2026-10-09 � Loading spinner (user-supplied ring rig)
+## 2026-10-09 � Loading spinner (user-supplied ring rig)
 - New components/shared/loading-spinner.tsx (+ .module.css): user's 5-SVG rotate16 rig transcribed to JSX, frame scaled to ~190px; ring keyframes + #out2/#out3/#inner/#center1 rules appended to app/globals.css; reduced-motion disables all of it.
 - Neon strokes sit on a bg-ink disc so they read on the light paper theme; app/loading.tsx now centers the spinner (shell kept). Reusable via <LoadingSpinner label>. tsc clean, eslint clean, dev server 200s clean.
 
@@ -2451,4 +2456,31 @@ item (not add a 4th).
 
 
 - Loader restyle per user: white tile + black orbit rings, Commure knot centered (public/commure-logo.jpeg 227px square, inverted to black-on-white, cover + 1.7x zoom crop in 64px badge). Cyan satellites unchanged. Clean verify, server 200.
+
+
+## 2026-10-09 � Merged to main + Vercel production deploy
+- Fast-forward merged refactor/structure-hardening into main (main was far behind at 84df9a6; includes all audit P0/P1 + loader work) and pushed main -> Vercel production build triggered.
+- Verified live: /login chunk hashes changed post-deploy (old 05-c3ty/0fglod vs new 3cj9p54/444ye5), site 200. Orbit loader + audit fixes are on production.
+- Session restored to refactor/structure-hardening with prior stash popped (leftover tree: audit-report edits/deletions + 2 reference JPEGs, all pre-existing/unrelated).
+
+## Latest Session (2026-10-12) — Fix MDS week sync: canonical Dhaka-calendar weeks + Mon–Fri labels
+**User report:** Operations MDS current-week submission landed on the previous week (12 Oct submit synced to 4 Oct); week selector showed 11 Oct instead of 12–16 Oct Mon–Fri.
+**Root causes (all host-timezone dependence + one un-normalized writer):**
+1. `lib/date/week.ts` used host-local `getDay/setHours/getDate` while DB keys are UTC midnight — on any non-Dhaka host (prod/Vercel = UTC; this shell measured offset 420 = UTC-7) Mondays render as Sundays (11 Oct) and windows/keys shift.
+2. `createWeeklyScheduleOnBehalf` (the MDS path) stored raw `window.weekStartDate` (Dhaka-midnight = Sunday 18:00Z) instead of the canonical Monday key — invisible to RUN MAPPING/employee lookups, Sunday-labeled. (On-behalf normalization was already in the tree from the parallel session; kept.)
+3. `app/operations/my-schedule/page.tsx` queried with the non-normalized key (lookup miss → empty form confusion); weekly-requests filter/labels didn't tolerate legacy keys and rows showed a single Sunday date.
+**Fixed:**
+- `lib/date/week.ts` rewritten TZ-explicit (fixed +6, no DST): `startOfToday/getMondayOfWeek/toUtcMidnight` derive the Dhaka calendar arithmetically; `getMondayOfWeek` returns canonical UTC-midnight Monday; `getWeekDays` normalizes input first (legacy Sunday keys still yield Mon–Fri); `formatShortDate` uses UTC getters; `getSubmissionWindow` deadline = Dhaka wall time → UTC instant (same instants as before on Dhaka hosts). New exports: `normalizeWeekStart`, `parseDayKey` (strict yyyy-mm-dd → canonical key), `TIME_ZONE/MS_PER_DAY/MS_PER_WEEK`.
+- `actions/route-generation.actions.ts`: completed the in-flight `parseDayKey` migration (call sites + `Number.isNaN`, dropped orphan comment); `actions/route-setting.actions.ts` migration (same) was already in the tree — `parseDayKey` now exists so both compile.
+- `app/operations/weekly-requests/page.tsx`: filter normalized via `normalizeWeekStart`; option labels normalize (legacy keys label their true Mon–Fri week + correct this/next markers); row Week column now shows the full "12 Oct – 16 Oct" range from the normalized week.
+- My-schedule/employee/corporate dashboards need no edits — central helpers now return canonical keys (their exact-match lookups hit).
+**Data repair** (`scripts/maintenance/repair-week-date-sync.ts`, preview default, `--apply` executed): deleted the 1 orphaned legacy duplicate (employee@example.com Aug02-18Z row + 5 Dhaka-midnight day rows; zero route/trip assignments referenced it; canonical Aug03 row kept and is the one route plans use) and shifted 7 off-midnight `AdHocRequest.date` rows +6h to UTC midnight (same Dhaka dates). Verified post-repair: 0 off-midnight week keys / day rows / adhoc rows; weeks list fully canonical.
+**Tests:** new `lib/date/__tests__/week-sync.test.ts` (8 tests: Sunday-key healing, Mon–Fri 12–16 Oct range, deadline/roll-forward instants, parseDayKey validity) wired into `npm test`; passes under TZ=UTC, Asia/Dhaka, America/Chicago (plus default UTC-7 shell).
+**Verified:** `npx tsc --noEmit` clean; eslint clean on all touched files; `npm run test` 36/36. No schema/migration change → no restart needed (hot-reload only). NOT committed.
+
+**Follow-up (2026-10-12):** MDS weekly-requests table day cells now display "Off" instead of "Not Required" for days with no transport (`app/operations/weekly-requests/page.tsx` display string only; `NO_TRANSPORT_VALUE` constant, form dropdown options, and CSV export flow unchanged — export inherits "Off" via the same display value). Muted vs. bold cell styling is value-based so it still renders muted. tsc + eslint clean.
+
+**Follow-up (2026-10-12b):** per user ("all of the above"), every user-facing no-transport day label is now "Off": on-behalf/edit/my-schedule/corporate form dropdown options, Operations + Corporate My Schedule history cards, Facilities route-planning CSV export, employee week-table expanded detail ("No transport" → "Off"), and both schedule emails (text + HTML). Untouched on purpose: `NO_TRANSPORT_VALUE`, CSV parsing/template/accepted "Not Required" values, bulk-upload help text, "Not set"/"Not chosen yet" (different meaning). tsc + eslint clean.
+
+**Follow-up (2026-10-12c):** per user ("change text Off with Not Required"), reverted all of the above display labels to their original wording ("Not Required" / "No transport" / "Not required" in emails). Pre-existing "Off" strings in `weekly-schedule-table.tsx` (summary row, time chip, status pill) were never touched and remain. tsc + eslint clean.
 

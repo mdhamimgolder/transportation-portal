@@ -12,6 +12,8 @@ import { NO_TRANSPORT_VALUE, ARRIVAL_TIME_OPTIONS } from "@/lib/constants/arriva
 import {
   eligibleAdhocArrivalOptions,
 } from "@/lib/constants/adhoc-arrival-times";
+import { parseDayKey } from "@/lib/date/week";
+import { useServerDhakaTime } from "@/lib/time/use-server-dhaka-time";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -266,14 +268,17 @@ export function CreateAdHocOnBehalfDialog({
   const [adhocDate, setAdhocDate] = useState("");
   const [adhocTime, setAdhocTime] = useState("");
   const [adhocReason, setAdhocReason] = useState("");
+  // Server-synced clock for the 3-hour cutoff — never the device clock.
+  const { now: serverNow } = useServerDhakaTime();
+  const serverNowMs = serverNow?.getTime();
 
-  const adhocArrivalOptions = useMemo(
-    () =>
-      adhocDate
-        ? eligibleAdhocArrivalOptions(new Date(`${adhocDate}T00:00:00`))
-        : [],
-    [adhocDate]
-  );
+  const adhocArrivalOptions = useMemo(() => {
+    if (!adhocDate) return [];
+    const base = parseDayKey(adhocDate);
+    if (Number.isNaN(base.getTime())) return [];
+    const now = serverNowMs != null ? new Date(serverNowMs) : new Date();
+    return eligibleAdhocArrivalOptions(base, now);
+  }, [adhocDate, serverNowMs]);
 
   const [adhocState, adhocAction] = useActionState(
     createAdHocRequestOnBehalf,
@@ -327,9 +332,12 @@ export function CreateAdHocOnBehalfDialog({
                 const next = e.target.value;
                 setAdhocDate(next);
                 if (adhocTime && next) {
-                  const nextOptions = eligibleAdhocArrivalOptions(
-                    new Date(`${next}T00:00:00`)
-                  );
+                  const base = parseDayKey(next);
+                  const now =
+                    serverNowMs != null ? new Date(serverNowMs) : new Date();
+                  const nextOptions = Number.isNaN(base.getTime())
+                    ? []
+                    : eligibleAdhocArrivalOptions(base, now);
                   if (
                     nextOptions.length === 0 ||
                     !nextOptions.some((option) => option.value === adhocTime)

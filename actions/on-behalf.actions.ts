@@ -5,7 +5,7 @@ import { after } from "next/server";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { requireRole } from "@/lib/rbac/guards";
-import { getSubmissionWindow, getWeekDays, toUtcMidnight, DAY_LABELS, formatShortDate } from "@/lib/date/week";
+import { getSubmissionWindow, getWeekDays, toUtcMidnight, parseDayKey, DAY_LABELS, formatShortDate } from "@/lib/date/week";
 import { getTransportSettings } from "@/lib/queries/settings";
 import { NO_TRANSPORT_VALUE, ARRIVAL_TIME_OPTIONS } from "@/lib/constants/arrival-times";
 import { sendMailBackground } from "@/lib/mailer";
@@ -106,7 +106,10 @@ export async function createWeeklyScheduleOnBehalf(
     settings.weeklyLockHour,
     settings.weeklyLockMinute
   );
-  const weekDates = getWeekDays(window.weekStartDate);
+  // Canonical UTC-midnight Monday of the open window's Dhaka calendar week — the
+  // exact key RUN MAPPING and every schedule lookup uses.
+  const weekStartDate = toUtcMidnight(window.weekStartDate);
+  const weekDates = getWeekDays(weekStartDate);
 
   const dayValues: string[] = [];
   for (let i = 0; i < 5; i++) {
@@ -121,7 +124,7 @@ export async function createWeeklyScheduleOnBehalf(
     where: {
       employeeId_weekStartDate: {
         employeeId: employee.id,
-        weekStartDate: window.weekStartDate,
+        weekStartDate,
       },
     },
   });
@@ -130,7 +133,7 @@ export async function createWeeklyScheduleOnBehalf(
     ? existing.id
     : (
         await prisma.weeklySchedule.create({
-          data: { employeeId: employee.id, weekStartDate: window.weekStartDate },
+          data: { employeeId: employee.id, weekStartDate },
         })
       ).id;
 
@@ -188,17 +191,17 @@ export async function createWeeklyScheduleOnBehalf(
     after: {
       employeeId: employee.id,
       status: WeeklyScheduleStatus.APPROVED,
-      weekStartDate: window.weekStartDate,
+      weekStartDate,
       days: submittedDays,
     },
-    description: `${session.fullName} created a weekly schedule on behalf of ${employee.fullName} for the week of ${window.weekStartDate.toDateString()}.`,
+    description: `${session.fullName} created a weekly schedule on behalf of ${employee.fullName} for the week of ${weekStartDate.toDateString()}.`,
   });
 
   // sendScheduleSubmittedNotice schedules its own after() — no extra layer.
   sendScheduleSubmittedNotice({
     to: employee.email,
     fullName: employee.fullName,
-    weekStartDate: window.weekStartDate,
+    weekStartDate,
     days: submittedDays,
   });
 
@@ -237,7 +240,10 @@ export async function createAdHocRequestOnBehalf(
     return { error: "Please select a valid arrival time." };
   }
 
-  const parsedDate = new Date(`${dateValue}T00:00:00`);
+  // parseDayKey treats "yyyy-mm-dd" as a Dhaka calendar date (canonical UTC
+  // midnight key) — unlike `new Date("…T00:00:00")`, which parses host-local
+  // and shifts the day on non-Dhaka servers.
+  const parsedDate = parseDayKey(dateValue);
   if (Number.isNaN(parsedDate.getTime())) {
     return { error: "Invalid date." };
   }
