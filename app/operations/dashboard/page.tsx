@@ -93,8 +93,8 @@ export default async function OperationsDashboardPage() {
             },
             {
               value: activeAdhoc,
-              label: "Ad-hoc transport requests",
-              action: "Review",
+              label: "Ad-hoc requests monitored",
+              action: "View",
               href: "/operations/adhoc",
               icon: Zap,
               urgent: activeAdhoc > 0,

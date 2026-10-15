@@ -4,6 +4,20 @@ Read this at the start of every task so you can continue without re-exploring.
 **Always update it before the session ends** (append/rewrite the Latest Session
 block and bump Work State / Next Move). Do this EVERY session — it is how we
 work fast without interruption.
+## Latest Session (2026-10-15) — Direct-to-Facilities flows + Operations monitoring UI
+**User request:** (1) corporate weekly submit skips Operations approval → straight to Facilities; MDS employee ad-hoc submit needs no Operations approval; (2) Operations "Ad-hoc Transport" becomes "Adhoc Monitoring" — drop Status/Action columns, add driver name / contact number / pick-up time columns reflecting Facilities updates; rename on-behalf entry to "Place an Ad-hoc request"; (3) MDS Weekly Schedule — delete Export CSV + Approve selected buttons, rename on-behalf entry to "Place a single request", move Upload CSV into the old approve-selected spot.
+**Completed:**
+- `submitCorporateWeeklySchedule` now saves APPROVED (reviewedBy=self), allows re-submit while window open (removed approved-lock error), revalidates `/facilities/route-planning`; corporate my-schedule page no longer locks on APPROVED; success dialog says "submitted to Facilities for route planning".
+- `submitAdHocRequest` (EMPLOYEE + CORPORATE_EMPLOYEE) now creates APPROVED (reviewedBy=self) — visible to Facilities immediately and to Operations monitoring; Facilities adhoc query already includes APPROVED so no change needed there.
+- Operations adhoc page → "Adhoc Monitoring" (sidebar label too): rewritten `AdHocTable` with no checkboxes/bulk-approve/Status/Action — columns Employee, Date, Arrival, Reason, Driver name, Contact number, Pick-up time sourced from `routeAssignment.vehicleDriver`; reads fresh each load so Facilities updates reflect automatically. On-behalf trigger/title → "Place an Ad-hoc request" / "Place an ad-hoc request".
+- MDS Weekly Schedule page: removed Export CSV button + export rows; `WeeklyRequestsTable` no longer has bulk-approve form/checkboxes/Approve selected — header now holds Upload CSV + "Place a single request"; per-row Edit/Reject + Status kept. Shared dialog submit button now takes a label ("Place request").
+- Operations dashboard ad-hoc attention item relabeled to monitoring ("Ad-hoc requests monitored", action "View").
+- Server-side `approveSchedules` / `approveAdHocRequests` / `AdHocApprovalActions` left in place (unused by Operations UI now, still exported for compat).
+**Verified:** `npx tsc --noEmit` clean, ESLint clean on all 12 touched files, `npm run test` 38/38.
+## Latest Session (2026-10-13) — Rename Corporate / Fixed-Arrival role labels
+**User request:** rename "Operation-Corporate employee" to "Employee-Corporate" and "Fixed Arrival Employee" to "Employee-Corporate(Fixed arrival)".
+**Completed:** updated `ROLE_LABELS` in `lib/constants/enums.ts` (single source for all role dropdowns/sidebar titles; internal role codes, routes, and CSV role codes unchanged) plus the two user-facing strings in `actions/user-management.actions.ts` (Facilities-manageable-roles error, CSV help text). No other UI hardcodes the old labels (remaining hits are historical log lines only).
+**Verified:** `npx tsc --noEmit` + ESLint on touched files clean.
 ## Latest Session (2026-10-13) — Remove device-clock dependency for ad-hoc Dhaka time
 **User request:** why does ad-hoc depend on device clock? It should sync Dhaka timezone from internet.
 **Root cause:** `AdHocRequestForm` filtered slots with `eligibleAdhocArrivalOptions(startOfToday(), new Date())` (device clock), on-behalf dialog used `new Date("…T00:00:00")` host-local parsing, and `resolveAdhocArrival` used host-local `setHours` — so a wrong device time/timezone skewed the 3-hour cutoff and shifted overnight slots.

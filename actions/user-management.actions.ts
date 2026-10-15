@@ -78,7 +78,7 @@ function canManageRole(actorRole: Role, targetRole: string): boolean {
 }
 
 const STAFF_ACCOUNT_ERROR =
-  "Facilities can only manage employee accounts (Employee, Corporate Employee, Fixed Arrival).";
+  "Facilities can only manage employee accounts (Employee-MDS, Employee-Corporate, Employee-Corporate(Fixed arrival)).";
 
 /** True for Prisma unique-constraint violations (email / employeeCode races). */
 function isDuplicateKeyError(error: unknown): boolean {
@@ -315,7 +315,7 @@ export async function bulkCreateUsersAction(
   if (idx.fullName === -1 || idx.email === -1) {
     return {
       error:
-        "CSV must include at least a fullName and email column. role, employeeCode, department, contactNumber, address, pickupPoint, fixedArrivalTime, homeLatitude, homeLongitude, and password are all optional (blank = fill in later; fixedArrivalTime applies to Fixed Arrival Employee rows only).",
+        "CSV must include at least a fullName and email column. role, employeeCode, department, contactNumber, address, pickupPoint, fixedArrivalTime, homeLatitude, homeLongitude, and password are all optional (blank = fill in later; fixedArrivalTime applies to Employee-Corporate(Fixed arrival) rows only).",
     };
   }
 

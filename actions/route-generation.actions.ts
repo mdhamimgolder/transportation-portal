@@ -8,7 +8,7 @@ import { Role, WeeklyScheduleStatus } from "@/lib/constants/enums";
 import {
   getMondayOfWeek,
   getWeekDays,
-  toUtcMidnight,
+  parseDayKey,
   DAY_LABELS,
 } from "@/lib/date/week";
 import { officeCoordinatesFor } from "@/lib/constants/office-locations";
@@ -55,16 +55,10 @@ export interface GenerateRoutesResult {
   dayOfWeek?: number;
 }
 
-/** Parse a "yyyy-mm-dd" string as a LOCAL date (avoids UTC shift-off-by-one). */
-function parseDayString(value: string): Date {
-  const [year, month, day] = value.split("-").map(Number);
-  return new Date(year, month - 1, day);
-}
-
 /** Normalize a local-midnight Date to UTC midnight. Timestamps are stored in
  * UTC (`weekStartDate`, `weeklyScheduleDay.date`), so week-boundary lookups
  * must compare against UTC-midnight values regardless of the server's timezone.
- * (Shared implementation: lib/date/week.ts.) */
+ * (Shared implementation: lib/date/week.ts `parseDayKey` / `getMondayOfWeek`.) */
 
 /**
  * Fixed-arrival employees (role FIXED_ARRIVAL) do not submit weekly
@@ -276,12 +270,12 @@ export async function generateWeeklyRoutes(
   await requireRole([Role.FACILITIES, Role.SUPER_ADMIN]);
 
   try {
-    const parsed = parseDayString(weekStartDateStr);
-    if (isNaN(parsed.getTime())) {
+    const parsed = parseDayKey(weekStartDateStr);
+    if (Number.isNaN(parsed.getTime())) {
       throw new Error("Invalid week start date format");
     }
 
-    const weekStartDate = toUtcMidnight(getMondayOfWeek(parsed));
+    const weekStartDate = getMondayOfWeek(parsed);
 
     const { summary, details, learning } = await runRouteGeneration(
       weekStartDate,
@@ -341,15 +335,15 @@ export async function generateDayRoutes(
   await requireRole([Role.FACILITIES, Role.SUPER_ADMIN]);
 
   try {
-    const parsed = parseDayString(weekStartDateStr);
-    if (isNaN(parsed.getTime())) {
+    const parsed = parseDayKey(weekStartDateStr);
+    if (Number.isNaN(parsed.getTime())) {
       throw new Error("Invalid week start date format");
     }
     if (!Number.isInteger(dayIndex) || dayIndex < 0 || dayIndex > 4) {
       throw new Error("Invalid day selected — pick a weekday (Mon-Fri)");
     }
 
-    const weekStartDate = toUtcMidnight(getMondayOfWeek(parsed));
+    const weekStartDate = getMondayOfWeek(parsed);
 
     const { summary, details, learning } = await runRouteGeneration(
       weekStartDate,
@@ -421,9 +415,7 @@ export async function getWeekRouteOverview(
   await requireRole([Role.FACILITIES, Role.SUPER_ADMIN]);
 
   try {
-    const weekStartDate = toUtcMidnight(
-      getMondayOfWeek(parseDayString(weekStartDateStr)),
-    );
+    const weekStartDate = getMondayOfWeek(parseDayKey(weekStartDateStr));
     const days = getWeekDays(weekStartDate);
 
     const [approvedDays, routes] = await Promise.all([
@@ -694,9 +686,7 @@ export async function getGeneratedRouteDetails(
   await requireRole([Role.FACILITIES, Role.SUPER_ADMIN]);
 
   try {
-    const weekStartDate = toUtcMidnight(
-      getMondayOfWeek(parseDayString(weekStartDateStr)),
-    );
+    const weekStartDate = getMondayOfWeek(parseDayKey(weekStartDateStr));
 
     const plans = await prisma.routePlan.findMany({
       where: { weekStartDate },

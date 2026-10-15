@@ -15,7 +15,7 @@ export default async function OperationsLayout({
       label: "MDS Weekly Schedule",
       icon: "weekly-requests",
     },
-    { href: "/operations/adhoc", label: "Ad-hoc Transport", icon: "adhoc" },
+    { href: "/operations/adhoc", label: "Adhoc Monitoring", icon: "adhoc" },
     {
       href: "/operations/allocation-history",
       label: "Allocation History",

@@ -47,8 +47,10 @@ export default async function MySchedulePage() {
       : NO_TRANSPORT_VALUE;
   });
 
-  const isLockedByApproval = existing?.status === "APPROVED";
-  const disabled = !window.isOpen || isLockedByApproval;
+  // No Operations review step for corporate schedules -- every submission is
+  // saved as already approved for Facilities, so the form stays editable
+  // until the window itself closes.
+  const disabled = !window.isOpen;
 
   const days = weekDates.map((date, i) => ({
     label: DAY_LABELS[i],
@@ -97,12 +99,6 @@ export default async function MySchedulePage() {
           The submission window for this week has closed.
         </p>
       )}
-
-      {isLockedByApproval ? (
-        <p className="text-sm text-muted-foreground">
-          This schedule has been approved and can no longer be changed.
-        </p>
-      ) : null}
 
       <CorporateWeeklyScheduleForm
         days={days}

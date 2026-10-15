@@ -1,23 +1,43 @@
 import { requireRole } from "@/lib/rbac/guards";
 import { Role } from "@/lib/constants/enums";
 import { prisma } from "@/lib/prisma";
-import { getUserNamesByIds } from "@/lib/queries/user-names";
 import { AdHocTable } from "@/components/operations/adhoc-table";
 
 export default async function OperationsAdHocPage() {
   await requireRole([Role.OPERATIONS]);
 
+  // Monitoring only -- requests need no Operations approval. Facilities
+  // assignments (driver + pick-up time) are read here on every load, so
+  // anything Facilities saves is reflected automatically.
   const requests = await prisma.adHocRequest.findMany({
-    include: { employee: true, routeAssignment: true },
+    include: {
+      employee: true,
+      routeAssignment: { include: { vehicleDriver: true } },
+    },
     orderBy: { createdAt: "desc" },
     take: 500,
   });
 
-  const reviewerNames = await getUserNamesByIds(requests.map((r) => r.reviewedById));
   const rows = requests.map((request) => ({
-    ...request,
-    reviewerName: request.reviewedById
-      ? reviewerNames.get(request.reviewedById) ?? null
+    id: request.id,
+    date: request.date,
+    arrivalTime: request.arrivalTime,
+    reason: request.reason,
+    employee: {
+      fullName: request.employee.fullName,
+      employeeCode: request.employee.employeeCode,
+      email: request.employee.email,
+      contactNumber: request.employee.contactNumber,
+    },
+    routeAssignment: request.routeAssignment
+      ? {
+          pickupTime: request.routeAssignment.pickupTime,
+          vehicleDriver: {
+            driverName: request.routeAssignment.vehicleDriver.driverName,
+            contactNumber: request.routeAssignment.vehicleDriver.contactNumber,
+            vehicleNumber: request.routeAssignment.vehicleDriver.vehicleNumber,
+          },
+        }
       : null,
   }));
 
@@ -37,10 +57,10 @@ export default async function OperationsAdHocPage() {
   return (
     <div className="space-y-4">
       <div>
-        <h1 className="text-xl font-semibold">Ad-hoc Transport</h1>
+        <h1 className="text-xl font-semibold">Adhoc Monitoring</h1>
         <p className="text-sm text-muted-foreground">
-          Approve or decline single-day requests. Approved requests go to
-          Facilities for vehicle assignment.
+          Track every ad-hoc request and the driver Facilities assigned.
+          Assignments made by Facilities appear here automatically.
         </p>
       </div>
 

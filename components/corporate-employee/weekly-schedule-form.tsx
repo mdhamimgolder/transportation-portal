@@ -134,8 +134,8 @@ export function CorporateWeeklyScheduleForm({
             <DialogTitle>Schedule submitted</DialogTitle>
           </DialogHeader>
           <p className="text-sm text-muted-foreground">
-            Your weekly transport schedule has been submitted to Operation-Admin
-            for approval.
+            Your weekly transport schedule has been submitted to Facilities
+            for route planning.
           </p>
           <DialogFooter>
             <Button

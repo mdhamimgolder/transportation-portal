@@ -79,12 +79,17 @@ export async function submitAdHocRequest(
   }
 
   const cleanReason = typeof reason === "string" && reason.trim() ? reason.trim() : null;
+  // No Operations review step -- employee ad-hoc requests land as already
+  // approved so they reach Facilities (and Operations monitoring) directly.
   const created = await prisma.adHocRequest.create({
     data: {
       employeeId: session.id,
       date: today,
       arrivalTime,
       reason: cleanReason,
+      status: AdHocStatus.APPROVED,
+      reviewedById: session.id,
+      reviewedAt: new Date(),
     },
     select: { id: true, status: true },
   });
@@ -94,7 +99,7 @@ export async function submitAdHocRequest(
     entityType: "AdHocRequest",
     entityId: created.id,
     after: { date: today, arrivalTime, reason: cleanReason, status: created.status },
-    description: `${session.fullName} submitted an ad-hoc request for ${today.toDateString()} (arrival ${arrivalTime}).`,
+    description: `${session.fullName} submitted an ad-hoc request for ${today.toDateString()} (arrival ${arrivalTime}, auto-approved).`,
   });
 
   revalidatePath("/employee/adhoc");

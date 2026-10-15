@@ -142,11 +142,11 @@ function EmployeeInfoPanel({ selected }: { selected: OnBehalfEmployeeOption }) {
   );
 }
 
-function SubmitButton() {
+function SubmitButton({ label }: { label: string }) {
   const { pending } = useFormStatus();
   return (
     <Button type="submit" disabled={pending}>
-      {pending ? "Saving..." : "Create & approve"}
+      {pending ? "Saving..." : label}
     </Button>
   );
 }
@@ -190,12 +190,12 @@ export function CreateWeeklyOnBehalfDialog({
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
         <Button type="button" variant="outline">
-          Create on behalf of employee
+          Place a single request
         </Button>
       </DialogTrigger>
       <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-xl">
         <DialogHeader>
-          <DialogTitle>Create weekly schedule on behalf of an employee</DialogTitle>
+          <DialogTitle>Place a single weekly schedule</DialogTitle>
           <DialogDescription>
             For an employee who missed the submission window. This is saved as
             already approved -- it skips the normal review step.
@@ -241,14 +241,14 @@ export function CreateWeeklyOnBehalfDialog({
           ) : null}
           {weeklyState.success ? (
             <p className="text-sm text-green-foreground">
-              Weekly schedule created and approved for {weeklyState.employeeName}.
+              Weekly schedule placed for {weeklyState.employeeName}.
             </p>
           ) : null}
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => setOpen(false)}>
               Close
             </Button>
-            <SubmitButton />
+            <SubmitButton label="Place request" />
           </DialogFooter>
         </form>
       </DialogContent>
@@ -300,12 +300,12 @@ export function CreateAdHocOnBehalfDialog({
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
         <Button type="button" variant="outline">
-          Create on behalf of employee
+          Place an Ad-hoc request
         </Button>
       </DialogTrigger>
       <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle>Create ad-hoc request on behalf of an employee</DialogTitle>
+          <DialogTitle>Place an ad-hoc request</DialogTitle>
           <DialogDescription>
             For an employee who needs a same-day request logged for them. This
             is saved as already approved -- it goes straight to Facilities.
@@ -390,14 +390,14 @@ export function CreateAdHocOnBehalfDialog({
           ) : null}
           {adhocState.success ? (
             <p className="text-sm text-green-foreground">
-              Ad-hoc request created and approved for {adhocState.employeeName}.
+              Ad-hoc request placed for {adhocState.employeeName}.
             </p>
           ) : null}
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => setOpen(false)}>
               Close
             </Button>
-            <SubmitButton />
+            <SubmitButton label="Place request" />
           </DialogFooter>
         </form>
       </DialogContent>
