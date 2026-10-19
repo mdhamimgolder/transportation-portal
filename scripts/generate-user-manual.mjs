@@ -244,7 +244,7 @@ function build(doc, state, pages, record) {
     .font("Helvetica")
     .fontSize(9)
     .fillColor("#8FA3A8")
-    .text("Weekly + Ad-hoc transport  |  Deadline Saturday 12:00 PM (Asia/Dhaka)  |  October 2026", cx0, doc.y + 14, {
+    .text("Weekly + Ad-hoc transport  |  Deadline Saturday 12:00 AM (Asia/Dhaka)  |  October 2026", cx0, doc.y + 14, {
       width: cw,
       align: "center",
     });
@@ -307,7 +307,7 @@ function build(doc, state, pages, record) {
   bullets(doc, [
     "Employee-MDS (shift staff): your week is set for you by the Operation-Admin. You view it; you do not fill it in.",
     "Employee-Corporate: you submit your own arrival time per day before the deadline. It stays PENDING until the Operation-Admin approves it; only APPROVED weeks reach Facilities planning.",
-    "Deadline: Saturday 12:00 PM (Asia/Dhaka) for the coming Mon-Fri week. After that the week locks.",
+    "Deadline: Saturday 12:00 AM (Asia/Dhaka) for the coming Mon-Fri week. After that the week locks.",
     "After approval, Facilities assigns pickup time, driver, and vehicle. You get an automated email.",
   ]);
   h3(doc, "Ad-hoc transport (emergency, single day)");
@@ -325,7 +325,7 @@ function build(doc, state, pages, record) {
   noteCard(
     doc,
     "Deadline rule",
-    "Weekly schedules for next week (Mon-Fri) must be in by Saturday 12:00 PM Asia/Dhaka. After the deadline the form locks and shows a countdown to the next window.",
+    "Weekly schedules for next week (Mon-Fri) must be in by Saturday 12:00 AM Asia/Dhaka. After the deadline the form locks and shows a countdown to the next window.",
     AMBER,
   );
 
@@ -398,14 +398,14 @@ function build(doc, state, pages, record) {
   steps(doc, [
     "Open My Schedule and pick This week or Next week (Mon-Fri dates are shown).",
     "Per day choose an arrival time (whole hours, 10:00 PM through 6:00 AM) or No transport needed. Use Same time for all days to quick-fill, then fix exceptions.",
-    "Submit before Saturday 12:00 PM (Asia/Dhaka) for next week's week. A live countdown shows the remaining time; after the lock the form disables. Your schedule is saved as PENDING.",
+    "Submit before Saturday 12:00 AM (Asia/Dhaka) for next week's week. A live countdown shows the remaining time; after the lock the form disables. Your schedule is saved as PENDING.",
     "You may resubmit any time before the deadline; each resubmit returns the schedule to PENDING. Once APPROVED it locks and can no longer be changed.",
     "Wait for approval: the Operation-Admin approves in MDS Weekly Schedule, and only APPROVED weeks reach Facilities planning. A rejection returns with a reason; resubmit before the deadline.",
   ]);
   noteCard(
     doc,
     "Missed the deadline?",
-    "Corporate schedules still need Operation-Admin approval, and the Saturday 12:00 PM lock still applies. Missed the window? File an ad-hoc request for the days you need instead of waiting a week.",
+    "Corporate schedules still need Operation-Admin approval, and the Saturday 12:00 AM lock still applies. Missed the window? File an ad-hoc request for the days you need instead of waiting a week.",
     AMBER,
   );
 
@@ -468,14 +468,14 @@ function build(doc, state, pages, record) {
   noteCard(
     doc,
     "SLA tip",
-    "Clear the weekly queue before the Saturday 12:00 PM lock and keep ad-hoc oversight under 30 minutes in service hours. Rejections need a written reason; empty rejections create repeat tickets.",
+    "Clear the weekly queue before the Saturday 12:00 AM lock and keep ad-hoc oversight under 30 minutes in service hours. Rejections need a written reason; empty rejections create repeat tickets.",
   );
 
   // ---- 07 RULES ----
   h1(doc, state, SECTIONS[6], "The rules everyone asks about, plus fixes for common problems.", record);
   h2(doc, "Rules");
   bullets(doc, [
-    "Deadline: next week's Mon-Fri schedule locks Saturday 12:00 PM (Asia/Dhaka). Late weekly edits are rejected with a clear error. Use ad-hoc instead.",
+    "Deadline: next week's Mon-Fri schedule locks Saturday 12:00 AM (Asia/Dhaka). Late weekly edits are rejected with a clear error. Use ad-hoc instead.",
     "Weekly flow: set or submitted > Operations approves > Facilities plans > email. Rejected schedules return with remarks.",
     "Ad-hoc flow: visible to Operations and Facilities instantly. No approval. Facilities assigns > email. Minimum 3 hours notice; pickup point required for 10:00 PM.",
     "Profile changes: address edits apply immediately with a 30-day lock and notify Facilities and Operations.",

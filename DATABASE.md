@@ -81,7 +81,7 @@ Relationships:
 **Purpose:** Stores weekly transport requests (Mon–Fri only).
 
 **Business Rules:**
-- Deadline: **Saturday 12:00 PM Asia/Dhaka** (weekly submission cutoff)
+- Deadline: **Saturday 12:00 AM Asia/Dhaka** (weekly submission cutoff)
 - After deadline, API rejects new submissions for that week
 - Flow: submitted → Operations reviews → approved/rejected
 - If approved, visible to Facilities for route planning
@@ -271,7 +271,7 @@ Table: audit_logs
 │   Employee   │
 └──────┬───────┘
        │ Submits weekly schedule
-       │ (Mon–Fri, by Sat 12:00 PM)
+       │ (Mon–Fri, by Sat 12:00 AM)
        ▼
 ┌──────────────────────────────┐
 │  WeeklyRequest (submitted)   │
@@ -384,7 +384,7 @@ Table: audit_logs
 
 **Weekly Deadline Example:**
 ```python
-# Deadline: Saturday 12:00 PM Asia/Dhaka
+# Deadline: Saturday 12:00 AM Asia/Dhaka
 deadline_dhaka = datetime(2026, 8, 29, 12, 0, 0, tzinfo=dhaka_tz)
 deadline_utc = deadline_dhaka.astimezone(UTC)  # 2026-08-29 06:00:00 UTC
 

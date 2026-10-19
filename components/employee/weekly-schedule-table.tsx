@@ -93,7 +93,8 @@ export function WeeklyScheduleTable({
       )}
 
       {summary ? (
-        <table className="w-full table-fixed text-sm">
+        <div className="overflow-x-auto">
+          <table className="w-full table-fixed text-sm">
           <tbody>
             <tr className="border-b border-border/60">
               <th
@@ -134,8 +135,10 @@ export function WeeklyScheduleTable({
               })}
             </tr>
           </tbody>
-        </table>
+          </table>
+        </div>
       ) : (
+        <div className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
             <tr
@@ -168,6 +171,7 @@ export function WeeklyScheduleTable({
             })}
           </tbody>
         </table>
+        </div>
       )}
 
       {/* Quiet summary footer — the one place the data is condensed. */}

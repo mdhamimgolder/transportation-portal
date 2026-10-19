@@ -4,6 +4,7 @@ import {
   formatShortDate,
   getMondayOfWeek,
   getSubmissionWindow,
+  getSubmissionWindowForWeek,
   getWeekDays,
   normalizeWeekStart,
   parseDayKey,
@@ -88,17 +89,30 @@ test("parseDayKey parses calendar dates independent of host timezone", () => {
   assert.ok(Number.isNaN(parseDayKey("2026-13-01").getTime()));
 });
 
-test("submission window on Mon 12 Oct targets Mon 19 Oct with Sat 12:00 Dhaka deadline", () => {
+test("submission window on Mon 12 Oct targets Mon 19 Oct with Sat 12:00 AM Dhaka deadline", () => {
   const window = getSubmissionWindow(new Date("2026-10-12T10:00:00.000Z"));
   assert.equal(window.weekStartDate.toISOString(), "2026-10-19T00:00:00.000Z");
-  // Saturday 12:00 Asia/Dhaka == 06:00Z.
-  assert.equal(window.deadline.toISOString(), "2026-10-17T06:00:00.000Z");
+  // Saturday 00:00 Asia/Dhaka == Friday 18:00Z.
+  assert.equal(window.deadline.toISOString(), "2026-10-16T18:00:00.000Z");
   assert.equal(window.isOpen, true);
 });
 
-test("submission window rolls forward after the Saturday-noon deadline", () => {
-  // Saturday 13:00 Dhaka == 07:00Z, past the noon lock.
-  const window = getSubmissionWindow(new Date("2026-10-17T07:00:00.000Z"));
+test("submission window rolls forward after the Saturday-midnight deadline", () => {
+  // Saturday 01:00 Dhaka == Friday 19:00Z, past the midnight lock.
+  const window = getSubmissionWindow(new Date("2026-10-16T19:00:00.000Z"));
   assert.equal(window.weekStartDate.toISOString(), "2026-10-26T00:00:00.000Z");
-  assert.equal(window.deadline.toISOString(), "2026-10-24T06:00:00.000Z");
+  assert.equal(window.deadline.toISOString(), "2026-10-23T18:00:00.000Z");
+});
+
+test("per-week window gates each upcoming week by its own Saturday-midnight deadline", () => {
+  // Thu 15 Oct 2026 16:00 Dhaka.
+  const now = new Date("2026-10-15T10:00:00.000Z");
+  const openWeek = getSubmissionWindowForWeek(new Date("2026-10-19T00:00:00.000Z"), now);
+  assert.equal(openWeek.deadline.toISOString(), "2026-10-16T18:00:00.000Z");
+  assert.equal(openWeek.isOpen, true);
+  // The week after opens exactly when the 19 Oct week closes.
+  const nextWeek = getSubmissionWindowForWeek(new Date("2026-10-26T00:00:00.000Z"), now);
+  assert.equal(nextWeek.deadline.toISOString(), "2026-10-23T18:00:00.000Z");
+  assert.equal(nextWeek.opensAt.toISOString(), "2026-10-16T18:00:00.000Z");
+  assert.equal(nextWeek.isOpen, false);
 });

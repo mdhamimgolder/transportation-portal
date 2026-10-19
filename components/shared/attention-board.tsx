@@ -1,4 +1,5 @@
 import Link from "next/link";
+import type { ReactNode } from "react";
 import { ArrowUpRight, type LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -34,7 +35,8 @@ export function AttentionBoard({
   accent,
   className,
 }: {
-  subline?: string;
+  /** caption line under the head block — string or richer node (progress bar). */
+  subline?: ReactNode;
   items: AttentionItem[];
   /** Tailwind text color class for the accent figures (role hue). */
   accent: string;
@@ -51,7 +53,9 @@ export function AttentionBoard({
       {/* Head block */}
       <div className="border-b border-ink-foreground/10 px-5 py-4 sm:px-7">
         {subline ? (
-          <p className="max-w-2xl text-sm text-ink-foreground/55">{subline}</p>
+          <div className="max-w-2xl text-sm text-ink-foreground/55">
+            {typeof subline === "string" ? <p>{subline}</p> : subline}
+          </div>
         ) : null}
       </div>
 

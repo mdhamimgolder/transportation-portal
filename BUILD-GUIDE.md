@@ -92,7 +92,7 @@ Build Super Admin user management per CLAUDE.md:
 
 ```
 Build the Employee portal per CLAUDE.md sections 5 and 6:
-- Weekly Transport: form showing next week Mon–Fri, each day with a time picker limited to allowed office arrival slots (10:00, 11:00, 12:00 — make the slot list configurable) and an option to skip a day. Enforce the Saturday 12:00 PM Asia/Dhaka deadline server-side; the UI shows a live countdown to the deadline and disables the form after it passes. One submission per employee per week (allow editing until deadline).
+- Weekly Transport: form showing next week Mon–Fri, each day with a time picker limited to allowed office arrival slots (10:00, 11:00, 12:00 — make the slot list configurable) and an option to skip a day. Enforce the Saturday 12:00 AM Asia/Dhaka deadline server-side; the UI shows a live countdown to the deadline and disables the form after it passes. One submission per employee per week (allow editing until deadline).
 - Ad-Hoc Transport: form with date, arrival time, and reason. On submit it becomes instantly visible to Operations and Facilities (no approval).
 - "My Transport" page: employee sees their upcoming days with status (pending approval / approved / driver assigned) and, once allocated, the pickup time, driver name, driver contact, and vehicle number.
 - Profile page: employee can edit name and contact directly, but the Address field is read-only with a "Request Address Change" button opening a modal (old vs new address). Show status of pending requests.

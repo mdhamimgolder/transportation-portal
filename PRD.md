@@ -37,7 +37,7 @@ Our office currently manages employee transportation using Smartsheet. We are re
 - Employee submits office arrival schedule for the upcoming week (Monday–Friday).
 - Office timings are flexible: employee selects an arrival time per day (e.g., 10:00 AM, 11:00 AM, 12:00 PM). Include a "No transport needed" option per day.
 - Convenience: a "same time for all days" quick-fill button.
-- **Strict deadline: submissions lock at Saturday 12:00 PM** for the following week. The system must enforce this (form disabled after the deadline) and show a live countdown to the deadline.
+- **Strict deadline: submissions lock at Saturday 12:00 AM** for the following week. The system must enforce this (form disabled after the deadline) and show a live countdown to the deadline.
 
 **Option B: Ad-Hoc Transport**
 - Single-day emergency/immediate transport support.

@@ -24,7 +24,7 @@ export async function WeatherWidget({ className }: { className?: string }) {
       className={cn(
         // Subtle entrance — the only motion on the card.
         "animate-in fade-in slide-in-from-right-2 duration-500 motion-reduce:animate-none",
-        "relative isolate h-[185px] w-[160px] shrink-0 overflow-hidden rounded-[20px]",
+        "relative isolate mx-auto h-[185px] w-[160px] shrink-0 overflow-hidden rounded-[20px] sm:mx-0",
         "border border-white/50 backdrop-blur-md",
         "bg-gradient-to-b from-[#8ab9e6]/85 via-[#6493d0]/85 to-[#4573b8]/90",
         "shadow-[0_14px_32px_-10px_rgba(37,64,110,0.45),inset_0_1px_0_rgba(255,255,255,0.5)]",

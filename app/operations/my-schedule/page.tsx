@@ -13,9 +13,14 @@ import {
 import { NO_TRANSPORT_VALUE, ARRIVAL_TIME_OPTIONS } from "@/lib/constants/arrival-times";
 import { MyScheduleForm } from "@/components/operations/my-schedule-form";
 import { StatusBadge } from "@/components/shared/status-badge";
+import { WeekSelect } from "@/components/shared/week-select";
 import { Button } from "@/components/ui/button";
 
 const MS_PER_WEEK = 7 * 24 * 60 * 60 * 1000;
+// Jumpable range around the current week -- stepping buttons below still
+// move one week at a time without bounds.
+const WEEK_SELECT_PAST = 8;
+const WEEK_SELECT_FUTURE = 8;
 
 export default async function MySchedulePage({
   searchParams,
@@ -31,6 +36,20 @@ export default async function MySchedulePage({
   const thisMonday = getMondayOfWeek(startOfToday());
   const weekStartDate = new Date(thisMonday.getTime() + offset * MS_PER_WEEK);
   const weekDates = getWeekDays(weekStartDate);
+
+  const weekOptions = Array.from(
+    { length: WEEK_SELECT_PAST + WEEK_SELECT_FUTURE + 1 },
+    (_, k) => k - WEEK_SELECT_PAST
+  ).map((optionOffset) => {
+    const monday = new Date(thisMonday.getTime() + optionOffset * MS_PER_WEEK);
+    const range = getWeekDays(monday);
+    return {
+      value: String(optionOffset),
+      label:
+        `${formatShortDate(range[0])} – ${formatShortDate(range[4])}` +
+        (optionOffset === 0 ? " (this week)" : ""),
+    };
+  });
 
   const existing = await prisma.weeklySchedule.findUnique({
     where: {
@@ -77,7 +96,8 @@ export default async function MySchedulePage({
         {existing ? <StatusBadge status={existing.status} /> : null}
       </div>
 
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <WeekSelect value={String(offset)} options={weekOptions} label="Week" />
         <Button asChild variant="outline" size="sm">
           <Link href={`/operations/my-schedule?week=${offset - 1}`}>
             <ChevronLeft className="size-4" />

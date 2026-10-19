@@ -7,10 +7,10 @@ import { after } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireRole } from "@/lib/rbac/guards";
 import {
-  getSubmissionWindow,
+  getSubmissionWindowForWeek,
   getWeekDays,
   getMondayOfWeek,
-  toUtcMidnight,
+  normalizeWeekStart,
   DAY_LABELS,
   formatShortDate,
 } from "@/lib/date/week";
@@ -97,13 +97,31 @@ export async function submitCorporateWeeklySchedule(
 
   try {
   const settings = await getTransportSettings();
-  const window = getSubmissionWindow(
-    new Date(),
+  const now = new Date();
+
+  const weekStartValue = formData.get("weekStartDate");
+  if (typeof weekStartValue !== "string" || !weekStartValue) {
+    return { error: "Select a week to submit for." };
+  }
+  const parsedWeek = new Date(weekStartValue);
+  if (Number.isNaN(parsedWeek.getTime())) {
+    return { error: "Invalid week." };
+  }
+  // Canonical week key: UTC-midnight Monday of the selected week's Dhaka
+  // calendar week. Each selected week is gated by its own Saturday-midnight
+  // submission window -- no open window, no submit.
+  const weekStartDate = normalizeWeekStart(parsedWeek);
+  const selectedWindow = getSubmissionWindowForWeek(
+    weekStartDate,
+    now,
     settings.weeklyLockDayOfWeek,
     settings.weeklyLockHour,
     settings.weeklyLockMinute
   );
-  if (!window.isOpen) {
+  if (now.getTime() < selectedWindow.opensAt.getTime()) {
+    return { error: "Submissions for this week are not open yet." };
+  }
+  if (!selectedWindow.isOpen) {
     return { error: "The submission window for this week has closed." };
   }
 
@@ -116,13 +134,13 @@ export async function submitCorporateWeeklySchedule(
     dayValues.push(value);
   }
 
-  const weekDates = getWeekDays(toUtcMidnight(window.weekStartDate));
+  const weekDates = getWeekDays(weekStartDate);
 
   const existing = await prisma.weeklySchedule.findUnique({
     where: {
       employeeId_weekStartDate: {
         employeeId: session.id,
-        weekStartDate: toUtcMidnight(window.weekStartDate),
+        weekStartDate,
       },
     },
   });
@@ -133,7 +151,7 @@ export async function submitCorporateWeeklySchedule(
         await prisma.weeklySchedule.create({
           data: {
             employeeId: session.id,
-            weekStartDate: toUtcMidnight(window.weekStartDate),
+            weekStartDate,
           },
         })
       ).id;
@@ -189,10 +207,10 @@ export async function submitCorporateWeeklySchedule(
       : undefined,
     after: {
       status: WeeklyScheduleStatus.APPROVED,
-      weekStartDate: toUtcMidnight(window.weekStartDate),
+      weekStartDate,
       days: dayValues,
     },
-    description: `${session.fullName} submitted their weekly schedule for the week of ${toUtcMidnight(window.weekStartDate).toDateString()} (auto-approved, straight to Facilities).`,
+    description: `${session.fullName} submitted their weekly schedule for the week of ${weekStartDate.toDateString()} (auto-approved, straight to Facilities).`,
   });
 
   revalidatePath("/corporate-employee/my-schedule");

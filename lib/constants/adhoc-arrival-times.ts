@@ -1,7 +1,7 @@
 // Ad-hoc requests are for same-day emergency transport, covering the overnight
 // window from 10:00 PM tonight through 6:00 AM the next morning -- this window
 // is available every day of the week (no weekday/deadline restriction, unlike
-// the Weekly form's Mon-Fri + Saturday-noon lock).
+// the Weekly form's Mon-Fri + Saturday-midnight lock).
 
 import {
   addUtcCalendarDays,

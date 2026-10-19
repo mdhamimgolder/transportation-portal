@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { requireRole } from "@/lib/rbac/guards";
 import { Role, WeeklyScheduleStatus } from "@/lib/constants/enums";
 import { prisma } from "@/lib/prisma";
@@ -9,11 +10,13 @@ import {
 } from "@/lib/constants/arrival-times";
 import { MAX_UNFILTERED_ROWS } from "@/lib/constants/limits";
 import { excelSafeText } from "@/lib/csv";
-import { getDaySheet, compareArrivalTimes } from "@/lib/queries/route-planning";
+import { getDaySheet, getFixedArrivalPickupList, compareArrivalTimes } from "@/lib/queries/route-planning";
 import { RoutePlanningControls } from "@/components/facilities/route-planning-controls";
 import { RouteDaySheet } from "@/components/facilities/route-day-sheet";
+import { FixedArrivalList } from "@/components/facilities/fixed-arrival-list";
 import { WeekFilter, type WeekOption } from "@/components/facilities/week-filter";
 import { ExportCsvButton } from "@/components/facilities/export-csv-button";
+import { Button } from "@/components/ui/button";
 
 const ARRIVAL_TIME_LABELS = Object.fromEntries(
   ARRIVAL_TIME_OPTIONS.map((o) => [o.value, o.label])
@@ -35,19 +38,22 @@ const CSV_HEADERS = [
 export default async function RoutePlanningPage({
   searchParams,
 }: {
-  searchParams: Promise<{ day?: string; week?: string }>;
+  searchParams: Promise<{ day?: string; week?: string; view?: string }>;
 }) {
   await requireRole([Role.FACILITIES, Role.SUPER_ADMIN]);
 
   const params = await searchParams;
   const dayOfWeek = Number(params.day) >= 1 && Number(params.day) <= 5 ? Number(params.day) : 1;
   const weekFilter = typeof params.week === "string" ? params.week : undefined;
+  // ?view=fixed switches the page to the "Corporate Fixed arrival" list;
+  // default view is the weekly day sheet.
+  const fixedView = params.view === "fixed";
 
   // Every read on this page is independent — fetch them in parallel.
   // Weekly export (top-right): week picker + CSV over approved schedules.
   // `groupBy` lets Postgres return the distinct weeks instead of shipping
   // every approved schedule row to dedupe in memory.
-  const [vehicleDrivers, distinctWeeks, exportSchedules, sheet] = await Promise.all([
+  const [vehicleDrivers, distinctWeeks, exportSchedules, sheet, fixedList] = await Promise.all([
     getActiveVehicleDrivers(),
     prisma.weeklySchedule.groupBy({
       by: ["weekStartDate"],
@@ -57,6 +63,9 @@ export default async function RoutePlanningPage({
     prisma.weeklySchedule.findMany({
       where: {
         status: WeeklyScheduleStatus.APPROVED,
+        // FIXED_ARRIVAL employees are planned in the "Corporate Fixed
+        // arrival" list instead, so keep them out of the weekly export.
+        employee: { role: { not: Role.FIXED_ARRIVAL } },
         ...(weekFilter ? { weekStartDate: new Date(weekFilter) } : {}),
       },
       select: {
@@ -74,7 +83,12 @@ export default async function RoutePlanningPage({
       orderBy: [{ weekStartDate: "desc" }, { employee: { fullName: "asc" } }],
       take: MAX_UNFILTERED_ROWS,
     }),
-    getDaySheet(dayOfWeek, ARRIVAL_TIME_LABELS),
+    fixedView
+      ? Promise.resolve(null)
+      : getDaySheet(dayOfWeek, ARRIVAL_TIME_LABELS),
+    fixedView
+      ? getFixedArrivalPickupList(ARRIVAL_TIME_LABELS)
+      : Promise.resolve(null),
   ]);
 
   const weekOptions: WeekOption[] = distinctWeeks.map(({ weekStartDate }) => {
@@ -128,21 +142,52 @@ export default async function RoutePlanningPage({
     ])
   );
 
+  const switchViewHref = (target: "sheet" | "fixed") => {
+    const p = new URLSearchParams();
+    p.set("day", String(dayOfWeek));
+    if (weekFilter) p.set("week", weekFilter);
+    if (target === "fixed") p.set("view", "fixed");
+    return `/facilities/route-planning?${p.toString()}`;
+  };
+
   return (
     <div className="space-y-4">
       <div>
         <h1 className="text-xl font-semibold">Pick Schedule</h1>
         <p className="text-sm text-muted-foreground">
-          {sheet.weekLabel ?? "No approved weekly schedules yet."} — fill in
-          Pick-up Time and Vehicle No for each employee; driver details fill
-          in automatically.
+          {fixedView
+            ? "Corporate Fixed arrival — standing pick-up details for fixed-arrival employees; saved details persist every week until changed."
+            : `${sheet?.weekLabel ?? "No approved weekly schedules yet."} — fill in Pick-up Time and Vehicle No for each employee; driver details fill in automatically.`}
         </p>
       </div>
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <RoutePlanningControls day={String(dayOfWeek)} />
-        {exportToolbar}
+        {fixedView ? null : <RoutePlanningControls day={String(dayOfWeek)} />}
+        <div className="flex items-center gap-2">
+          <Button
+            asChild
+            size="sm"
+            title={
+              fixedView
+                ? "Viewing the Corporate Fixed arrival list — click to return to the day sheet"
+                : "Open the Corporate Fixed arrival list"
+            }
+          >
+            <Link href={switchViewHref(fixedView ? "sheet" : "fixed")}>
+              {fixedView ? "✓ Corporate Fixed arrival" : "Corporate Fixed arrival"}
+            </Link>
+          </Button>
+          {fixedView ? null : exportToolbar}
+        </div>
       </div>
-      <RouteDaySheet key={dayOfWeek} rows={sheet.rows} vehicleLookup={vehicleLookup} />
+      {fixedView ? (
+        <FixedArrivalList
+          key={fixedList ? "fixed" : "empty"}
+          rows={fixedList?.rows ?? []}
+          vehicleLookup={vehicleLookup}
+        />
+      ) : (
+        <RouteDaySheet key={dayOfWeek} rows={sheet?.rows ?? []} vehicleLookup={vehicleLookup} />
+      )}
     </div>
   );
 }

@@ -59,7 +59,7 @@ users (4 roles: employee, operations, facilities, super_admin)
 
 | Rule | Implementation |
 |------|-----------------|
-| **Weekly Deadline** | Saturday 12:00 PM Asia/Dhaka; API rejects after |
+| **Weekly Deadline** | Saturday 12:00 AM Asia/Dhaka; API rejects after |
 | **Weekly Flow** | submitted → ops approval → facilities planning |
 | **Ad-Hoc Flow** | Instant alerts to Ops + Facilities (no approval) |
 | **Email Dispatch** | BackgroundTask on allocation creation |

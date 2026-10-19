@@ -63,8 +63,10 @@ function splitCoordPair(pair: string): [number, number] | null {
 
 /**
  * Roles Facilities may create, edit, re-credential or delete. Staff accounts
- * (Operations, Facilities, Super Admin) are managed by Super Admin only, so a
- * Facilities user can never mint or take over an elevated account.
+ * (Operations, Facilities, Super Admin) stay out of these admin flows. NOTE:
+ * the dedicated role-change action (updateUserRoleByFacilitiesAction) is
+ * deliberately broader — Facilities may change staff roles there, but still
+ * can never touch or grant SUPER_ADMIN (enforced inside that action).
  */
 const FACILITIES_MANAGEABLE_ROLES: readonly string[] = [
   Role.EMPLOYEE,
@@ -991,6 +993,68 @@ export async function updateUserRoleAction(
     return { success: true };
   } catch (error) {
     return sanitizedActionError("updateUserRoleAction", error);
+  }
+}
+
+/**
+ * Facilities-scoped role change (mirrors the Super Admin flow): Facilities
+ * may assign any role EXCEPT Super Admin and may not touch Super Admin
+ * accounts at all — the option is hidden in the UI and enforced here.
+ * Changing a role revokes the user's sessions (the JWT carries the role
+ * claim) and writes an audit entry atomically.
+ */
+export async function updateUserRoleByFacilitiesAction(
+  _prevState: UpdateUserRoleState,
+  formData: FormData
+): Promise<UpdateUserRoleState> {
+  const session = await requireRole([Role.FACILITIES, Role.SUPER_ADMIN]);
+
+  try {
+    const id = formData.get("id");
+    const role = formData.get("role");
+    if (typeof id !== "string" || !id) return { error: "Missing user." };
+    if (typeof role !== "string" || !isValidRole(role)) {
+      return { error: "Please select a valid role." };
+    }
+    if (role === Role.SUPER_ADMIN && session.role !== Role.SUPER_ADMIN) {
+      return { error: "Facilities can't grant the Super Admin role." };
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { id },
+      select: { id: true, role: true, fullName: true },
+    });
+    if (!user) return { error: "User not found." };
+    if (user.role === Role.SUPER_ADMIN && session.role !== Role.SUPER_ADMIN) {
+      return { error: "Facilities can't change Super Admin accounts." };
+    }
+
+    if (user.id === session.id && role !== user.role) {
+      return { error: "You can't change your own role." };
+    }
+    if (user.role === role) {
+      return { success: true };
+    }
+
+    await prisma.$transaction([
+      prisma.user.update({ where: { id }, data: { role }, select: { id: true } }),
+      // Sessions carry the role claim — force a fresh sign-in.
+      prisma.session.deleteMany({ where: { userId: id } }),
+      auditEntry(session, {
+        action: "UPDATE_USER_ROLE",
+        entityType: "User",
+        entityId: id,
+        before: { role: user.role },
+        after: { role },
+        description: `${session.fullName} changed ${user.fullName}'s role from ${user.role} to ${role}`,
+      }),
+    ]);
+
+    revalidatePath("/facilities/user-info");
+    revalidatePath("/super-admin/users");
+    return { success: true };
+  } catch (error) {
+    return sanitizedActionError("updateUserRoleByFacilitiesAction", error);
   }
 }
 

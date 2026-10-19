@@ -4,6 +4,135 @@ Read this at the start of every task so you can continue without re-exploring.
 **Always update it before the session ends** (append/rewrite the Latest Session
 block and bump Work State / Next Move). Do this EVERY session — it is how we
 work fast without interruption.
+## Latest Session (2026-10-19) — Facilities: Corporate Fixed-arrival list, User Info roles, role-change access
+**Follow-up (same day, user):** (1) deleted the Day-sheet toggle group — the
+"Corporate Fixed arrival" button now leads the week-picker + Export CSV area
+(default Button style); in the fixed view it shows "✓ Corporate Fixed
+arrival" and clicking returns to the day sheet; day tabs stay hidden in the
+fixed view. (2) Fixed-arrival list's "Arrival & Service" column replaced by
+read-only "Requested Arrival" label — the ON/OFF toggle + arrival-time select
+(`FixedArrivalServiceControls`) moved to a new "Fixed arrival service"
+column on Facilities User Info rows (FIXED_ARRIVAL rows only, "—" otherwise).
+`EmployeeDirectoryRow`/query now also returns `fixedArrivalTime`. Confirmed:
+tsc + eslint clean; routes compile (auth-redirect smoke check).
+**User request:** (1) "Corporate Fixed arrival" button on Facilities Pick-up
+schedule listing fixed-arrival employees with STATIC saved details (name,
+address, pick-up point, arrival, pick-up time, driver, vehicle) — saved once
+until Facilities edits; (2) Employee-Corporate, Employee-Corporate(Fixed
+arrival) and Operation-Admin missing from Facilities User Info; (3)
+fixed-arrival arrival time + transport ON/OFF changeable by Facilities after
+the employee's one-time set; (4) Facilities can change user roles like Super
+Admin but never grant/touch SUPER_ADMIN (hidden). Clarified via questions:
+list = full view toggle (not dialog), static record stored ONCE per employee
+(week-independent), fixed-arrival rows show ONLY in the new list (removed
+from the day sheet), post-set changes are Facilities-only.
+**Completed:**
+- Schema: new `FixedArrivalPickup` model (employeeId @unique → User cascade,
+  vehicleDriverId → VehicleDriver, pickupTime, assignedById, emailSentAt) +
+  back-relations `User.fixedArrivalPickup?` / `VehicleDriver.fixedArrivalPickups[]`.
+  Migration `20261019122652_add_fixed_arrival_pickup` applied, `prisma generate`
+  done, server restarted (kill :3000, delete .next, hidden relaunch).
+- `lib/queries/route-planning.ts`: new `getFixedArrivalPickupList(labels)`
+  (role FIXED_ARRIVAL incl. static record + vehicleDriver, sorted by arrival);
+  `getDaySheet` + weekly CSV export now exclude FIXED_ARRIVAL employees.
+- New `actions/fixed-arrival-pickup.actions.ts`: `saveFixedArrivalPickups`
+  (gate [FACILITIES, SUPER_ADMIN], per-row employeeId/pickupTime/vehicleNumber,
+  empty rows leave existing details alone, vehicle validation like day sheet,
+  audit `UPDATE_FIXED_ARRIVAL_PICKUP`, sendMail on save) +
+  `resendFixedArrivalPickupEmail` (trySendMail + EmailNotificationLog kind
+  `ROUTE_ASSIGNMENT_FIXED_ARRIVAL`, routeAssignmentId null).
+- New `components/facilities/fixed-arrival-list.tsx` (modeled on
+  RouteDaySheet: table + column paste-fill + Save all + skipped report,
+  per-row `FixedArrivalServiceControls` for the ON/OFF toggle + arrival-time
+  Select in the "Arrival & Service" column, Resend email button).
+- `app/facilities/route-planning/page.tsx`: `?view=fixed` toggles between the
+  day sheet and the new list; toolbar Button group "Day sheet" / "Corporate
+  Fixed arrival" (Links preserving day/week params); header text switches.
+- `lib/queries/users.ts`: `getEmployeeDirectory` now filters
+  `role IN (EMPLOYEE, CORPORATE_EMPLOYEE, FIXED_ARRIVAL, OPERATIONS)`
+  (`EMPLOYEE_DIRECTORY_ROLES` exported) and returns `role` +
+  `fixedArrivalActive`; Facilities User Info page gained a per-row Role
+  column.
+- New `components/facilities/user-role-form.tsx`
+  (`FacilitiesUserRoleForm`, `FACILITIES_ROLE_OPTIONS` = ALL_ROLES minus
+  SUPER_ADMIN) + new `updateUserRoleByFacilitiesAction`
+  (actions/user-management.actions.ts): gate [FACILITIES, SUPER_ADMIN],
+  rejects role=SUPER_ADMIN assignment, rejects changing SUPER_ADMIN users,
+  rejects own-role change, revokes sessions + audit UPDATE_USER_ROLE, same
+  transaction shape as the Super Admin action. Edit-profile/Set-password
+  dialogs hidden for non-rider rows via new `canFacilitiesManage`
+  (lib/rbac/guards.ts, FACILITIES_MANAGEABLE_ROLES = riders only).
+- `updateFixedArrivalServiceAction` now also revalidates
+  /facilities/route-planning (toggle lives in the fixed list).
+**Verified:** `npx tsc --noEmit` clean; ESLint clean on all 11 touched files;
+`npm run test` 39/39.
+**Follow-up (2026-10-19, later):** Operations dashboard hero rework —
+(1) "Weekly schedules to review" card replaced by a link-free "This month
+total submissions (all roles)" stat: `weeklySchedule.count({ submittedAt >=
+Dhaka month start })`, INCLUDES auto-generated fixed-arrival schedules per
+user choice; Dhaka-calendar month/day boundaries computed via
+`dhakaDateTimeFromMinutes` (no host-tz math). (2) Dead "Profile changes to
+approve" card (page was removed; link 404'd) replaced by "Today's follow-ups"
+= unassigned drivers today (`weeklyScheduleDay.count` date=today,
+needsTransport, no routeAssignment, APPROVED week, excluding FIXED_ARRIVAL
+employees — they have no RouteAssignment by design) + failed transport emails
+today (`emailNotificationLog.count(status FAILED, createdAt >= Dhaka
+midnight)`), combined figure, urgent dot when > 0. (3) MDS Weekly Schedule
+"Upload CSV" trigger button changed outline+surface-accent → default filled.
+tsc + eslint clean; routes compile (auth-redirect smoke).
+**Follow-up (2026-10-19b):** AttentionBoard head rework — caption is now
+"Eyeview of Transport Report" (subline prop typed ReactNode; strings still
+render in a <p>, nodes passed through); the old "Open submission window …
+Locking Saturday 12:00 AM." line was deleted. New
+`components/shared/submission-progress.tsx` (client): compact
+"Upcoming Week · MDS Weekly Schedule remaining" meter — hairline bar open→
+deadline with role-accent fill (amber <24h), live ticking countdown
+(Dd HH:MM:SS), server-clock synced via /api/time + monotonic advance (1s
+tick), closed state text. Wired on the Operations dashboard with
+window.opensAt/deadline/weekStartDate from getSubmissionWindow. Card labels
+renamed: "This Month Total Submissions For Transport"; "Today's FallBack —
+unassigned driver & failed to sent notification found" (user's exact wording).
+windowDays/formatShortDate/getWeekDays dropped from the ops dashboard page.
+tsc + eslint clean.
+**Follow-up (2026-10-19c) — full-app responsive pass (mobile + extended display):**
+Audit by subagents of the whole shell + every role area. Fixes applied (all
+tsc + touched-file eslint clean, tests 39/39):
+- CRITICAL `components/facilities/adhoc-list.tsx:90`: `h-24` → `h-auto
+  sm:h-24` — the ad-hoc assignment form was clipped to 96px on phones.
+- CRITICAL `components/facilities/route-setting/route-setting-client.tsx:966`:
+  inline `gridTemplateColumns:"1fr 2fr 2fr"` (3 cols for 2 children) →
+  `grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]` (stacks on mobile).
+- flex-wrap + gap-3 added to non-wrapping headers: facilities vehicles page
+  header, operations adhoc-table header, corporate-employee
+  weekly-schedule-form explainer row, operations my-schedule-form row,
+  route-setting pinner CardHeader.
+- `route-memory-diagnostics.tsx:65`: `max-w-3xl` → `sm:max-w-3xl` (mobile
+  dialog gutters restored).
+- `components/employee/weekly-schedule-table.tsx`: both raw <table>s now
+  wrapped in `overflow-x-auto`.
+- `vehicle-driver-combobox.tsx`: portaled dropdown gets minWidth 256 +
+  maxWidth calc(100vw-1rem) (no off-viewport spill).
+- `search-box.tsx`: `w-72 max-w-full`; weather-widget: `mx-auto sm:mx-0`
+  (centers on stacked mobile dashboards).
+- EXTENDED DISPLAY: all six role layouts `mx-auto w-full max-w-7xl`
+  → + `2xl:max-w-[1680px]` so ≥1536px screens use more width; content still
+  capped + centered (never full-bleed at 2560px).
+- Verified-good (no change): ui/table.tsx has built-in overflow-x-auto;
+  nav-sidebar has mobile top-bar + Sheet drawer below lg; all six layouts
+  flex-col lg:flex-row with min-w-0 main; dialogs gutters OK; auth cards OK.
+
+## Latest Session (2026-10-15) — Week selector + Saturday-midnight deadline
+**User request:** week select option in Operations + Corporate My Schedule (upcoming week e.g. 19–23 Oct), deadline Saturday 12 AM. Confirmed via questions: change lock to 12:00 AM midnight (from noon), corporate offers open week + upcoming weeks each gated by its own Saturday deadline.
+**Completed:**
+- `lib/date/week.ts`: `getSubmissionWindow` default lockHour 12→0; new `getSubmissionWindowForWeek(targetMonday, now, …)` (deadline = Saturday before target Monday at lock time, opens 7d earlier); `getSubmissionWindow` refactored onto it (roll-forward preserved).
+- Deadline midnight enforced in DB: migration `20261015155509_weekly_lock_midnight` (SET DEFAULT 0) + singleton row set to Sat 00:00 (was Sat 15:30!) via temp script (deleted after).
+- **Drift repair (pre-existing, not mine):** Neon DB had `User.wfmId TEXT NULL` + `_prisma_migrations` entry `20261005115400_add_wfm_id` with no local files. Reconstructed `prisma/migrations/20261005115400_add_wfm_id/migration.sql`, added `wfmId String?` to schema, aligned stored checksum (sha256 of file) after verifying live column state — no reset, no data loss. `migrate status` now clean (27 migrations).
+- Corporate My Schedule: `WeekSelect` (?week=ISO) with open week + next 3 weeks, each labeled open/opens-on/closed (future weeks disabled); `submitCorporateWeeklySchedule` takes `weekStartDate`, validates per-week window server-side; form carries hidden weekStartDate + `key` reset per week.
+- Operations My Schedule: `WeekSelect` (?week=offset, ±8 weeks, "(this week)" marker) alongside existing prev/next buttons.
+- New shared client `components/shared/week-select.tsx`.
+- Copy: dashboard "Locking Saturday 12:00 AM", CLAUDE/PRD/DATABASE/START_HERE/QUICK_REF/SETUP/BUILD-GUIDE/README_COMPLETE/DOC_INDEX + both manual-generator scripts → 12:00 AM (generated PDFs not regenerated — note).
+- Tests: week-sync updated to midnight (Sat 00:00 Dhaka = Fri 18:00Z) + new per-week gating test.
+**Verified:** `npx tsc --noEmit` + ESLint clean, `npm run test` 39/39, `prisma generate`, server restarted per AGENTS (kill :3000, delete .next, hidden relaunch) — `/api/health` 200, `/corporate-employee/my-schedule` 200.
 ## Latest Session (2026-10-15) — Direct-to-Facilities flows + Operations monitoring UI
 **User request:** (1) corporate weekly submit skips Operations approval → straight to Facilities; MDS employee ad-hoc submit needs no Operations approval; (2) Operations "Ad-hoc Transport" becomes "Adhoc Monitoring" — drop Status/Action columns, add driver name / contact number / pick-up time columns reflecting Facilities updates; rename on-behalf entry to "Place an Ad-hoc request"; (3) MDS Weekly Schedule — delete Export CSV + Approve selected buttons, rename on-behalf entry to "Place a single request", move Upload CSV into the old approve-selected spot.
 **Completed:**

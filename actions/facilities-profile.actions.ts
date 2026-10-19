@@ -274,6 +274,7 @@ export async function updateFixedArrivalServiceAction(
     });
 
     revalidatePath("/facilities/user-info");
+    revalidatePath("/facilities/route-planning");
     revalidatePath("/employee/profile");
     revalidatePath("/fixed-arrival/my-schedule");
     revalidatePath("/fixed-arrival/dashboard");

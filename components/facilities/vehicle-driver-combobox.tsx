@@ -108,8 +108,14 @@ export function VehicleDriverCombobox({
         ? createPortal(
             <div
               ref={dropdownRef}
-              style={{ top: coords.top, left: coords.left, width: coords.width }}
-              className="absolute z-50 max-h-[10rem] min-w-64 overflow-y-auto rounded-md border bg-popover p-1 shadow-md"
+              style={{
+                top: coords.top,
+                left: coords.left,
+                width: coords.width,
+                minWidth: 256,
+                maxWidth: "calc(100vw - 1rem)",
+              }}
+              className="absolute z-50 max-h-[10rem] overflow-y-auto rounded-md border bg-popover p-1 shadow-md"
             >
               {rows.length === 0 ? (
                 <p className="px-2 py-1.5 text-sm text-muted-foreground">No matches.</p>

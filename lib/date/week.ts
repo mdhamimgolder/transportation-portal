@@ -2,9 +2,9 @@
  * Weekly submission window logic + canonical week/day date keys.
  *
  * Rule (PRD 4.2): employees submit a Mon-Fri schedule for the *upcoming* week;
- * the window locks at Saturday 12:00 PM. Once that Saturday-noon deadline for
- * a given target week passes, the window rolls forward to the following week
- * (whose own deadline is exactly 7 days later).
+ * the window locks at Saturday 12:00 AM (midnight). Once that Saturday-midnight
+ * deadline for a given target week passes, the window rolls forward to the
+ * following week (whose own deadline is exactly 7 days later).
  *
  * CANONICAL KEYS — read this before touching dates:
  * Every week/day key (`weeklySchedule.weekStartDate`, `weeklyScheduleDay.date`,
@@ -119,12 +119,39 @@ export function parseDayKey(value: string): Date {
 export type SubmissionWindow = {
   /** Monday (canonical UTC midnight) of the Mon-Fri week currently open for submission. */
   weekStartDate: Date;
-  /** Saturday 12:00 PM Asia/Dhaka deadline instant for that week. */
+  /** Saturday 12:00 AM Asia/Dhaka deadline instant for that week. */
   deadline: Date;
   /** When this window opened — exactly 7 days before `deadline`. */
   opensAt: Date;
   isOpen: boolean;
 };
+
+/**
+ * Submission window for one explicit target week (canonical Monday key):
+ * the deadline is the Saturday before that Monday at the lock wall-clock
+ * time, and the window opens exactly 7 days earlier. Powers the Corporate
+ * week picker so every offered week is gated by its own deadline.
+ */
+export function getSubmissionWindowForWeek(
+  targetMonday: Date,
+  now: Date = new Date(),
+  lockDayOfWeek: number = 6,
+  lockHour: number = 0,
+  lockMinute: number = 0
+): SubmissionWindow {
+  const monday = normalizeWeekStart(targetMonday);
+  const dayOffsetFromMonday = (lockDayOfWeek - 1 + 7) % 7;
+  // The lock-day date (canonical key) + Dhaka wall-clock lock time -> instant.
+  const lockDateKey = new Date(monday.getTime() - (7 - dayOffsetFromMonday) * MS_PER_DAY);
+  const deadline = dhakaDateTimeFromMinutes(lockDateKey, lockHour * 60 + lockMinute);
+  const opensAt = new Date(deadline.getTime() - MS_PER_WEEK);
+  return {
+    weekStartDate: monday,
+    deadline,
+    opensAt,
+    isOpen: opensAt.getTime() <= now.getTime() && now.getTime() <= deadline.getTime(),
+  };
+}
 
 /**
  * `lockDayOfWeek` is 0=Sun .. 6=Sat (defaults to Saturday, matching the
@@ -134,28 +161,32 @@ export type SubmissionWindow = {
 export function getSubmissionWindow(
   now: Date = new Date(),
   lockDayOfWeek: number = 6,
-  lockHour: number = 12,
+  lockHour: number = 0,
   lockMinute: number = 0
 ): SubmissionWindow {
   const thisMonday = getMondayOfWeek(now);
-  const dayOffsetFromMonday = (lockDayOfWeek - 1 + 7) % 7;
 
   let candidateTargetMonday = new Date(thisMonday.getTime() + MS_PER_WEEK);
-  // The lock-day date (canonical key) + Dhaka wall-clock lock time -> instant.
-  const lockDateKey = new Date(thisMonday.getTime() + dayOffsetFromMonday * MS_PER_DAY);
-  let deadline = dhakaDateTimeFromMinutes(lockDateKey, lockHour * 60 + lockMinute);
+  let window = getSubmissionWindowForWeek(
+    candidateTargetMonday,
+    now,
+    lockDayOfWeek,
+    lockHour,
+    lockMinute
+  );
 
-  if (now.getTime() > deadline.getTime()) {
+  if (now.getTime() > window.deadline.getTime()) {
     candidateTargetMonday = new Date(candidateTargetMonday.getTime() + MS_PER_WEEK);
-    deadline = new Date(deadline.getTime() + MS_PER_WEEK);
+    window = getSubmissionWindowForWeek(
+      candidateTargetMonday,
+      now,
+      lockDayOfWeek,
+      lockHour,
+      lockMinute
+    );
   }
 
-  return {
-    weekStartDate: candidateTargetMonday,
-    deadline,
-    opensAt: new Date(deadline.getTime() - MS_PER_WEEK),
-    isOpen: now.getTime() <= deadline.getTime(),
-  };
+  return window;
 }
 
 /** The 5 calendar dates (Mon-Fri, canonical UTC midnight) for a week. The input

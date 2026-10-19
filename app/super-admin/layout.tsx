@@ -28,7 +28,7 @@ export default async function SuperAdminLayout({
         avatarTextClassName="text-[#70bccc]"
       />
       <main className="min-w-0 flex-1 px-4 py-6 lg:px-10 lg:py-8">
-        <div className="mx-auto w-full max-w-7xl space-y-6">{children}</div>
+        <div className="mx-auto w-full max-w-7xl space-y-6 2xl:max-w-[1680px]">{children}</div>
       </main>
     </div>
   );
