@@ -4,6 +4,37 @@ Read this at the start of every task so you can continue without re-exploring.
 **Always update it before the session ends** (append/rewrite the Latest Session
 block and bump Work State / Next Move). Do this EVERY session — it is how we
 work fast without interruption.
+## Latest Session (2026-10-26) — DEPLOY: merged the unpushed feature work into `main` (Vercel)
+**Why:** features built in earlier sessions (fixed-arrival planning, direct-to-
+facilities flows, adhoc monitoring UI, the Fixed-arrival profile 403 fix, the
+Dhaka-time sync fix) lived only on `refactor/structure-hardening` plus an
+uncommitted working tree. Vercel builds `main`, so none of it was live.
+**State found:** `refactor/structure-hardening` = `398503d` + 3 feature commits
+(92b8af2, b114914, d1fb9f3), already pushed to origin; `origin/main` had drifted
+4 commits ahead (all throwaway `ci:` / `chore: add ci helper` commits that
+added then deleted `.ci-xnahlq.sh` and trimmed two test paths from
+`package.json` because the test files didn't exist on main); working tree had
+the 2026-10-20 profile fix uncommitted.
+**Done:**
+1. Committed the working tree as `ed328aa` (profile action role gate +
+   Fixed-arrival profile parity + schedule-card width + this memory block).
+2. `git checkout main` → `git pull --ff-only` (main was 4 behind) →
+   `git merge --no-ff refactor/structure-hardening` → merge commit `bb124fb`.
+   `package.json` auto-resolved to the full `test` list (week-sync +
+   adhoc-arrival-times included; both test files exist on main now).
+3. `npm run verify` green (tsc + eslint + 39/39 node tests).
+4. `npx prisma migrate status` → "Database schema is up to date" (the Neon DB
+   prod uses already had add_wfm_id, weekly_lock_midnight and
+   add_fixed_arrival_pickup applied), so no `db:deploy` needed before push.
+5. Pushed `main` (`2b5071e..bb124fb`) → Vercel production build triggered;
+   also pushed `refactor/structure-hardening` (`d1fb9f3..ed328aa`).
+**Note:** `main` and `refactor/structure-hardening` are content-identical now
+(`git diff` empty) — keep them in lockstep or work on main directly.
+Vercel CLI is NOT authenticated on this box (`npx vercel ls` hangs on login
+prompt); confirm the deploy from the Vercel dashboard, then smoke-test
+`GET /api/health` and the six role home pages (see `docs/RUNBOOK.md` §5).
+`resume-mezbaul.pdf` is an untracked scratch file, deliberately not committed.
+
 ## Latest Session (2026-10-20) — FIX: 403 when an Employee-Corporate(Fixed arrival) saves Office Location
 **Symptom:** logged in as `FIXED_ARRIVAL` ("Employee-Corporate(Fixed arrival)"),
 saving the Profile form (office location) sent the user to `/403`.
