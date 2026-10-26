@@ -85,7 +85,7 @@ export default async function FixedArrivalMySchedulePage() {
           </CardContent>
         </Card>
       ) : (
-        <Card>
+        <Card className="w-full max-w-[24rem] py-9">
           <CardHeader>
             <CardTitle>Choose your arrival time</CardTitle>
             <CardDescription>

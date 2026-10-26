@@ -36,8 +36,8 @@ export function FixedArrivalPicker() {
   const [state, formAction] = useActionState(saveFixedArrivalTime, initialState);
 
   return (
-    <form action={formAction} className="space-y-4">
-      <div className="space-y-2">
+    <form action={formAction} className="space-y-6">
+      <div className="space-y-3">
         <Label htmlFor="fixed-arrival-select">
           When do you need to reach the office?
         </Label>

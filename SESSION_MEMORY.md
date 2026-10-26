@@ -4,6 +4,43 @@ Read this at the start of every task so you can continue without re-exploring.
 **Always update it before the session ends** (append/rewrite the Latest Session
 block and bump Work State / Next Move). Do this EVERY session — it is how we
 work fast without interruption.
+## Latest Session (2026-10-20) — FIX: 403 when an Employee-Corporate(Fixed arrival) saves Office Location
+**Symptom:** logged in as `FIXED_ARRIVAL` ("Employee-Corporate(Fixed arrival)"),
+saving the Profile form (office location) sent the user to `/403`.
+**Root cause:** `app/fixed-arrival/profile/page.tsx` mounts the shared
+`ProfileUpdateForm` → `updateProfile` in `actions/profile.actions.ts`, but that
+action was gated `requireRole([Role.EMPLOYEE, Role.CORPORATE_EMPLOYEE])` — the
+role gate had never been extended when the Fixed-arrival profile page was added.
+Page render passed (page gate = FIXED_ARRIVAL), the action failed → redirect
+`/403`. Confirmed in the dev log: `GET /fixed-arrival/profile 200` →
+`GET /403 200` right after `updateProfile({}, {})`.
+**Fix:** `updateProfile` now allows `[EMPLOYEE, CORPORATE_EMPLOYEE, FIXED_ARRIVAL]`
+(comment added: every role mounting `ProfileUpdateForm` must be listed).
+Also revalidates `/fixed-arrival/profile` and `/facilities/user-info` (Facilities
+shows the edited office location).
+**Follow-up (same session):** `app/fixed-arrival/profile/page.tsx` rewritten to
+mirror the corporate profile page exactly — same two-column layout
+(`lg:grid-cols-[1fr_0.67fr]`), same copy, plus the "Change History" card
+(`pickupPointChangeRequest` list for the user, `StatusBadge` + reject reason),
+so Fixed-arrival profiles now have full parity with
+`app/corporate-employee/profile/page.tsx`. Verified: page compiles and
+`GET /fixed-arrival/profile 200` in the dev log.
+**Also:** `/fixed-arrival/my-schedule` "Choose your arrival time" card was
+full-page width; constrained to `w-full max-w-[24rem] py-9` (tuned up twice after
+feedback that 20rem/22rem felt too small), and the picker form spacing is
+`space-y-6` / `space-y-3`. The locked "Your arrival time is fixed" card is still full
+width (it holds the 5-day preview grid).
+**Role cross-check (no other mismatches found):** EMPLOYEE/CORPORATE_EMPLOYEE
+profile form OK; operations/facilities profile pages only render
+`ChangePasswordForm` (`selfChangePasswordAction` = `requireAuth`, all roles OK);
+super-admin has no self-service profile page; adhoc form
+(`[EMPLOYEE, CORPORATE_EMPLOYEE]`), corporate weekly form
+(`[CORPORATE_EMPLOYEE]`), fixed-arrival picker (`[FIXED_ARRIVAL]`), operations
+forms (`[OPERATIONS]`), all shared set-password/resend dialogs
+(`[SUPER_ADMIN, FACILITIES]`) match the pages that mount them.
+**Verified:** `npx tsc --noEmit` + `npx eslint actions/profile.actions.ts` clean;
+dev server recompiled. Not committed yet.
+
 ## Latest Session (2026-10-19) — Facilities: Corporate Fixed-arrival list, User Info roles, role-change access
 **Follow-up (same day, user):** (1) deleted the Day-sheet toggle group — the
 "Corporate Fixed arrival" button now leads the week-picker + Export CSV area
