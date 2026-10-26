@@ -13,7 +13,7 @@ export type TransportSettings = {
 
 const DEFAULT_SETTINGS: TransportSettings = {
   weeklyLockDayOfWeek: 6,
-  weeklyLockHour: 12,
+  weeklyLockHour: 0,
   weeklyLockMinute: 0,
 };
 

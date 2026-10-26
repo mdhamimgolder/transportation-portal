@@ -7,10 +7,10 @@ import { after } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireRole } from "@/lib/rbac/guards";
 import {
-  getSubmissionWindow,
+  getSubmissionWindowForWeek,
   getWeekDays,
   getMondayOfWeek,
-  toUtcMidnight,
+  normalizeWeekStart,
   DAY_LABELS,
   formatShortDate,
 } from "@/lib/date/week";
@@ -86,9 +86,9 @@ export type SubmitCorporateWeeklyScheduleState = {
   success?: boolean;
 };
 
-/** Corporate Employee self-submit -- unlike Operations' own "My Schedule",
- *  this one goes through the same PENDING -> Operation-Admin review flow and
- *  weekly submission-window lock that the original Employee self-submit used. */
+/** Corporate Employee self-submit -- no Operations review step. The schedule is
+ *  saved as already approved so it flows straight to Facilities route
+ *  planning, subject only to the weekly submission-window lock. */
 export async function submitCorporateWeeklySchedule(
   _prevState: SubmitCorporateWeeklyScheduleState,
   formData: FormData
@@ -97,13 +97,31 @@ export async function submitCorporateWeeklySchedule(
 
   try {
   const settings = await getTransportSettings();
-  const window = getSubmissionWindow(
-    new Date(),
+  const now = new Date();
+
+  const weekStartValue = formData.get("weekStartDate");
+  if (typeof weekStartValue !== "string" || !weekStartValue) {
+    return { error: "Select a week to submit for." };
+  }
+  const parsedWeek = new Date(weekStartValue);
+  if (Number.isNaN(parsedWeek.getTime())) {
+    return { error: "Invalid week." };
+  }
+  // Canonical week key: UTC-midnight Monday of the selected week's Dhaka
+  // calendar week. Each selected week is gated by its own Saturday-midnight
+  // submission window -- no open window, no submit.
+  const weekStartDate = normalizeWeekStart(parsedWeek);
+  const selectedWindow = getSubmissionWindowForWeek(
+    weekStartDate,
+    now,
     settings.weeklyLockDayOfWeek,
     settings.weeklyLockHour,
     settings.weeklyLockMinute
   );
-  if (!window.isOpen) {
+  if (now.getTime() < selectedWindow.opensAt.getTime()) {
+    return { error: "Submissions for this week are not open yet." };
+  }
+  if (!selectedWindow.isOpen) {
     return { error: "The submission window for this week has closed." };
   }
 
@@ -116,23 +134,16 @@ export async function submitCorporateWeeklySchedule(
     dayValues.push(value);
   }
 
-  const weekDates = getWeekDays(toUtcMidnight(window.weekStartDate));
+  const weekDates = getWeekDays(weekStartDate);
 
   const existing = await prisma.weeklySchedule.findUnique({
     where: {
       employeeId_weekStartDate: {
         employeeId: session.id,
-        weekStartDate: toUtcMidnight(window.weekStartDate),
+        weekStartDate,
       },
     },
   });
-
-  if (existing && existing.status === WeeklyScheduleStatus.APPROVED) {
-    return {
-      error:
-        "This week's schedule has already been approved and can no longer be changed.",
-    };
-  }
 
   const scheduleId = existing
     ? existing.id
@@ -140,21 +151,24 @@ export async function submitCorporateWeeklySchedule(
         await prisma.weeklySchedule.create({
           data: {
             employeeId: session.id,
-            weekStartDate: toUtcMidnight(window.weekStartDate),
+            weekStartDate,
           },
         })
       ).id;
 
-  if (existing) {
-    await prisma.weeklySchedule.update({
-      where: { id: existing.id },
-      data: {
-        status: WeeklyScheduleStatus.PENDING,
-        rejectReason: null,
-        submittedAt: new Date(),
-      },
-    });
-  }
+  // No Operations review step -- every corporate submission lands as already
+  // approved so Facilities route planning picks it up directly. Re-submits
+  // while the window is open simply overwrite the previous days.
+  await prisma.weeklySchedule.update({
+    where: { id: scheduleId },
+    data: {
+      status: WeeklyScheduleStatus.APPROVED,
+      rejectReason: null,
+      submittedAt: new Date(),
+      reviewedById: session.id,
+      reviewedAt: new Date(),
+    },
+  });
 
   // The 5 day rows are independent (unique per dayOfWeek) — one concurrent
   // batch instead of 5 sequential round trips.
@@ -192,15 +206,16 @@ export async function submitCorporateWeeklySchedule(
       ? { status: existing.status, rejectReason: existing.rejectReason }
       : undefined,
     after: {
-      status: WeeklyScheduleStatus.PENDING,
-      weekStartDate: toUtcMidnight(window.weekStartDate),
+      status: WeeklyScheduleStatus.APPROVED,
+      weekStartDate,
       days: dayValues,
     },
-    description: `${session.fullName} submitted their weekly schedule for the week of ${toUtcMidnight(window.weekStartDate).toDateString()}.`,
+    description: `${session.fullName} submitted their weekly schedule for the week of ${weekStartDate.toDateString()} (auto-approved, straight to Facilities).`,
   });
 
   revalidatePath("/corporate-employee/my-schedule");
   revalidatePath("/operations/weekly-requests");
+  revalidatePath("/facilities/route-planning");
   return { success: true };
   } catch (error) {
     return sanitizedActionError("submitCorporateWeeklySchedule", error);
@@ -230,9 +245,10 @@ export async function submitMySchedule(
   if (Number.isNaN(weekStartDate.getTime())) {
     return { error: "Invalid week." };
   }
-  // Canonical week key: UTC-midnight Monday (RUN MAPPING queries this exact
-  // value — a local-midnight key would make the schedule invisible to it).
-  const normalizedWeekStart = toUtcMidnight(getMondayOfWeek(weekStartDate));
+  // Canonical week key: UTC-midnight Monday of the Dhaka calendar week
+  // (getMondayOfWeek always normalizes — RUN MAPPING queries this exact value,
+  // and a local-midnight key would make the schedule invisible to it).
+  const normalizedWeekStart = getMondayOfWeek(weekStartDate);
 
   const dayValues: string[] = [];
   for (let i = 0; i < 5; i++) {
@@ -592,9 +608,10 @@ export async function bulkUploadWeeklySchedules(
   if (Number.isNaN(parsedWeek.getTime())) {
     return { error: "Invalid week." };
   }
-  // Canonical week key: UTC-midnight Monday (RUN MAPPING queries this exact
-  // value — a local-midnight key would make the schedule invisible to it).
-  const weekStartDate = toUtcMidnight(getMondayOfWeek(parsedWeek));
+  // Canonical week key: UTC-midnight Monday of the selected week's Dhaka
+  // calendar week (RUN MAPPING queries this exact value — a local-midnight key
+  // would make the schedule invisible to it).
+  const weekStartDate = getMondayOfWeek(parsedWeek);
   const weekDates = getWeekDays(weekStartDate);
 
   const file = formData.get("file");

@@ -1,375 +1,165 @@
-# SYSTEM AUDIT REPORT — Transportation Management Portal (TMP)
+# SYSTEM_AUDIT_REPORT.md — Transportation Management Portal (TMP)
 
-**Audit date:** 2026-10-01
-**Branch audited:** `refactor/structure-hardening` (HEAD `c3274ca` + uncommitted working tree, incl. untracked `lib/actions/`, `lib/cache-tags.ts`, `lib/queries/fleet.ts`, `lib/routing/corridor-core.ts`, migration `20261001124637_add_query_indexes`)
-**Stack:** Next.js 16 (App Router) · React 19 · TypeScript (strict) · Prisma 7 + Neon Postgres · jose JWT sessions · nodemailer · OSRM + Nominatim
-**Scope:** `app/`, `actions/`, `components/`, `lib/` (excl. `lib/generated`), `hooks/`, `proxy.ts`, `prisma/schema.prisma` — 213 TS/TSX files, 39 pages, 20 action files (77 exported Server Actions).
-**Mode:** Read-only. No source file was modified; this report is the only file written.
-
----
-
-## 0. Executive Summary
-
-| Pillar | Grade | One-line verdict |
-|---|---|---|
-| 1. Architecture & Folder Structure | **B−** | Clear top-level domain split, but pages bypass `lib/queries`, read-logic lives in `actions/`, and role areas are copy-pasted. |
-| 2. System Design & Routing Logic | **C+** | Good direction (pure `side-selection`, new sync `corridor-core`), but `corridor-core.ts` is an **unwired duplicate**, and I/O + decision logic are still fused in a 1,596-line orchestrator. |
-| 3. Performance & Scalability | **C** | Serial OSRM calls in nested loops, no fetch timeouts, full-history scans per run, render-time DB writes, and a cache layer that is **declared but never invalidated**. |
-| 4. Security & Best Practices | **C+** | Guard-first RBAC and error sanitization are excellent (73/73), **but** password hashes/reset tokens leak to the browser, Facilities can escalate/take over accounts, and there is no audit log. |
-| 5. Code Quality & Technical Debt | **B** | `tsc` 0 errors, zero `any`/`@ts-ignore`; but `eslint` reports **7 errors / 9 warnings**, ~8 orphaned components, 8 uncalled-but-reachable Server Actions, and no test script. |
-
-### Top 10 fixes, in priority order
-
-| # | Severity | Issue | Where |
-|---|---|---|---|
-| 1 | **Critical** | Full `User` rows (incl. `passwordHash`, `passwordResetToken`) serialized to client components / returned from actions | `app/operations/adhoc/page.tsx:10-16,46`, `app/facilities/adhoc/page.tsx:12-22,49`, all 5 `app/*/profile/page.tsx`, `actions/route-override.actions.ts:199-225` |
-| 2 | **High** | Facilities role can create Ops/Facilities users, change roles, reset **any** user's password (incl. Super Admin), and hard-delete users | `actions/user-management.actions.ts:90, 498-545, 633-655, 816-848` |
-| 3 | **High** | Password reset: token stored plaintext, URL built from `Host` header, TTL 1h (spec 30 min), other sessions not revoked | `actions/password-reset.actions.ts:16,44,49-52,90,103` |
-| 4 | **High** | No `AuditLog` model or `audit()` service at all (spec rule 7) | `prisma/schema.prisma` |
-| 5 | **High** | No timeouts on OSRM/Nominatim `fetch`; one hung socket stalls RUN MAPPING | `lib/routing/osrm.ts:139-145`, `lib/routing/geocoder.ts:45` |
-| 6 | **High** | Corridor sweep awaits OSRM legs serially in nested loops (≈n² serial calls on cold cache) | `lib/routing/algorithms.ts:451-475, 493-511` |
-| 7 | **High** | `trainRoutePlannerFromHistory` loads **all** RoutePlans (any status, full includes) on every run; non-atomic `deleteMany`+`createMany` | `actions/route-learning.actions.ts:120-131, 206, 237-240` |
-| 8 | **High** | Route Setting page performs an unbounded `Promise.all` of `vehicle.upsert` **on every GET** | `app/facilities/route-setting/page.tsx:71-89` |
-| 9 | **High** | `corridor-core.ts` duplicates ~700 lines of `algorithms.ts` and is imported by nothing (drift risk) | `lib/routing/corridor-core.ts` |
-| 10 | **Medium** | Routing timestamps depend on server timezone (`setHours`/`getHours`), not `Asia/Dhaka` | `lib/routing/algorithms.ts:127-132, 791, 841, 1082`, `actions/route-learning.actions.ts:50-53` |
-
-### Mechanical checks run
-
-| Check | Result |
+| Field | Value |
 |---|---|
-| `npx tsc --noEmit` | ✅ 0 errors |
-| `npx eslint .` | ❌ **7 errors, 9 warnings** (details §5) |
-| `any` / `as any` | ✅ 0 |
-| `@ts-ignore` / `@ts-expect-error` | ✅ 0 |
-| `eslint-disable` | 7 (5 × `no-img-element`, 2 × `exhaustive-deps`) |
-| `as unknown as` | 11 |
-| Test runner / `npm test` | ❌ none configured (19 `node:test` cases run only manually) |
+| Date | 2026-10-08 |
+| Scope | Entire Next.js 16 + Prisma 7 codebase (read-only audit; no code was modified) |
+| Method | 5 parallel evidence-backed deep-dives (architecture, routing design, performance, security, code quality); every finding re-verified in current source |
+| Stack | Next.js 16 App Router · React 19 · strict TS · Tailwind 4 · Prisma 7 + Neon Postgres · OSRM + Nominatim · jose JWT + DB sessions |
+| Prior reports | `SYSTEM_AUDIT_REPORT.md` (v1) and `SYSTEM_AUDIT_REPORT2.md` used only as leads; all items re-checked — many are now fixed (see Appendix C) |
 
----
+**Overall verdict: 3.5 / 5 — solid, well-governed foundation with real engineering discipline (pure routing core, guard-first actions, layered OSRM caching). The remaining debt is concentrated, not systemic: duplicated time/shift helpers, serial bulk loops, untested high-blast-radius actions, and mixed pure+I/O modules.**
 
-## 1. Architecture & Folder Structure
+### Scorecard
 
-### Current state
-
-The top-level split is sound and idiomatic for the App Router: role-scoped route segments (`app/{employee,corporate-employee,operations,facilities,fixed-arrival,super-admin,(auth)}`), Server Actions in `actions/*.actions.ts`, role-scoped UI in `components/{role}/`, shared primitives in `components/ui` (shadcn) and `components/shared`, and a `lib/` with clear sub-domains (`auth`, `rbac`, `queries`, `routing`, `validation`, `constants`, `db`, `date`). No component imports `prisma`; the three client-side imports of `lib/` are type-only.
-
-The weak points are **boundary discipline** and **duplication**:
-
-- **Pages query the DB directly.** 28 of 39 pages import `prisma`; only 12 use `lib/queries/*`. Heaviest inline-query pages: `app/super-admin/dashboard/page.tsx` (7 queries), `app/facilities/route-setting/page.tsx` (6), `app/operations/dashboard/page.tsx` (5). The same `prisma.vehicleDriver.findMany` is repeated in 4 pages (`facilities/adhoc:24`, `route-planning:45`, `route-setting:30`, `vehicles:20`) — the new `lib/queries/fleet.ts` was written to replace these but is imported nowhere.
-- **A page writes to the DB during render** — `app/facilities/route-setting/page.tsx:73` (`prisma.vehicle.upsert` per vehicle driver, every GET).
-- **Server Actions used as read APIs.** Pages call `getWeekRouteOverview` (`app/facilities/automated-route-planner/page.tsx:4`) and `getVehicleShiftPins` (`app/facilities/route-setting/page.tsx:5`); client components fetch via `getGeneratedRouteDetails`, `getRoutePlanDetail`, `getRouteLearningStats` (`auto-route-planner-client.tsx` ~L168). These are uncached, serialized POSTs and each is a publicly reachable endpoint.
-- **Client components bypass the server OSRM client** and hard-code the public demo server: `components/facilities/route-map.tsx:197`, `components/facilities/route-breakdown/index.tsx:110` (`https://router.project-osrm.org`), ignoring `env.OSRM_SERVER_URL`.
-- **`server-only` guards are inconsistent.** 16 lib modules have it; `lib/prisma.ts`, `lib/auth/jwt.ts`, `lib/constants/notification-recipients.ts` and 6 DB-touching routing modules rely on transitive protection via `lib/env.ts`; **`lib/auth/password.ts` has no guard, direct or transitive.**
-- **Copy-paste across role areas.** `employee` vs `corporate-employee` dashboard (22 differing lines), profile (12), adhoc (4); `operations` vs `facilities` allocation-history (4); two change-password forms (`components/employee/` vs `components/auth/`). All 6 role layouts repeat the same `NavSidebar + <main>` shell with hard-coded accent classes (`bg-[rgba(112,188,204,0.15)] text-[#70bccc]`) instead of design tokens.
-- **Error/loading boundaries** exist only at the root (`app/loading.tsx`, `app/error.tsx`, `app/global-error.tsx`); no role segment has its own, so one failing widget blanks the whole shell.
-- **Component modularity.** Oversized client files mixing fetching, mutation, DnD and rendering:
-
-  | File | Lines | Notes |
-  |---|---|---|
-  | `components/facilities/auto-route-planner-client.tsx` | 1,908 | `GeneratedRouteCard` alone ≈1,035 lines / 18 `useState`; imports 4 action modules |
-  | `components/facilities/route-setting/route-setting-client.tsx` | 992 | 21 `useState`, 9 inline sub-components |
-  | `components/facilities/route-map.tsx` | 935 | fetches OSRM itself |
-  | `components/facilities/route-breakdown/VehicleGroupTable.tsx` | 576 | |
-  | `components/facilities/route-breakdown/index.tsx` | 470 | fetches OSRM itself |
-
-  Refresh callbacks (`onRefresh`, `onChanged`, `onRouteUpdated`, `onTimeChange`) are prop-drilled 3–4 levels (`route-breakdown/index.tsx:29-41` → `VehicleGroupTable.tsx:25-37` → `ShiftRow.tsx:10-25`).
-- **Minor:** `proxy.ts:8` lists `/register` as public but no such route exists; 162/213 files are CRLF and the rest LF (no `.gitattributes`).
-
-### Where and How to Improve
-
-- **Enforce the read boundary.** Move every page-level `prisma.*` call into `lib/queries/<domain>.ts` (e.g. `dashboards.ts`, `profile.ts`, `adhoc.ts`). Wire `lib/queries/fleet.ts` into the 4 facilities pages. Then add an ESLint `no-restricted-imports` rule banning `@/lib/prisma` in `app/**/page.tsx`, `app/**/layout.tsx` and `components/**`.
-- **Move read "actions" out of `actions/`.** `get*` functions consumed by Server Components → `lib/queries`. Those needed by client components → either pass from the server component as props or expose a typed route handler (`app/api/.../route.ts`) with GET caching. Keep `actions/` for mutations only.
-- **Delete the render-time write** in `app/facilities/route-setting/page.tsx:71-89`; perform the VehicleDriver→Vehicle sync inside the vehicle-driver mutation actions (`actions/vehicle-driver.actions.ts`) within the same transaction.
-- **Proxy browser OSRM calls** through a server route (`app/api/routing/route/route.ts`) that uses `lib/routing/osrm.ts` (cache + env URL + throttle), and call that from `route-map.tsx` / `route-breakdown/index.tsx`.
-- **Add `import "server-only"`** as the first line of `lib/prisma.ts`, `lib/auth/{jwt,password,session}.ts`, `lib/mailer.ts`, `lib/constants/notification-recipients.ts`, and `lib/routing/{algorithms,osrm,pickup-schedule,route-analysis,route-pattern,geocoder}.ts`.
-- **De-duplicate role areas.** Extract `components/shared/{EmployeeDashboard,ProfilePage,AdHocPage,AllocationHistoryPage}.tsx` taking `role`/`basePath` props; make the `employee` and `corporate-employee` pages 5-line wrappers. Keep a single change-password form.
-- **One `RoleShell` layout** + a `nav-config.ts` map (`role → items, accent token`); replace hard-coded hex accents with Tailwind theme tokens from the design system (`--accent`, `--accent-2`).
-- **Add per-segment `loading.tsx` (skeletons) and `error.tsx`** under each role directory.
-- **Split the mega-components:** `auto-route-planner-client.tsx` → `generated-route-card/` folder with `useRouteCardState`, `useTripDrag`, `RouteCardHeader`, `TripTable`; `route-setting-client.tsx` → one file per inline sub-component. Replace refresh prop-drilling with a small `RoutePlannerContext` (or `useReducer` + context).
-- Add `.gitattributes` (`* text=auto eol=lf`) and drop `/register` from `proxy.ts` public paths.
-
----
-
-## 2. System Design & Routing Logic
-
-### Current state
-
-**Module map (as-is):**
-
-| Module | Role | Pure? |
+| Pillar | Score | One-line summary |
 |---|---|---|
-| `lib/routing/algorithms.ts` (1,596) | Orchestrator: loads DB, geocodes, builds matrices, plans corridors + 10 PM routes, times, persists | ❌ fused I/O + logic |
-| `lib/routing/corridor-core.ts` (722, **untracked**) | Sync corridor planner with injected `LegRoadIndex` + `isSameOffice` | ✅ pure — **but unused** |
-| `lib/routing/osrm.ts` (1,011) | HTTP client, DB caches, plus dead pure helpers | ❌ |
-| `lib/routing/side-selection.ts` | Viterbi side choice, exhaustive ≤7! + Or-opt | ✅ clean |
-| `lib/routing/schedule-math.ts`, `manual-plan-training.ts`, `utils.ts` | Math / helpers | ✅ (except dead `calculateCompletionTime` uses `new Date()`) |
-| `lib/routing/pickup-schedule.ts` | Pure `computePickupSchedule`/`driveLegMinutes` **+** Prisma loaders | ⚠️ mixed |
-| `lib/routing/route-pattern.ts` | Pure pattern helpers (L44-145) **+** Prisma writers | ⚠️ mixed |
-| `lib/routing/route-analysis.ts` | I/O orchestration over `side-selection` | ❌ (expected) |
-| `lib/routing/geocoder.ts` | Nominatim fetch | ❌ (expected) |
-
-**`corridor-core.ts` vs `algorithms.ts`:** `algorithms.ts` is byte-identical to HEAD, and `grep` finds **zero importers** of `corridor-core`. Its header (L17-20) claims "algorithms.ts imports from here" — currently false. The two files duplicate constants (cc 55-98 / alg 66-103), all shape types, `matrixDurationMin`/`matrixDistanceKm`, `distancePointToSegment/PolylineKm`, `arrivalMinutesFromLabel`/`dateForArrivalMinutes`/`hhmmToMinutes`, `poolForOffice`, `errorMessage` and `planCorridorRoutes` itself. The new copy is the better design (synchronous, injected data, `legRoadKm → number | null` with straight-line fallback), but until it is wired in, every tuning change risks silent divergence.
-
-**Purity leaks / misplaced decision logic:**
-
-- Pure functions trapped in I/O modules (importing them pulls in `@/lib/prisma`): `pickup-schedule.ts:135,152`, `route-pattern.ts:44-145`, `osrm.ts:961,985`.
-- Heavy decision logic in action files: `actions/route-override.actions.ts:601-907` (`resolvePresetSequence`, `presetInsertIndex`, `resolveCanonicalPointId`, 176-line `buildRetimeUpdates`, `legDriveMinutes` — which duplicates `pickup-schedule.ts:135` and `algorithms.ts:1342-1358`); `actions/route-analysis.actions.ts:238-325` (pickup/departure math using **OSRM** leg minutes — contradicts the "trained legs only" policy used everywhere else); `actions/route-learning.actions.ts:133-235` (leg aggregation).
-- `actions/route-override.actions.ts:19` imports `errorMessage`/`DYNAMIC_GROUP_CAPACITY` from `algorithms.ts`, dragging the whole Prisma-laden orchestrator into that action.
-- **Helper sprawl:** `hhmmToMinutes` × 4 with different invalid-input semantics (0 vs null), arrival-label→minutes map × 4 (despite `arrivalMinutesForLabel` in `lib/constants/route-shifts`), `shiftKeyForLabel` × 3, bearing math × 2 (`osrm.ts:114` vs `utils.bearingDegrees`).
-- **Timezone-dependent decisions:** `dateForArrivalMinutes` (`algorithms.ts:127-132`, `corridor-core.ts:330`), `departureTime10.setHours(20…)` (`algorithms.ts:841`), `setDate(getDate()+n)` (`algorithms.ts:791,1082`), read back with `getHours()` (`route-learning.actions.ts:50-53`, `route-analysis.actions.ts:320-323`). No `Asia/Dhaka` handling anywhere in routing — on a UTC host "23:00" is stored as 05:00 Dhaka.
-- **Determinism:** `prisma.vehicle.findMany` (`algorithms.ts:1051`) and `weeklyScheduleDay.findMany` (L1022) lack `orderBy`; `nextVehicle()` and stable-sort ties therefore depend on DB return order.
-- **Behaviour/doc mismatch:** docstrings (`algorithms.ts:354-356`, `corridor-core.ts:31-33`) say a candidate failing radius/detour is "SKIPPED", but code uses `break` (`algorithms.ts:597,610`; `corridor-core.ts:699,712`), ending growth of that route.
-- **Learning feedback loop:** `trainRoutePlannerFromHistory` (`route-learning.actions.ts:121-131`) has no status filter and runs *before* drafts are cleared (`route-generation.actions.ts:200` vs `218`), so the planner learns from its own DRAFT/cancelled output; the hard-coded 20:00 placeholder departure (`algorithms.ts:840-841`) is learned as a real office→first-stop leg (`route-learning.actions.ts:179-183`).
-- **God functions (>~150 lines):** `generateCorridorRoutes` (`algorithms.ts:1007-1512`, ~505), `generate10PMRoutes` (648-931, ~283), `planCorridorRoutes` (375-620, ~245), `moveTripToRoute` (`route-override.actions.ts:1063-1293`, ~230), `buildRetimeUpdates` (705-881), `trainRoutePlannerFromHistory` (117-269), `reorderRouteTrips` (914-1062), `finalizeRoute` (324-470).
-- **Magic numbers scattered:** 25 km/h fallback speed (5 sites), 0.05 km zigzag floor, 240-min leg cap vs `MAX_LEG_MINUTES`, fallback office `"Regnum"` (5 sites), 20:00 departure, 23:00 default arrival, 5-min unknown-leg buffer, 500 ms × 4 retry, tx timeouts 30 000/90 000, 135° loop threshold.
-
-**Strengths:** thorough rationale comments; `side-selection.ts` is a model pure module (O(n·k²) Viterbi, tie-stable); per-office try/catch isolation; OSRM outage degrades to haversine; batched cache reads/writes; in-flight polyline de-dupe; corridor path persists with `createMany` and compensating rollback.
-
-### Where and How to Improve
-
-- **Finish the corridor-core extraction (highest leverage):**
-  1. In `generateCorridorRoutes`, gather every candidate leg, prefetch them into a `LegRoadIndex` with bounded concurrency (e.g. `p-limit(4)`; failures → `null`).
-  2. Call the synchronous `planCorridorRoutes` from `corridor-core.ts` with `isSameOffice = (o, k) => normalizeOfficeLocation(o) === k`.
-  3. Add golden tests comparing old vs new planner output on recorded fixtures, then delete the duplicated block in `algorithms.ts` (L66-139, 163-341, 375-620, 629, 935).
-  4. Re-point `route-override.actions.ts:19` imports to `corridor-core`.
-- **Adopt a strict "core / shell" layout** for `lib/routing/`:
-  - `*-core.ts` = pure (no `prisma`, `fetch`, `env`, `Date.now`, `Math.random`): `corridor-core.ts`, `pickup-schedule-core.ts` (move L135-260), `route-pattern-core.ts` (L44-145), `retime-core.ts` (from `route-override.actions.ts:601-907`), `leg-aggregation.ts` (from `route-learning.actions.ts:133-235`, next to `manual-plan-training.ts`), `timing-core.ts` (from `algorithms.ts:1324-1416` → `timeCorridorRoute()`).
-  - shells = `algorithms.ts` (orchestration only), `osrm.ts`, `geocoder.ts`, `*-repo.ts` loaders/writers.
-  - Enforce with ESLint `no-restricted-imports` on `lib/routing/*-core.ts` (ban `@/lib/prisma`, `@/lib/env`, `@/lib/logger`, `./osrm`, `./geocoder`).
-- **Create `lib/routing/constants.ts`** for every magic number above and `lib/routing/time.ts` with a single `hhmmToMinutes` / `arrivalMinutes` / `shiftKeyForLabel`; delete the 3–4 copies.
-- **Make time zone explicit:** add `lib/date/zoned.ts` with `zonedMinutesToUtc(dayDate, minutes, "Asia/Dhaka")` and `utcToZonedMinutes(...)`; replace every `setHours`/`getHours`/`setDate` in routing and route actions.
-- **Make planning deterministic:** add `orderBy: { vehicleNumber: "asc" }` / `{ id: "asc" }` at `algorithms.ts:1022,1051` and explicit tie-breakers (employee id) in every sort comparator.
-- **Fix the learning loop:** filter `status: { in: ["FINALIZED","EXECUTED"] }`, exclude the 20:00 placeholder departure from leg learning, wrap `deleteMany`+`createMany` in `$transaction`, and train incrementally (cursor on `updatedAt`) instead of full rebuild.
-- **Decide the OSRM-vs-trained-legs policy** for `route-analysis.actions.ts:238-325` and make it consistent with the rest of the pipeline.
-- **Resolve `break` vs "skip" semantics** at `algorithms.ts:597,610` — either change to `continue` or correct the docstrings, and add a test that pins the chosen behaviour.
-- **Break up the god functions:** `generateCorridorRoutes` → `loadInputs → resolveHomes → buildMatrix → buildLegIndex → plan → time → persist`, each independently testable.
+| 1. Architecture & Folder Structure | 3.4 / 5 | Textbook tree and App Router split; 17 oversized files drag modularity down |
+| 2. System Design & Routing Logic | 3.2 / 5 | Pure-core/orchestration split is real; same helpers re-implemented 2–5× |
+| 3. Performance & Scalability | 3.4 / 5 | Caching, batching, timeouts largely fixed; 4 serial bulk loops remain High severity |
+| 4. Security & Best Practices | 4.0 / 5 | 69/69 actions guard-first, no injection/mass-assignment; 2 raw-error leaks to fix |
+| 5. Code Quality & Technical Debt | 3.2 / 5 | Zero `any`, zero suppressions, clean lint; duplication (2/5) is the weakest sub-area |
 
 ---
 
-## 3. Performance & Scalability
+## Executive Summary — Top 10 risks (severity-ordered)
 
-### Current state
-
-**I/O concurrency**
-
-- **Serial OSRM in nested loops (biggest latency hot spot):** the corridor sweep awaits `legRoadKm` per route × member × position (`algorithms.ts:451-475, 493-511`). With the 350 ms public-server throttle, ~60 homes ≈ 3,500 legs ≈ ~20 min cold.
-- **No fetch timeouts:** `osrm.ts:139-145` and `geocoder.ts:45` — no `AbortSignal`. Retries (L147-149, 177-180) are linear 500·n ms without jitter, and network `TypeError`s are not retried.
-- **Racy throttle:** `lastRequestAt` check-then-set across `await sleep` (`osrm.ts:107-109, 136-142`) lets concurrent callers fire together; the throttle is disabled whenever `OSRM_SERVER_URL` is set — and `.env.example:39` sets it to the public demo URL. The promised "bounded concurrency" limiter (L102-105) does not exist.
-- **Distance matrix:** `getDistanceMatrix` (`osrm.ts:335-342`) sends `[...origins, ...destinations]` and the caller passes the same list twice (`algorithms.ts:1157`) → 2n coordinates; >~49 riders exceeds the public table cap and silently falls back to haversine (`algorithms.ts:1158-1185`) with no surfaced warning. Expired `DistanceMatrixCache` rows are never refreshed because `createMany({ skipDuplicates })` (`osrm.ts:296-299`) is blocked by the expired row.
-- **Independent sequential awaits** that should be `Promise.all`: `app/operations/weekly-requests/page.tsx:40,54,73,86`; `app/facilities/route-planning/page.tsx:45,51,66,112`; `app/operations/adhoc/page.tsx:10,23`; `app/operations/dashboard/page.tsx:27,46`; `app/employee/profile/page.tsx:14,18`; `actions/route-generation.actions.ts:773,788`; `actions/route-override.actions.ts:1074/1093, 1193/1201, 1256/1261`; `lib/routing/route-analysis.ts:341/346, 391/423`; `actions/manual-route-plan.actions.ts:240,248`. Different days in `route-generation.actions.ts:231-263` run serially although only 11 PM→10 PM within a day is dependent.
-- **Unbounded `Promise.all` (Neon pool pressure):** `ensureFixedArrivalSchedules` ≈6×N upserts (`route-generation.actions.ts:92-133`); `facilities-profile.actions.ts:54-71`; `app/facilities/route-setting/page.tsx:71`; bulk-user bcrypt over all rows (`user-management.actions.ts:323-333`, pure-JS `bcryptjs` → blocks the event loop ~80 ms/row and hashes rows later skipped).
-- **`$transaction` usage is healthy:** all are batch/array form with no OSRM/email inside. The global `timeout: 90000` in `lib/prisma.ts` can hold a pooled connection for 90 s.
-
-**N+1 / over-fetch**
-
-- 10 PM path: up to 2 `pickupPoint.findFirst` per employee (`algorithms.ts:704-731`); per vehicle `findMany` (L760) + `findUnique` (L774) + `ensurePickupPointSchedule` (L779, re-reads vehicle and calls `loadLearnedLegs`); per-trip `tripAssignment.create` loop (L895-910), non-transactional delete-then-create (L868-892) with `.catch(() => undefined)`.
-- `loadLearnedLegs` (`pickup-schedule.ts:293-308`) scans the full `routeLegLearning` table + all users with addresses, re-run per vehicle × shift × day.
-- Per corridor route: `routeTemplate.findUnique` (L1293) + `routePlan.findUnique` (L1423).
-- Day-sheet bulk save: ~4 sequential round trips per row + one `after()` SMTP send per row (`route-assignment.actions.ts:60-77, 88-93, 300-330`); the `vehicleDriver.findUnique` at L93 is redundant with the map at L276-282.
-- Bulk weekly upload: `create` + 5 upserts per row (`weekly-schedule.actions.ts:668-718`).
-- `trainRoutePlannerFromHistory` (`route-learning.actions.ts:120-131, 206`): every RoutePlan with trips, full employees, addresses and the large `routeAnalysis` JSON, on every RUN MAPPING.
-- **Unbounded reads:** `app/operations/adhoc/page.tsx:10` (no `take`), `app/facilities/adhoc/page.tsx:12` (includes ever-growing REJECTED), `app/facilities/profile-approvals/page.tsx:12`; `getAllUsers`/`getEmployeeDirectory` (`lib/queries/users.ts:21,89`) filter `q` in memory.
-- **Correctness bug:** `lib/queries/reports.ts:35-56` applies the date range **in memory after `take: 1000`**, so older ranges silently return nothing.
-- `distinct: ["weekStartDate"]` (`weekly-requests/page.tsx:40`, `route-planning/page.tsx:51`) reads all WeeklySchedule rows; `getRouteDayStats` includes trips only to count them; `getGeneratedRouteDetails` ships the whole week's `routeAnalysis` geometry JSON on every refresh.
-
-**Caching (`unstable_cache` / tags)**
-
-- `lib/cache-tags.ts:1-20` documents `updateTag()` invalidation, but there are **zero** `updateTag`/`revalidateTag` calls in `actions/`, `lib/` or `app/`. The only `unstable_cache` readers (`lib/queries/fleet.ts:27,77`) are imported nowhere. If wired as-is, data would be stale for up to 300 s after every mutation.
-- `getTransportSettings` (`lib/queries/settings.ts:19`) is listed as cached but is not — a singleton row read on 5 pages + 2 actions.
-- No per-user data is cached under a shared key (good); `revalidatePath('/', 'layout')` is never used (good). All invalidation is currently via `revalidatePath`.
-- In-process caches `polylineCache` (`osrm.ts:561`) and geocoder `cache` (`geocoder.ts:21`) are unbounded Maps; the DB polyline key ignores bearing while the memory key includes it (`osrm.ts:605-623` vs 761); geocoder cache key ignores `limit`.
-
-**Indexes (`schema.prisma` + new migration)**
-
-- **Redundant:** `TripAssignment @@index([routePlanId])` and `[routePlanId, vehicleId]` (L584-585) — covered by `@@unique([routePlanId, employeeId, weeklyScheduleDayId])`; `PickupPoint @@index([vehicleId, sequence])` (L410) duplicates its `@@unique` (L409); `[isActive]` (L415) is a low-selectivity boolean; single-column `AdHocRequest[status]` (L261), `EmailNotificationLog[routeAssignmentId]` (L323), `WeeklySchedule[status]` (L207), `User[role]` (L71) are now prefixes of new composites; `RoutePlan[vehicleId, dayDate, arrivalTime]` (L528) duplicates the unique at L522.
-- **Missing FK indexes** (Postgres does not auto-index FKs): `RoutePlan.previousRoutePlanId` (L499 — checked on every draft delete), `RoutePlanOverride.routePlanId` (L591 — cascade target), `TripAssignment.pickupPointId` (L549) / `pickupAddressId` (L552), `ManualRoutePlanEntry.employeeId` (L688, queried with `IN`), `reviewedById` on the three change-request tables.
-- **Un-indexable lookups:** `mode: "insensitive"` on `pickupPoint.name` (`algorithms.ts:721-731`, `facilities-profile.actions.ts:142-148`) and on email/fullName `IN` (`manual-route-plan.actions.ts:240-251`).
-
-**Email**
-
-- Most sends correctly use `after()` (route assignment, finalize, bulk uploads, on-behalf, password reset, profile).
-- `actions/weekly-schedule.actions.ts:295` calls `sendScheduleSubmittedNotice(...)` with neither `await` nor `after()` — can be dropped on serverless.
-- Bulk paths use unbounded `Promise.allSettled` over recipients with a non-pooled transporter (`lib/mailer.ts:16-26`) → N simultaneous TLS connections.
-- `finalizeRoute` stamps `emailSentAt` even when sends fail, because `sendMailBackground` never rejects, and writes no `EmailNotificationLog` (`route-override.actions.ts:440-449`).
-- `lib/auth/session.ts:53` `void deleteExpiredSessions()` should be in `after()`.
-
-**Client bundle:** fine — Leaflet is `next/dynamic({ ssr: false })` in both consumers; layouts are server components; only concern is the 1,908-line single client tree.
-
-### Where and How to Improve
-
-- **Add timeouts + a real limiter to all outbound HTTP:** `fetch(url, { signal: AbortSignal.timeout(10_000) })` in `osrm.ts` and `geocoder.ts`; wrap in try/catch to retry network errors with exponential backoff + jitter; replace the `lastRequestAt` throttle with a promise-chain mutex / token bucket keyed by **hostname** (throttle `router.project-osrm.org` and `nominatim.openstreetmap.org` regardless of env), plus `p-limit(n)` for fan-out.
-- **Prefetch legs in parallel, plan synchronously** (see §2) — turns ~n² serial OSRM awaits into bounded-parallel batches + pure CPU.
-- **Fix the matrix call:** dedupe coordinates and use OSRM `sources=`/`destinations=` indices on a single coordinate list; chunk above the server cap; push a user-visible warning into `errors` when falling back to haversine; on expired cache rows, `deleteMany` expired pairs before `createMany` (or upsert); add a cleanup job for expired cache rows.
-- **Kill the N+1s in generation:** preload active pickup points, vehicles, route templates and existing RoutePlans once per day/shift into Maps; memoize `loadLearnedLegs` per run per `shiftKey`; replace the per-trip `create` loop with `createMany` inside `$transaction` (matching the corridor path).
-- **Bound fan-outs:** `p-limit(5–10)` for `ensureFixedArrivalSchedules` (or nested `create` + `createMany`), `facilities-profile.actions.ts:54-71`, and bulk bcrypt (hash only rows that will be created; consider native `bcrypt`/argon2).
-- **Batch the day-sheet save:** one `findMany` for all days, one `$transaction([...upserts])`, one `createMany` for email logs, and a single `after()` that sends all emails through a pooled transporter.
-- **Parallelize independent awaits** at every location listed above with `Promise.all`, and run different days in `route-generation.actions.ts:231-263` with limited concurrency.
-- **Bound every list query:** add `take` + cursor pagination to ad-hoc / profile-approvals pages, exclude old REJECTED rows by date, push `q` filtering into Prisma `where` (`contains`, `mode: "insensitive"` + a trigram/`lower()` index), and **move the date range into `where` in `lib/queries/reports.ts`** (as `allocation-history.ts:58-66` already does).
-- **Slim `trainRoutePlannerFromHistory`:** `select` only `arrivalTime`, `officeLocation`, `departureTime`, trips' `sequenceInTrip`/`pickupTime`/stop keys; window to the last N weeks; filter by status; wrap rebuild in `$transaction`.
-- **Wire the cache layer correctly before using it:**
-  - `lib/queries/fleet.ts` → used by the 4 facilities pages and `route-assignment.actions.ts:276`.
-  - Cache `getTransportSettings` under tag `settings`.
-  - In mutation Server Actions call `updateTag(CACHE_TAGS.x)` (read-your-writes): `vehicle-driver.actions.ts:60,94,190,211`; `pickup-point.actions.ts` (L33,117,188,220); `route-setting.actions.ts` (L77-107,127,208,331,434,480); `facilities-profile.actions.ts` (L54-71,103-110,150-157); `route-analysis.actions.ts:379`; `settings.actions.ts:47`.
-  - Outside Server Actions (e.g. `pickup-schedule.ts:385,539` running in `after()`), use `revalidateTag(CACHE_TAGS.pickupPoints, "max")` (Next 16 two-arg form).
-  - Add an LRU cap/TTL to `polylineCache` and the geocoder cache; include bearing in the DB polyline key and `limit` in the geocoder key.
-- **Index migration (follow-up):**
-  - **Add:** `RoutePlan(previousRoutePlanId)`, `RoutePlanOverride(routePlanId)`, `TripAssignment(pickupPointId)`, `TripAssignment(pickupAddressId)`, `ManualRoutePlanEntry(employeeId)`, `reviewedById` on change-request tables; `lower()` expression indexes (raw SQL in migration) for case-insensitive name/email lookups, or store normalized columns.
-  - **Drop (after confirming with `pg_stat_user_indexes`):** `TripAssignment[routePlanId]`, `[routePlanId, vehicleId]`, `PickupPoint[vehicleId, sequence]`, `PickupPoint[isActive]`, `RoutePlan[vehicleId, dayDate, arrivalTime]` (replace with plain `[vehicleId]`), and the single-column prefixes superseded by composites.
-- **Email reliability:** wrap `weekly-schedule.actions.ts:295` in `after()`; enable `pool: true, maxConnections: 3, connectionTimeout, socketTimeout` in `lib/mailer.ts`; bound bulk sends; in `finalizeRoute` use `trySendMail` + `EmailNotificationLog` and stamp `emailSentAt` only on success; move `deleteExpiredSessions` into `after()`.
-- **Move RUN MAPPING off the request path** (long-term): enqueue a job (e.g. Vercel Queues / Inngest / a `RouteGenerationJob` table + cron worker) and poll status from the UI.
-- Lower the global Prisma transaction `timeout` from 90 s to the minimum each call site needs (pass per-call `timeout` where larger is genuinely required).
+| # | Risk | Where | Severity | Effort |
+|---|---|---|---|---|
+| 1 | Raw DB/driver error messages returned to client | `actions/route-assignment.actions.ts:182-185`, `:456-460` | **High** | S — swap to `sanitizedActionError` + fixed per-row strings |
+| 2 | Bulk CSV loops do 100s–1000s of serial DB writes + serial bcrypt | `actions/manual-route-plan.actions.ts:287-342`, `actions/weekly-schedule.actions.ts:677-803`, `actions/user-management.actions.ts:400-633` | **High** | M — `createMany`/`updateMany` + `mapWithConcurrency` |
+| 3 | Cold route generation is serial across homes (geocode throttle × N) | `lib/routing/algorithms.ts:707-724` + `resolveHomeAddress` (`:127-166`) | **High** | M — concurrent resolve with preloaded addresses |
+| 4 | Arrival-minutes map copied ×4 with divergent invalid-input behavior (one silently maps garbage → 11 PM) | `lib/routing/corridor-core.ts:314-328` vs `lib/constants/route-shifts.ts:76-86` vs `actions/route-generation.actions.ts:148-163` vs `actions/route-learning.actions.ts:60-74` | **High** | S — consolidate on `route-shifts.ts` |
+| 5 | Ad-hoc write path skips UTC-midnight normalization (server-TZ day-boundary bug) | `actions/on-behalf.actions.ts:240`, `lib/queries/allocation-history.ts:42` | **Med-High** | S — route through `toUtcMidnight` |
+| 6 | Day-sheet / legacy planner paths do serial DB + in-request SMTP per row | `actions/route-assignment.actions.ts:327-384`, `:427-466` | **High** (latency) | M — preload + bounded concurrency + `after()` mail |
+| 7 | Highest-blast-radius logic (week state machine, approvals, replicate/copy, role gates) has zero tests | `actions/*` (20 files), `lib/rbac/guards.ts`, `lib/auth/*` | **Med-High** | M — add action-level tests first |
+| 8 | Pure helpers trapped in `server-only`+Prisma modules (untestable without DB) | `lib/routing/route-pattern.ts:1-3`, `lib/routing/pickup-schedule.ts:32-33`, `lib/routing/route-analysis.ts:22-24` | **Medium** | S — split `-pure.ts` modules |
+| 9 | RBAC role-list drift: some Facilities actions exclude SUPER_ADMIN (fail-closed 403s) + `facilities/layout` vs `proxy.ts` gate mismatch | `actions/facilities-profile.actions.ts:104,145`, `actions/route-assignment.actions.ts:131,298,406,469,500`, `app/facilities/layout.tsx:10` vs `proxy.ts:20,77-79` | **Medium** (functional) | S — unify lists |
+| 10 | 17 files >400 lines (2 >990); geo/date math inside client components | `actions/route-override.actions.ts` (1177), `components/facilities/route-map.tsx:113-230`, etc. | **Medium** | L — incremental extraction |
 
 ---
 
-## 4. Security & Best Practices
+## Pillar 1 — Architecture & Folder Structure
 
-### Current state
+### Current state (3.4/5)
 
-**What is done well (keep it):**
+The top-level tree (`app/`, `actions/`, `components/`, `lib/`, `hooks/`, `prisma/`, `scripts/`, `docs/`) is textbook and discoverable. The App Router split is exemplary where it matters most: only 2 API routes exist (`api/health`, `api/routing/route` — both correctly force-dynamic/authed), everything else is Server Actions, and `proxy.ts` (not legacy `middleware.ts`) implements a clean Edge-safe JWT check with DB authority deferred to layouts/actions. `lib/` shows genuine domain separation (`routing/`, `date/`, `validation/`, `auth/`, `rbac/`, `constants/`, `queries/`, `db/`), `components/` has a correct 3-tier split (`ui/` primitives, `shared/` cross-role, per-role feature folders), and layering is clean in the critical direction: zero Prisma/DB imports in `components/`, zero upward imports (`lib/*` never imports `components`/`app`/`actions`), and `server-only` coverage is complete on all DB-touching modules. The score is held back by modularity, not structure: 17 files exceed 400 lines, geo-math and date-math live inside client components, and 26 `app/` pages query Prisma inline instead of using the `lib/queries/` layer built for that purpose.
 
-- **Guard-first RBAC is consistent:** all 73 non-public Server Actions call `requireRole`/`requireAuth` as the first statement, **outside** `try/catch`, before any I/O. The 4 public entry points (login, logout, request-reset, reset) are intentional.
-- **Error sanitization is consistent:** every catch uses `lib/actions/action-error.ts` (logs raw, returns generic, rethrows `NEXT_REDIRECT`, maps P2002 to a friendly message). No `error.message` or Prisma error text is returned from any action.
-- **No IDOR:** every employee-scoped action uses `session.id`, never a client-supplied id (`submitAdHocRequest`, `updateProfile`, `saveFixedArrivalTime`, `submitCorporateWeeklySchedule`, `submitMySchedule`, `changePasswordAction`, `selfChangePasswordAction`).
-- **No mass assignment:** all Prisma `data` objects are built from whitelisted fields.
-- **No unsafe SQL:** the only raw query is the tagged-template `` $queryRaw`SELECT 1` `` (`app/api/health/route.ts:24`).
-- **Sessions:** HS256 via jose, secret from env (no fallback), `jti` validated against a DB `Session` row on every `getSession` (revocation + `isActive` honoured), cookie `httpOnly` + `secure` (prod) + `sameSite=lax`. Security headers set in `next.config.ts` (nosniff, frame DENY, Referrer-Policy, HSTS in prod, `poweredByHeader: false`). No open redirects. No secrets in tracked code. Forgot-password response is enumeration-safe.
-
-**Per-file guard coverage:**
-
-| File | Exports | Guard-first | Allowed roles | zod | Audit |
-|---|---|---|---|---|---|
-| adhoc | 4 | 4/4 | EMP+CORP / OPS | ✗ | ✗ |
-| auth | 4 | 2 public + 2/2 | — | ✓ | ✗ |
-| facilities-profile | 4 | 4/4 | FAC (3), FAC+SA (1) | ✗ | ✗ |
-| fixed-arrival | 1 | 1/1 | FIXED_ARRIVAL | ✗ | ✗ |
-| manual-route-plan | 1 | 1/1 | FAC+SA | ✗ | ✗ |
-| on-behalf | 2 | 2/2 | OPS | ✗ | ✗ |
-| password-reset | 2 | public | — | ✓ | ✗ |
-| pickup-point-change | 2 | 2/2 | FAC | ✗ | ✗ |
-| pickup-point | 4 | 4/4 | FAC+SA | ✗ | ✗ |
-| profile | 1 | 1/1 | EMP+CORP | ✗ | ✗ |
-| route-analysis | 3 | 3/3 | FAC+SA | ✗ | 2/3 (override log) |
-| route-assignment | 5 | 5/5 | FAC (4), FAC+SA (1) | ✗ | ✗ |
-| route-generation | 7 | 7/7 | FAC+SA | ✗ | ✗ |
-| route-learning | 3 | 3/3 | FAC+SA | n/a | ✗ |
-| route-override | 9 | 9/9 | FAC+SA | ✗ | 5/9 (override log) |
-| route-setting | 7 | 7/7 | FAC+SA | partial/manual | ✗ |
-| settings | 1 | 1/1 | SA | manual | ✗ |
-| user-management | 7 | 7/7 | **FAC allowed on create/bulk/resend/setPw/delete** | 1/7 | ✗ |
-| vehicle-driver | 4 | 4/4 | FAC | manual | ✗ |
-| weekly-schedule | 6 | 6/6 | CORP / OPS | manual | ✗ |
-
-**Findings:**
-
-| ID | Sev | Finding | Location |
-|---|---|---|---|
-| S1 | **Critical** | **Password hashes and live reset tokens reach the browser.** Full `User` rows (`include: { employee: true }` / `findUniqueOrThrow` with no `select`) are passed as props to `"use client"` components and serialized into the RSC payload: Operations sees *every* requester's hash on the ad-hoc page; Facilities likewise; each profile page ships the user's own hash/token. `adjustPickupTime` returns `assignment: updated` with `employee: true` to two client callers. Combined with S3 (plaintext tokens), any outstanding reset token = account takeover. | `app/operations/adhoc/page.tsx:10-16,46`; `app/facilities/adhoc/page.tsx:12-22,49`; `app/{employee,corporate-employee,operations,facilities,fixed-arrival}/profile/page.tsx` → `components/shared/profile-hero-card.tsx`; `actions/route-override.actions.ts:199-225` (callers `auto-route-planner-client.tsx:1136`, `route-breakdown/hooks/useDragActions.ts:103`); also uncalled exports `reassignEmployeeToVehicle` (L102-117), `getRouteDetails` (L512-538), `getPendingRoutes` (`route-generation.actions.ts:484-497`) |
-| S2 | **High** | **Privilege escalation / account takeover by Facilities.** `createUserAction` allows FACILITIES and only blocks SUPER_ADMIN targets (L90, 112) → Facilities can mint OPERATIONS/FACILITIES accounts with chosen passwords. `bulkCreateUsersAction` update branch can change roles (L520) and overwrite passwords (L536) of any non-SA user. `resendCredentialsAction` (L633-655) has no target-role check → Facilities can reset a **Super Admin's** password. `deleteUserAction` (L816-848) lets Facilities hard-delete Ops/Facilities users and their history. (`setUserPasswordAction:775` correctly limits FAC to EMPLOYEE targets — apply the same rule everywhere.) Spec: only Super Admin creates users. | `actions/user-management.actions.ts` |
-| S3 | **High** | **Password-reset hardening.** Token stored and compared in plaintext (L44, L90, `app/(auth)/reset-password/[token]/page.tsx:12`); reset URL built from the request `Host` header → host-header poisoning (L49-52); TTL 1 h vs spec 30 min (L16); find-then-update is non-atomic. | `actions/password-reset.actions.ts` |
-| S4 | **High** | **No audit log.** No `AuditLog` model; only partial trails via `RoutePlanOverride` and `reviewedById/At`. User create/delete/role/password/activation, settings, profile edits, approvals, finalize/cancel and vehicle CRUD are unaudited — and deletes are hard deletes. | `prisma/schema.prisma` |
-| S5 | Medium | **Credential change doesn't revoke other sessions.** `rotateSession` destroys only the current session; `resetPasswordAction` (L103), `setUserPasswordAction` (`user-management:780`), `resendCredentialsAction` (L652), bulk overwrite (L536) and `updateUserRoleAction` never delete the target's `Session` rows. | `lib/auth/session.ts:139-142` + callers |
-| S6 | Medium | **No rate limiting / lockout** on `loginAction`, `requestPasswordResetAction` (email bombing), `resetPasswordAction`. | `actions/auth.actions.ts`, `actions/password-reset.actions.ts` |
-| S7 | Medium | **Admin-set passwords emailed in plaintext and `mustChangePassword: false`.** | `actions/user-management.actions.ts:150,155-161,568,593-598` |
-| S8 | Medium | **HTML injection in emails** — user-controlled name/address/reason interpolated unescaped into HTML sent to staff inboxes. | `actions/profile.actions.ts:114,118,122`; `on-behalf.actions.ts:251`; `weekly-schedule.actions.ts:65`; `route-override.actions.ts:408,421`; `lib/email-templates.ts:46-63` |
-| S9 | Medium | **Runtime validation is thin.** zod used only in auth/password-reset + `setUserPasswordSchema`. Object-arg actions trust TS types: `pickup-point.actions.ts:171-177` (`baseETA`, `name`), `route-analysis.actions.ts:89-180` (unbounded `geometry`/`viaPoints`/`totals` JSON persisted), route-override args, `facilities-profile:42-44`; no `max()` on free text. | `actions/*` |
-| S10 | Medium | **Business-rule gaps with security impact.** Employees change their own address directly (`profile.actions.ts:83-96`) — spec requires Operations approval. `upsertAssignmentForWeeklyDay` doesn't check APPROVED / `needsTransport` (`route-assignment.actions.ts:89-114`); `replicateAcrossWeek` overwrites already-allocated days (L365-376). | as listed |
-| S11 | Medium | **Upload DoS.** No explicit file-size / row caps on CSV uploads (only Next's default 1 MB body); parallel bcrypt of every row. Dev "test mode" skips email/phone validation outside prod (`user-management.actions.ts:63-70`, mirrored in `components/super-admin/add-employee-dialog.tsx:30`) — TODO says remove. | `actions/user-management.actions.ts:323-333` |
-| S12 | Low | Unauthenticated `/api/health` returns raw DB error text and config warnings (e.g. "SESSION_SECRET is not set"). | `app/api/health/route.ts:27,39` |
-| S13 | Low | Login timing oracle — returns before bcrypt when the user is missing. | `actions/auth.actions.ts:41` |
-| S14 | Low | Weak policies: `SESSION_SECRET` min 16 chars (`lib/env.ts:29`); password rule only `min(8)` (spec: 1 uppercase + 1 number). | `lib/env.ts`, `lib/validation/schemas.ts` |
-| S15 | Low | `mustChangePassword` enforced only in `proxy.ts:306`, not in `requireRole`; Server Actions can be POSTed from any path. | `lib/rbac/guards.ts` |
-| S16 | Low | Raw SMTP error strings returned to staff. | `user-management.actions.ts:670`, `route-assignment.actions.ts:517` |
-| S17 | Low | Check-then-update races: approve/reject ad-hoc and pickup-point-change don't put `status: PENDING` in the `where`; `approvePickupPointChange` (L44-56) does 2 writes without a transaction; `rejectSchedule` (`weekly-schedule:437-452`) never checks status (APPROVED can be rejected). | as listed |
-| S18 | Low | Role lists drift from spec/comments: approvals and on-behalf are `[OPERATIONS]` only (spec includes SA); several Facilities actions exclude SA despite the `proxy.ts:254` comment claiming "all 41". Role change leaves the JWT role claim stale (DB guards remain correct). | `actions/*`, `proxy.ts:254` |
-| S19 | Low | Intentional user-facing messages thrown inside `try` are replaced by the generic sanitized message (safe, but poor UX). | `route-override.actions.ts:153,161,259,483`; `route-generation.actions.ts:276,344` |
-| S20 | Low | JWT payload cast with `as unknown as` rather than schema-validated; no refresh / sliding session (spec: 30 min access + 7 d refresh). | `lib/auth/jwt.ts:42` |
+Sub-scores: tree/discoverability 4 · App Router implementation 4 · DDD separation 4 · modularity/SoC 2 · layering 3.
 
 ### Where and How to Improve
 
-- **S1 — never send Prisma rows to the client.**
-  - Replace every `employee: true` / `user: true` / bare `findUniqueOrThrow` that flows to a client component or action return with an explicit `select` (e.g. `{ id, fullName, employeeCode, email, role, contactNumber }`).
-  - Introduce DTO mappers in `lib/queries/*` (`toEmployeeSummary(user)`) and return only DTOs from Server Actions.
-  - Add a Prisma client extension (`$extends({ result: { user: { passwordHash: { needs: {}, compute: () => undefined } } } })`) or `omit: { user: { passwordHash: true, passwordResetToken: true, passwordResetExpires: true } }` as a global default (Prisma 7 `omit` client option) so the hash can never be loaded accidentally.
-  - Also slim `lib/auth/session.ts` `include: { user: true }` (runs on every guarded request).
-  - Delete the uncalled exported actions (`getPendingRoutes`, `getRouteDayStats`, `reassignEmployeeToVehicle`, `swapEmployees`, `cancelRoute`, `getRouteDetails`, `setPickupPointActive`, `createVehicle`) — each is a reachable POST endpoint.
-- **S2 — lock down user management.** Make `createUserAction`, `bulkCreateUsersAction`, `deleteUserAction`, `resendCredentialsAction` `[SUPER_ADMIN]` only. If Facilities genuinely needs onboarding, add a shared `assertCanManageTarget(actor, targetRole, newRole?)` helper that restricts Facilities to `EMPLOYEE`/`FIXED_ARRIVAL` for **both** the new role and the existing target on every path (create, bulk-update branch, resend, set-password, delete).
-- **S3 — reset flow.** Store `sha256(token)` only; compare hashes; set TTL to 30 min; consume atomically with `updateMany({ where: { passwordResetTokenHash, passwordResetExpires: { gt: now } }, data: { … token: null } })` and check `count === 1`; build URLs from `env.APP_URL`/`FRONTEND_URL`, never `headers().get("host")`.
-- **S4 — audit log.** Add `AuditLog { id, actorId, actorRole, action, entityType, entityId, before Json?, after Json?, description, createdAt }` with `@@index([createdAt])`, `@@index([actorId])`, `@@index([entityType, entityId])`; create `lib/audit.ts` exporting `audit(tx, {...})` and call it inside the same `$transaction` as every mutation. Prefer soft-delete (`deletedAt`) for users.
-- **S5 —** on every credential or role change: `prisma.session.deleteMany({ where: { userId } })` (keep current session only for self-change).
-- **S6 —** add per-IP + per-email rate limits (Upstash Ratelimit, or a `LoginAttempt` table with sliding window) and temporary lockout after N failures.
-- **S7 —** set `mustChangePassword: true` for admin-created accounts, or (better) email a one-time set-password link instead of a plaintext password.
-- **S8 —** add `lib/html.ts` `escapeHtml()` and apply it to every interpolated value in email templates (or move templates to React Email, which escapes by default).
-- **S9 —** one zod schema per action in `lib/validation/schemas.ts` (with `.max()` on strings/arrays and a size cap on JSON geometry); parse at the top of each action right after the guard. A small `withAction(roles, schema, handler)` wrapper would standardize guard → parse → try/sanitize.
-- **S10 —** route address changes through an `AddressChangeRequest` approval; in `upsertAssignmentForWeeklyDay` require `schedule.status === APPROVED && day.needsTransport`; make `replicateAcrossWeek` skip already-allocated days.
-- **S11 —** check `file.size` (e.g. ≤ 2 MB) and row count (e.g. ≤ 2,000); validate rows first, then hash with bounded concurrency; remove the `isProd()` test-mode bypass (or gate it behind an explicit `ALLOW_TEST_ACCOUNTS=1` that `env.ts` refuses in production).
-- **S12–S20 —** `/api/health` returns only `{ status, db: "ok"|"down" }` publicly; compare against a dummy bcrypt hash when the user is missing; raise `SESSION_SECRET` min to 32 and enforce the spec password regex; enforce `mustChangePassword` inside `requireRole` for mutations; map SMTP errors to generic text; use `updateMany({ where: { id, status: PENDING } })` + count check inside `$transaction` for all approvals; reconcile role lists with the spec and fix the `proxy.ts:254` comment; return `{ error }` for intentional user messages instead of throwing; validate the JWT payload with zod.
+- **Fix the SUPER_ADMIN gate mismatch (functional bug).** `app/facilities/layout.tsx:10` allows only `[Role.FACILITIES]`, but `proxy.ts:20,77-79` explicitly permits SUPER_ADMIN into `/facilities` and `app/facilities/automated-route-planner/page.tsx:22` allows both roles — the layout 403s a user the proxy and page admit. Change the layout guard to `[Role.FACILITIES, Role.SUPER_ADMIN]` to mirror `proxy.ts` (whose own comment at `:13-19` requires exact mirroring).
+- **Extract client-embedded domain math into `lib/`.** Move `components/facilities/route-map.tsx:132-230` (`geometryCache`, `fetchRoadGeometry`, `nearestIndex`, `pointAt`, `bearingDeg`, `compassLabel`) to a client-safe `lib/routing/client-geometry.ts` (no `server-only`); hoist the duplicated `toISODate()` (`auto-route-planner-client.tsx:49`, `route-setting-client.tsx:56`) and the inlined `+ days*86400000` week-shift arithmetic (`auto-route-planner-client.tsx:138`, `route-setting-client.tsx:462`) into `lib/date/week.ts` exports.
+- **Split the five monoliths, starting with the two clients.** `actions/route-override.actions.ts` (1177 lines), `components/facilities/route-setting/route-setting-client.tsx` (993), `components/facilities/route-map.tsx` (891), `components/facilities/auto-route-planner-client.tsx` (766). Follow the existing `route-breakdown/` precedent (index + `ShiftRow` + `VehicleGroupTable` + `hooks/`): extract per-shift/per-vehicle subcomponents and per-domain action groups. Add a shared `useServerAction` hook (kills the triplicated `useActionState` scaffolding in `resend-credentials-dialog.tsx`, `set-password-dialog.tsx`, `bulk-upload-dialog.tsx`) so `hooks/` grows past its current single file.
+- **Route `app/` reads through `lib/queries/`.** 26 pages/layouts import Prisma directly (e.g. `app/operations/weekly-requests/page.tsx:64,68,86`, `app/facilities/layout.tsx:12-14` for a badge count). Move these behind `lib/queries/` functions and apply `withDbRetry` uniformly (today only `app/facilities/dashboard` uses it) for Neon cold-start resilience.
+- **Add per-segment loading/error boundaries for the heavy routes.** Only root `app/loading.tsx` and `app/error.tsx` exist; add `loading.tsx` under `app/facilities/route-planning/`, `automated-route-planner/`, and `operations/weekly-requests/` so planning runs stream instead of blank-screening. Consider `forbidden.tsx` + `forbidden()` over the static `app/403/page.tsx` (non-blocking, idiomatic).
+- **Housekeeping.** Delete or `.gitignore` the committed `lib/generated/` Prisma output (~55 files); relocate `lib/actions/action-error.ts` to `lib/` root (the `actions/` vs `lib/actions/` name collision confuses imports); group `actions/route-*.actions.ts` (6 files) under `actions/routes/` with a barrel as cross-domain imports grow (`route-breakdown/hooks/useDragActions.ts:10` already spans two domains).
 
 ---
 
-## 5. Code Quality & Technical Debt
+## Pillar 2 — System Design & Routing Logic
 
-### Current state
+### Current state (3.2/5)
 
-**TypeScript strictness:** `strict: true` and **zero** `any` / `as any` / `@ts-ignore` / `@ts-expect-error` — excellent. Remaining escape hatches: 11 × `as unknown as` (`actions/route-analysis.actions.ts:68,159`; `route-breakdown/DragOverlay.tsx:100`; `lib/auth/jwt.ts:42`; `lib/prisma.ts:9,57`; `lib/routing/algorithms.ts:679,985,1034`; `lib/routing/corridor-core.ts:428`; `lib/routing/osrm.ts:328` — `null as unknown as DistanceElement` hides a nullable), 8 × non-null `!` (`components/employee/weekly-schedule-table.tsx:71×2,127,225`; `route-breakdown/index.tsx:442`; `lib/routing/pickup-schedule.ts:174,175,483,484`), ~27 plain `as Type` casts. Missing compiler flags: `noUncheckedIndexedAccess`, `noUnusedLocals`, `noUnusedParameters`, `noImplicitReturns`, `noFallthroughCasesInSwitch`, `noImplicitOverride`. Target is `ES2017` with `allowJs: true`.
+The headline design decision — a **pure synchronous decision core** (`lib/routing/corridor-core.ts`, 701 lines, self-declared contract at `:1-48`: no prisma/fetch/await/env/wall-clock) invoked by an **async I/O orchestration layer** (`lib/routing/algorithms.ts`) — is real, one-directional, and working in production: `algorithms.ts` only calls `planCorridorRoutesCore`/`poolForOfficeCore` (`:70-71`), never re-implements grouping. Module boundaries are clean elsewhere too: `matrix-core.ts` (pure OSRM `/table` chunking, zero imports), `side-selection.ts` (post-hoc judging: side Viterbi + order search + scoring), `manual-plan-training.ts` (CSV → leg observations, dependency-free), `schedule-math.ts` + `utils.ts` (pure geo/time math). All six pure modules are deterministic (no `Math.random`/`Date.now`) and unit-testable. The deficit is duplication and colocation: the same constants/parsers/mappers are re-implemented 2–5× with subtly divergent semantics, three modules mix pure helpers with `server-only`+Prisma (making the pure parts unimportable in tests/clients), and ~110 lines of deterministic timing policy sit inside the async orchestration where only DB+OSRM integration can reach them.
 
-**ESLint (`npx eslint .`): 7 errors, 9 warnings.**
-
-| File:line | Rule | Issue |
-|---|---|---|
-| `app/(auth)/reset-password/[token]/page.tsx:17` | react-compiler purity | `Date.now()` during render |
-| `components/corporate-employee/weekly-schedule-form.tsx:57` | set-state-in-effect | sync `setState` in effect |
-| `components/facilities/pickup-point-approval-card.tsx:65` | set-state-in-effect | ″ |
-| `components/facilities/vehicle-driver-form-dialog.tsx:51` | set-state-in-effect | ″ |
-| `components/operations/my-schedule-form.tsx:57` | set-state-in-effect | ″ |
-| `components/operations/reject-reason-dialog.tsx:43` | set-state-in-effect | ″ |
-| `components/shared/set-password-dialog.tsx:43` | set-state-in-effect | ″ |
-| `components/facilities/auto-route-planner-client.tsx:874` | no-unused-vars (warn) | `GeneratedRouteCard` flagged unused |
-| `components/facilities/route-breakdown/DragOverlay.tsx:33,49,54` | unused / exhaustive-deps (warn) | |
-| `components/facilities/route-breakdown/EmptyVehicleDropZone.tsx:19,21` | unused (warn) | `onDrop`, `setIsHovered` |
-| `components/facilities/route-breakdown/index.tsx:46` | unused (warn) | `onRouteSelect` |
-| `hooks/use-toast.ts:13` | unused (warn) | `id` |
-| `scripts/maintenance/repair-sync-point-times.ts:26` | unused (warn) | `DAY_NAMES` |
-
-`eslint-disable` × 7: 5 × `@next/next/no-img-element` (`app/(auth)/layout.tsx:8,17`, `components/shared/mobile-nav.tsx:61`, `components/shared/nav-sidebar.tsx:223,314`), 2 × `react-hooks/exhaustive-deps` (`components/facilities/manual-plan-upload-dialog.tsx:62`, `components/facilities/route-map.tsx:496`). `eslint.config.mjs` has no project rules beyond `next/core-web-vitals` + `next/typescript`.
-
-**Dead code:**
-
-- **Orphaned components (0 importers):** `components/facilities/schedule-card.tsx`, `components/facilities/vehicle-pickup-points-manager.tsx` (425 lines; sole caller of `getAddressesForPickupPoints`), `components/shared/mobile-nav.tsx` (notable — the spec requires mobile nav), `components/shared/page-header.tsx`, `profile-details-card.tsx`, `refresh-button.tsx`, `role-accent.tsx`, `stat-card.tsx`.
-- **Uncalled exported Server Actions (still reachable endpoints):** `route-generation.actions.ts` `getPendingRoutes` (472), `getRouteDayStats` (506); `route-override.actions.ts` `reassignEmployeeToVehicle` (28), `swapEmployees` (239), `cancelRoute` (471), `getRouteDetails` (512); `route-setting.actions.ts` `setPickupPointActive` (126), `createVehicle` (272).
-- **Unused lib exports:** `lib/routing/utils.ts` `chunkArray`, `clusterByDistance`, `roundRobinAssignment`, `addMinutesToTime`, `parseArrivalTimeShift`, `getDepartureTimeForShift`, `calculateCompletionTime`; `lib/routing/osrm.ts` `optimizeRoute`, `nearestNeighborOrder`, `pickupTimesFromLegs`, `calculatePickupTimes`; `lib/routing/geocoder.ts:97` `geocodeSearch`; `lib/constants/route-shifts.ts` `shiftKeyForArrivalTime`, `PICKUP_SHIFT`; `route-breakdown/hooks/useVehicleGroups.ts:100` `flattenTrips`.
-- **Deprecated, 0 importers:** `lib/mailer.ts:39-40` `EMAIL_ENABLED`; `lib/constants/notification-recipients.ts:21-26` `FACILITIES_/OPERATIONS_NOTIFICATION_EMAIL`.
-- **Unused/redundant deps:** `@dnd-kit/sortable`, `autoprefixer` (Tailwind v4 uses `@tailwindcss/postcss` only); `@neondatabase/serverless` is only transitively needed via `@prisma/adapter-neon`. `date-fns` pinned to v2 and used in 2 files.
-- **Work-in-progress, unwired:** `lib/routing/corridor-core.ts`, `lib/queries/fleet.ts`, `lib/cache-tags.ts`.
-- 1 TODO (`actions/user-management.actions.ts:66` test-mode flag). No commented-out code blocks.
-
-**Testing:** 2 files / 19 `node:test` cases (`lib/routing/__tests__/side-selection.test.ts`, `manual-plan-training.test.ts`); **no `test` script**, no CI wiring, no vitest/playwright. None of the CLAUDE.md-required tests exist (deadline enforcement, role denial, address-change flow, audit log). Core engine (`planCorridorRoutes`, `computePickupSchedule`, `buildRetimeUpdates`, OSRM fallbacks, `loadLearnedLegs` aliasing) is untested.
-
-**Docs sprawl:** 15 root `.md` files (~6,200 lines; `SESSION_MEMORY.md` alone ~2,300). Several are one-off (`GITHUB_CONNECTED.md`, `SETUP_COMPLETE.md`, `GIT_COMMANDS_REFERENCE.md`, `START_HERE.md`, `DOCUMENTATION_INDEX.md`); 8 still mention SQLite. `CLAUDE.md` §§2-9 describe the retired FastAPI/React stack, and its drift note points to directories no longer in the repo.
+Sub-scores: file-role clarity 4 · decision ownership/duplication 3 · pure-vs-I/O separation 3 · testability/coverage 3 · type canonicity 3.
 
 ### Where and How to Improve
 
-- **Get ESLint to zero errors.** For the 6 `set-state-in-effect` errors (all "close dialog / reset form when action state changes"): derive state instead of syncing it, or move the reset into the action's success handler / `onSubmit` callback, or key the form on a `version` returned by the action. For `reset-password/[token]/page.tsx:17`, compute `now` once outside render logic (e.g. `const now = new Date()` passed into a pure `isTokenValid(user, now)` helper) or move validation into a `lib/queries` function. Fix the 9 warnings (remove unused props/vars, correct `useMemo` deps). Add `npm run lint` to CI as a gate.
-- **Tighten the compiler:** enable `noUncheckedIndexedAccess`, `noUnusedLocals`, `noUnusedParameters`, `noImplicitReturns`, `noFallthroughCasesInSwitch`; set `target: "ES2022"`; drop `allowJs` if no JS sources remain. Replace `osrm.ts:328` `null as unknown as DistanceElement` with a proper `DistanceElement | null` type; validate the JWT payload with zod instead of the cast at `jwt.ts:42`; replace `!` in `weekly-schedule-table.tsx` and `pickup-schedule.ts` with guarded lookups.
-- **Add project ESLint rules:** `no-restricted-imports` (prisma in pages/components; I/O in `*-core.ts`), `@typescript-eslint/consistent-type-imports`, `@typescript-eslint/no-non-null-assertion` (warn), `max-lines` (warn at 400) and `max-lines-per-function` (warn at 150). Replace `<img>` with `next/image` where possible to retire the 5 disables.
-- **Delete dead code** (git history preserves it): the 8 orphan components (or wire `mobile-nav.tsx` into the layouts, since the spec requires it), the 8 uncalled Server Actions, the dead `utils.ts`/`osrm.ts`/`geocoder.ts` helpers, deprecated constants, `@dnd-kit/sortable`, `autoprefixer`. Add `knip` (`npx knip`) to CI to keep it clean.
-- **Wire tests:** add `"test": "node --import tsx --test \"lib/**/__tests__/*.test.ts\""` and include it in `verify`. Priority tests: `getSubmissionWindow` deadline (`lib/date/week.ts:56`, Saturday 12:00 Asia/Dhaka edges); `requireRole` denial + proxy role-prefix logic; `assertCanManageTarget` (after S2); address-change approval flow; `audit()` creation; golden tests for `planCorridorRoutes` (old vs core); `computePickupSchedule`; `buildRetimeUpdates`. Consider vitest for component/action tests with a Prisma test DB (Neon branch).
-- **Consolidate docs:** move durable docs into `docs/` (`ARCHITECTURE.md`, `RUNBOOK.md`, `DATABASE.md`, `PRD.md`), archive one-off setup notes to `docs/archive/`, trim `SESSION_MEMORY.md` to current state + open threads, and rewrite `CLAUDE.md` §§2-9 for the Next.js/Prisma stack so agents stop reading stale FastAPI instructions.
-- Resolve the `isProd()` TODO in `user-management.actions.ts:66` (see S11).
+- **Unify the duplicated primitives behind single owners (highest leverage, small diffs).**
+  - 25 km/h great-circle fallback ×3 → one export (owners today: `corridor-core.ts:222,242`, `osrm.ts:73-75`, `algorithms.ts:759-773`).
+  - Shift-key mappers ×3–4 → `lib/constants/route-shifts.ts` (today: `route-pattern.ts:62-67`, `manual-plan-training.ts:41-49,58-65`, plus `route-shifts.ts` label maps used at `algorithms.ts:597`).
+  - Clock parsers ×5 (`corridor-core.ts:336`, `utils.ts:143`, `pickup-schedule.ts:116,423`, `manual-plan-training.ts:18`) → keep the strict regex-validated variant in one module; `algorithms.ts` currently uses two different parsers in one flow (`:367`, `:870`).
+  - `driveLegMinutes` (`pickup-schedule.ts:136`) vs the inline `legMin` closure (`algorithms.ts:901-917`, same gate/rounding, different key construction) → single function, single key builder (kill the ad-hoc `addr:<id>`/`office:<name>` string keys in all three leg vocabularies).
+- **Finish the pure/I/O split in the three mixed modules.** Extract `route-pattern-pure.ts` (`captureRoutePattern`, `patternOrderForMembers`, `reflectPatternOntoAssignments`) and `pickup-schedule-pure.ts` (`computePickupSchedule`, `driveLegMinutes`) from behind `server-only`+Prisma; lift the embeddable helpers out of `route-analysis.ts` (`currentOrder`, `constraintsFor`, `buildCandidate`, `sameOrder`). This unblocks `node:test` coverage of the highest-stakes rules with zero mocks.
+- **Extract the finalize-first timing block into a pure function.** `algorithms.ts:866-974` (`finalizedMinutes` map, pattern replay, `prefixCount` scan, tail-leg build, `backCalculatePickupMinutes` + grid realignment) is deterministic math — move to `computeCorridorTimings(order, finalizedMinutes, learned, arrivalMinutes)` and unit-test it.
+- **Unify type vocabulary.** Keep the single owners that already work (`corridor-core.ts:106-171` corridor shapes, `route-analysis.types.ts` analysis shapes), but merge the duplicate `BareMatrix`/`BareLocation` (`corridor-core.ts:195-202`) with the OSRM wire types (`osrm.ts:30-47`), and replace stringly-typed shift/leg keys (`"10PM"|"11PM"|"12AM-6AM"`, `addr:<id>`) with one canonical `ShiftKey` + leg-key builder.
+- **Close the highest-value test gaps.** Add tests for `poolForOffice` (pinned-exclusive vs fallback), `computePickupSchedule` branches, `patternOrderForMembers`/`reflectPatternOntoAssignments`, `week.getSubmissionWindow` (Sat-noon roll-forward), and `corridor-core` edge paths (no-vehicle error `:625-631`, zigzag guard `:678`, detour-skip `:681-683`). Fix the fragile `side-selection.ts:21` value-import of `./osrm` (safe only because it is `type`-only today) to `import type` explicitly.
 
 ---
 
-## Appendix A — Suggested remediation roadmap
+## Pillar 3 — Performance & Scalability
 
-| Phase | Items | Effort |
-|---|---|---|
-| **P0 — this week (security)** | S1 (DTOs + Prisma `omit` for `passwordHash`/reset fields), S2 (user-management RBAC), S3 (hashed tokens, `APP_URL`, 30-min TTL, atomic consume), S5 (revoke sessions), delete uncalled Server Actions | ~2–3 days |
-| **P1 — reliability** | OSRM/Nominatim timeouts + limiter; remove render-time write in route-setting page; fix `reports.ts` in-memory date filter; `after()` for `weekly-schedule:295`; learning-loop status filter + transaction; ESLint errors → 0 | ~2–3 days |
-| **P2 — compliance** | `AuditLog` model + `audit()` helper across all mutations; zod schemas per action (`withAction` wrapper); rate limiting; HTML escaping in emails; address-change approval flow | ~1 week |
-| **P3 — performance** | Wire `corridor-core` (parallel leg prefetch + sync plan); N+1 removal in 10 PM path / day-sheet save; matrix dedupe + chunking; cache layer with `updateTag`; FK index migration + drop redundant indexes; `Promise.all` page loads; bounded list queries | ~1–2 weeks |
-| **P4 — maintainability** | `lib/queries` boundary + ESLint enforcement; `RoleShell` + shared role pages; split mega-components; `*-core.ts` extraction; `routing/constants.ts`; Asia/Dhaka zoned-time helpers; tsconfig flags; test script + priority tests; docs consolidation | ongoing |
+### Current state (3.4/5)
 
-## Appendix B — Method
+Much of the previous audit's findings are genuinely fixed and were re-verified: a bounded `mapWithConcurrency` helper (`lib/concurrency.ts:7-22`), concurrent day-level generation (`route-generation.actions.ts:245-261`, cap 2; intra-day 10PM→11PM→12AM correctly serial on the vehicle-reuse dependency), parallel bulk pre-fetches, `Promise.all` day-upserts, pooled SMTP via `after()`, `unstable_cache` + tag invalidation for settings (1 h) and fleet (5 min) with all writers wired, OSRM timeouts (10 s) + retries with jitter, hostname-keyed throttling, ≤100-coordinate matrix chunking with dedup, layered DB+persistent response caches, and correct `cache: no-store` on live OSRM/geocoder fetches (durability comes from the DB caches, not fetch cache). Index coverage in `schema.prisma` (29 models) is broad. What remains is a short list of large, well-located wins: four serial bulk-write loops, one serial geocode chain that dominates cold mapping runs, an oversized corridor warm-key set on the public OSRM host, and near-static planner reference reads with no cache reader.
 
-- Static review of all files in scope by four parallel review passes (security, routing design, performance, architecture/quality), each finding verified against source; headline findings (S1, S2, S3, render-time write, unwired `corridor-core`, no fetch timeouts, missing cache invalidation, `reports.ts` date filter) were re-verified directly.
-- Tooling: `npx tsc --noEmit` (0 errors), `npx eslint .` (7 errors / 9 warnings), ripgrep scans for escape hatches, importer graphs for dead-code detection, read-only `git diff`/`git show` to compare `algorithms.ts` with HEAD.
-- Line numbers refer to the working tree on 2026-10-01 and will drift as code changes.
+Sub-scores: I/O concurrency 3 · caching 3 · N+1/batch 3 · schema/indexes 4 · OSRM/external 4.
+
+### Where and How to Improve
+
+- **Batch the four serial bulk loops (largest DB-side win).**
+  - `actions/manual-route-plan.actions.ts:287-342`: per-row `upsert` over 100s of CSV rows → batched `createMany` + `updateMany` keyed on the already-computed key set (`:265-286`).
+  - `actions/weekly-schedule.actions.ts:677-803`: outer per-row `create` + 5 upserts serial (200 rows ≈ 1,200 sequential writes) → `createMany` schedules then `createMany` days; parallelize the outer loop with `mapWithConcurrency`.
+  - `actions/user-management.actions.ts:400-633`: serial bcrypt (~80 ms/row) + address upsert + user write per row → dedupe addresses → `createMany`, bounded-parallel hashing, `createMany` users + targeted `updateMany`.
+  - `actions/route-assignment.actions.ts:327-384,427-466,487-546`: per-day/per-row read+write (+ in-request `sendMail`) serial → single `findMany(where: {weeklyScheduleDayId: {in: ids}})` + `Promise.all`/bounded upserts, mail via `after()` like every other path (also fixes the legacy unbounded `Promise.all(sendMail)` at `:384`).
+- **Concurrentize home resolution (largest mapping-latency win).** `algorithms.ts:707-724` awaits `resolveHomeAddress` per member; each miss costs a 1.1 s-throttled geocode + `address.upsert` (`:146`) + `user.update` (`:155`). Preload known addresses with one `findMany`, then resolve misses under `mapWithConcurrency(4–5)`. Same treatment for the per-vehicle loop (`:297-453`: hoist `loadLearnedLegs("10PM")` once per day-run) and the 7 late-night shift passes (`:1126-1137`, concurrency 2 like the day loop).
+- **Shrink the corridor warm set / prefetch for the public host (largest OSRM-side win, cold-start only).** `prefetchRoutePolylines` no-ops on the public server (`osrm.ts:718`), so cold runs degrade to lazy per-leg fetches through the 350 ms throttle over the `(members+1)²` all-pairs warm set (`algorithms.ts:798-808`, ~3.7 k keys per office per shift, most never inspected). Add spatial pre-filtering of warm keys and a bounded candidate-only prefetch plan for the public host. Add 1–2 retries for 5xx/timeout in the geocoder (`geocoder.ts`, single-attempt today — transient Nominatim blips permanently skip riders for a run).
+- **Cache the near-static planner reference reads.** Add `unstable_cache` readers + tag invalidation (same pattern as the existing `settings`/`vehicles` tags) for the active `PickupPoint` set, planner `Vehicle` reads, and week pins (`algorithms.ts:219-227`, `pickup-schedule.ts:373-382,451-460`, `route-pattern.ts:156-180`). Parallelize `getGeneratedRouteDetails` (`route-generation.actions.ts:716-734`: two serial `findMany`) and `select`-trim `routeAnalysis` JSON out of list queries.
+- **Schema and transaction nits.** Add `RouteTemplate @@index([arrivalTime, vehicleId])` (lookup at `algorithms.ts:836-851` leads with `arrivalTime`; the unique leads with `vehicleId`); drop the redundant `RoutePlan @@index([vehicleId,dayDate,arrivalTime])` (same column set as the unique, different order) and `Holiday @@index([date])` (unique already indexes); bound or incrementalize the unfiltered full-table learning scans (`route-learning.actions.ts:130,226`); and shrink the 90 s global/batch transactions (`lib/prisma.ts:31-34`, `route-override.actions.ts:336-337`) in favor of smaller batches + `lib/db/retry.ts` under concurrent Facilities editors.
+
+---
+
+## Pillar 4 — Security & Best Practices
+
+### Current state (4.0/5 — strongest pillar)
+
+All 69 exported async functions across the 20 action files were individually checked: **zero missing guards, zero late guards** (no Prisma/fetch/cookies before the guard in any file). Read paths are guarded too (`getVehicleShiftPins`, `getGeneratedRouteDetails`), the 3 public actions (login + 2 reset) are by-design public with rate limiting + dummy-hash timing defense + enumeration-safe responses, and guards run outside `try/catch` so `NEXT_REDIRECT` is never swallowed. The auth core is strong: jose HS256 with pinned `alg` + zod payload, DB-backed `Session` rows giving real revocation, `httpOnly`/`lax`/prod-`secure` cookies, bcrypt-10, hashed single-use 30-min reset tokens consumed atomically with session revocation + audit in one transaction. No SQL injection (one `SELECT 1` health check + parameterized rate-limit upsert; everything else is the query builder), no mass assignment (explicit field lists everywhere), no client secrets (zero `NEXT_PUBLIC_*`), no open API routes. Deductions: two raw-error-to-client leaks, uneven zod coverage (~12/69 actions), role-list drift, and minor hardening gaps.
+
+Sub-scores: authN/authZ coverage 4.5 · auth implementation 4.5 · error sanitization 3.5 · input validation 3 · injection/secrets/API 4.5.
+
+### Where and How to Improve
+
+- **Plug the two raw-error leaks (do first).** `route-assignment.actions.ts:182-185` returns `error.message` (Prisma `P2002`/FK internals reachable by any Facilities caller) → replace with `sanitizedActionError("assignRoute", error)`. `route-assignment.actions.ts:456-460` pushes `error.message` per row into `skipped[].reason` (a per-row error oracle) → return a fixed string (`"Could not save this row."`) and `logActionError` server-side. Harden `resendRouteAssignmentEmail` (`:263` returns `outcome.error` verbatim — safe today only because `mailer.ts:128` emits a generic string; pin that contract with a comment or hard-code the generic).
+- **Unify Facilities role lists.** Standardize on `[Role.FACILITIES, Role.SUPER_ADMIN]` per the repo invariant (`proxy.ts:17-18`): fix `facilities-profile.actions.ts:104,145`, `route-assignment.actions.ts:131,298,406,469,500`, and `app/facilities/layout.tsx:10`. All current mismatches fail closed (403s), so this is a functional fix, not a bypass — confirm intent per action and comment any deliberate exception.
+- **Extend zod to the remaining ~57 action boundaries.** Replicate the good examples (`pickup-point.actions.ts:67,153,228`, `route-analysis.actions.ts:58-59`, API `app/api/routing/route/route.ts:26-33`) with shared schemas in `lib/validation/schemas.ts`: capped ID strings, `HH:mm`, date-only, and small-int quantity schemas. Priority: the 5 `route-override` ID-bearing args, `assignRoute`/`saveDaySheetAssignments` payloads, `updateVehicle`/`toggleVehicleShiftPin`, and `updateProfile` length caps (over-long strings currently surface as noisy sanitized DB errors).
+- **Harden the auth edges.** Promote `Role` to a Prisma native enum or DB check constraint (`User.role` is a plain string; only the TS zod layer rejects strays — `lib/constants/enums.ts:1-18`); raise the `SESSION_SECRET` minimum from 16 chars (`lib/env.ts:27-29`) to ≥32 random bytes and verify the deployed value; add `__Host-` cookie prefix; redact email `to`/`subject` from server logs (`lib/mailer.ts:57,71,73-77,91-95,113-116,123-127`).
+- **Keep the patterns that work.** Guard-first-outside-`try` ordering, `P2002`-to-generic mapping in `action-error.ts`, atomic reset-consume + session-revoke + audit transactions, `APP_URL` from env (never Host header), and rate-limiting all 3 public actions are exemplary — encode them in `docs/` contribution guidance so new actions inherit them.
+
+---
+
+## Pillar 5 — Code Quality & Technical Debt
+
+### Current state (3.2/5)
+
+The compiler story is exemplary: `strict: true`, **zero `any`** in first-party code, **zero `@ts-ignore`/`@ts-expect-error`/`@ts-nocheck`**, only 3 non-null assertions (one risky: `pickup-schedule.ts:508-509` chained `!` on a nullable relation + nullable float in the production routing path), and 10 inventoried `as unknown as` casts of which only `osrm.ts:370` (`null` stuffed into a non-nullable element type) needs a type change. Naming/casing conventions are consistent, commented-out code is ~zero, and there are no TODOs. The debt is duplication (weakest sub-area, 2/5): the arrival-minutes literal in 4 places with 2 different invalid-input contracts under the same function name, `hhmmToMinutes` ×2 (`0` vs `null` on invalid — a latent midnight-misroute), byte-identical `parseDayString` ×2, 3 competing time-shape policies, and scattered ms literals. Tests (6 files via `npm run verify`) cover pure routing math/date/schemas well but nothing with blast radius: zero tests for actions, guards, session/JWT, queries, or components.
+
+Sub-scores: TS strictness 4 · dead code 4 · duplication 2 · consistency 3 · lint/test health 3.
+
+### Where and How to Improve
+
+- **Deduplicate time/shift helpers (same fix as Pillar 2 — single highest-value cleanup).** Consolidate all callers (`route-analysis.actions.ts:255`, `route-override.actions.ts:527`) onto `arrivalMinutesForLabel` (`route-shifts.ts:76-86`, the `null`-returning canonical) and delete the `23*60` garbage-fallback twin in `corridor-core.ts:327`. Keep the regex-validated `hhmmToMinutes` (`route-generation.actions.ts:165-170`), move `parseDayString` (`route-generation.actions.ts:58-61` ≡ `route-setting.actions.ts:14-17`) into `lib/date/week.ts` next to `toUtcMidnight`, and unify on the strict zod `pickupPointTimeSchema` (`schemas.ts:101-103`) over the hand-rolled `normalizeHHmm` (`route-setting.actions.ts:23-30`). Export `MS_PER_DAY`/`MS_PER_WEEK` from `lib/date/week.ts` (canonical exists at `:10`; `rate-limit.ts:76`, `route-assignment.actions.ts:511`, `operations/weekly-requests/page.tsx:134` inline their own).
+- **Fix the UTC-midnight write paths.** `on-behalf.actions.ts:240` stores `new Date(`${dateValue}T00:00:00`)` (local parse) directly to `AdHocRequest.date` — wrap in `toUtcMidnight`; same for the read filter in `allocation-history.ts:42`. Add `getMondayOfWeekUtc`/`getWeekDaysUtc` (current `week.ts:43-60` helpers are host-TZ-dependent while the docstring at `:63-67` mandates UTC keys — every caller must currently remember to wrap), migrate writers, and pin all `scripts/` to one `WEEK_START` constant (today Aug-24 vs Sep-21 vs Sep-07 across scripts). Display dates with `timeZone: "Asia/Dhaka"` (as `audit.ts:81` already does) instead of server-locale `toLocaleDateString()` (`fixed-arrival/dashboard/page.tsx:54`, `employee/dashboard/page.tsx:99`, `super-admin/dashboard/page.tsx:42`).
+- **Remove or mount the dead UI.** `components/facilities/copy-week-buttons.tsx` (`ReplicateAcrossWeekButton`, `CopyLastWeekButton`) has zero importers while its actions (`route-assignment.actions.ts:468,499`) stay live-but-unreachable — delete the file or wire it into the route-planning UI. Either ignore `.design-sync/previews/` in `eslint.config.mjs` or delete it.
+- **Tighten the compiler and pipeline.** Enable `noUncheckedIndexedAccess` (catches the `pickup-schedule.ts:508-509` class of bug at compile time), `noUnusedLocals`/`noUnusedParameters` (the `_prevState` convention survives via `_`-prefix), and `noFallthroughCasesInSwitch`; fix `osrm.ts:370` → `DistanceElement | null` and type `DragOverlay.tsx:99` as `ReactNode`; route `logActionError` (`action-error.ts:34`) and the raw `console.*` in `route-override`/`route-generation` actions through `lib/logger.ts`; add Prettier + `format:check` (mis-indented `settings.actions.ts:24-62` proves formatting isn't gated); replace 4 `no-img-element` suppressions with `next/image`; review the 2 `exhaustive-deps` suppressions (`route-map.tsx:451`, `manual-plan-upload-dialog.tsx:62`).
+- **Test where blast radius lives.** Before touching routing math again, add action-level tests: weekly-schedule submit→approve→reject transitions, replicate/copy no-overwrite guards, approval-status guards, RBAC gate matrix (`requireRole` per role), and CSV bulk-upload row accounting. Confirm CI runs `npm run verify` (workflow exists under `.github/` — verify it executes typecheck + lint + tests on PRs).
+
+---
+
+## Consolidated Remediation Backlog
+
+**P0 — fix this week (security/correctness, all small diffs):** raw-error leaks (`route-assignment.actions.ts:182-185,456-460`) · arrival-map consolidation + kill `23*60` fallback (`corridor-core.ts:314-328`) · UTC-midnight ad-hoc write (`on-behalf.actions.ts:240`) + filter (`allocation-history.ts:42`) · Facilities role-list unification (5 action sites + `facilities/layout.tsx:10`) · `osrm.ts:370` nullable type + `pickup-schedule.ts:508-509` guard.
+
+**P1 — fix this month (performance/scale, medium diffs):** batch 3 CSV bulk loops (`manual-route-plan`, `weekly-schedule`, `user-management`) · concurrent home resolution (`algorithms.ts:707-724`) · day-sheet/legacy planner concurrency + `after()` mail (`route-assignment.actions.ts:327-546`) · corridor warm-set shrink + public-host prefetch · pure-module splits (`route-pattern-pure`, `pickup-schedule-pure`) + `computeCorridorTimings` extraction · action-level test suite for state machine/approvals/RBAC.
+
+**P2 — steady-state hygiene (ongoing):** monolith decomposition (route-override, route-setting-client, route-map, auto-planner) · `app/` reads via `lib/queries/` + uniform `withDbRetry` · per-segment `loading.tsx` · planner reference-read caching · `RouteTemplate` index + redundant-index drops + incremental learning · compiler flags (`noUncheckedIndexedAccess`, `noUnusedLocals/Parameters`) + Prettier gate · `next/image` migration · dead-UI decision (`copy-week-buttons.tsx`) · DB-native Role enum + 32-char secret + log redaction.
+
+---
+
+## Appendix A — Action auth coverage (condensed)
+
+Full per-action table (69 functions across 20 files): **65 guarded-first, 0 late, 0 missing.** Public-by-design (3): `loginAction` (`auth.actions.ts:36`), `requestPasswordResetAction` + `resetPasswordAction` (`password-reset.actions.ts:29,103`) — all rate-limited, enumeration-safe, zod-validated. Harmless unguarded: `logoutAction` (idempotent cookie destroy). Module-private helpers (`upsertAssignmentForWeeklyDay/AdHoc`) correctly rely on caller guards with `actor: session` threading. **Only defect: role-list drift** — `route-assignment.*` (except resend), `facilities-profile` single-set/update-employee use `[FACILITIES]` where siblings use `[FACILITIES, SUPER_ADMIN]` (fail-closed 403s; see Pillar 4 §2 table rows 11–12, 28, 30–33).
+
+## Appendix B — Test inventory (`npm run test`: 6 files, 28 tests)
+
+Well covered: matrix batching/dedup · side-selection (Viterbi, Or-opt, scoring) · manual-plan training (clock/shift/leg observations) · corridor-core happy paths (radius-skip, anchor-preserve) · Dhaka wall-clock arithmetic · `manualRouteGeometrySchema`. **Zero coverage:** all 20 action files · RBAC/session/JWT/rate-limit · Prisma queries/audit/mailer/concurrency · all components · `getSubmissionWindow`, `computePickupSchedule`, `patternOrder*`, `poolForOffice` edge paths, remaining zod schemas.
+
+## Appendix C — Status of prior-report items (re-verified)
+
+**Confirmed fixed since v1/v2:** corridor-core integration + duplicate planner removal · OSRM timeout/retry/throttle path · authed `/api/routing/route` proxy (no client-side public-OSRM calls) · matrix ≤100-coord chunking + dedup · expired-cache-row refresh bug · render-time `vehicle.upsert` on GET · `adjustPickupTime` credential leak · atomic user-create/reset audit + reset session-revoke · bounded user directories with pagination · `unstable_cache` settings/fleet + invalidation wiring · approval/transport/allocation guards · CI + `npm run verify` gate · orphan-component removals.
+**Carried forward (still open, folded into the backlog above):** serial bulk loops · mixed pure+I/O modules · zod boundary coverage · duplicate time/shift helpers · monolith decomposition · DB-native Role enum · incremental learning.
+
+---
+*Teams: start with P0 (all ≤1-day fixes, two close an information leak), then P1 item-by-item; each P1 fix should ship with the regression test Pillar 5 requests. Line numbers are HEAD readings from the audit session — re-grep before editing.*

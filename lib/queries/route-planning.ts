@@ -55,7 +55,27 @@ export type DaySheetData = {
   rows: DaySheetRow[];
 };
 
-/**
+export type FixedArrivalListRow = {
+  employeeId: string;
+  employeeName: string;
+  employeeCode: string | null;
+  address: string | null;
+  pickupPoint: string | null;
+  /** Employee's standing arrival time ("10 PM".."6 AM"), from their profile. */
+  arrivalTime: string | null;
+  arrivalLabel: string | null;
+  /** Transport service ON/OFF for this employee — OFF pauses mapping. */
+  serviceActive: boolean;
+  /** Static pick-up time, saved once by Facilities. */
+  pickupTime: string;
+  vehicleNumber: string;
+  driverName: string | null;
+  contactNumber: string | null;
+};
+
+export type FixedArrivalListData = {
+  rows: FixedArrivalListRow[];
+};/**
  * The day-first "sheet" Facilities plans from: every employee needing
  * transport on `dayOfWeek`, for the most recently approved week. Read-only
  * profile fields come straight from the employee record; pickupTime/
@@ -82,6 +102,9 @@ export async function getDaySheet(
       weeklySchedule: {
         status: WeeklyScheduleStatus.APPROVED,
         weekStartDate: latest.weekStartDate,
+        // FIXED_ARRIVAL employees are planned in the dedicated
+        // "Corporate Fixed arrival" list, not the weekly day sheet.
+        employee: { role: { not: "FIXED_ARRIVAL" } },
       },
     },
     include: {
@@ -128,4 +151,59 @@ export async function getDaySheet(
     weekLabel: `Week of ${formatShortDate(latest.weekStartDate)}`,
     rows,
   };
+}
+
+/**
+ * The "Corporate Fixed arrival" list: every fixed-arrival employee with
+ * their standing details. Profile fields (name/address/pick-up point/
+ * arrival time) come from the employee record; the pick-up time and
+ * vehicle/driver come from the static `FixedArrivalPickup` record
+ * Facilities saved — they persist across weeks until Facilities edits
+ * them. Week- and day-independent.
+ */
+export async function getFixedArrivalPickupList(
+  arrivalTimeLabels: Record<string, string>
+): Promise<FixedArrivalListData> {
+  const users = await prisma.user.findMany({
+    where: { role: "FIXED_ARRIVAL" },
+    select: {
+      id: true,
+      fullName: true,
+      employeeCode: true,
+      address: true,
+      pickupPoint: true,
+      fixedArrivalTime: true,
+      fixedArrivalActive: true,
+      fixedArrivalPickup: {
+        include: {
+          vehicleDriver: true,
+        },
+      },
+    },
+  });
+
+  const rows: FixedArrivalListRow[] = users.map((u) => {
+    const record = u.fixedArrivalPickup;
+
+    return {
+      employeeId: u.id,
+      employeeName: u.fullName,
+      employeeCode: u.employeeCode,
+      address: u.address,
+      pickupPoint: u.pickupPoint,
+      arrivalTime: u.fixedArrivalTime,
+      arrivalLabel: u.fixedArrivalTime
+        ? arrivalTimeLabels[u.fixedArrivalTime] ?? u.fixedArrivalTime
+        : null,
+      serviceActive: u.fixedArrivalActive,
+      pickupTime: record?.pickupTime ?? "",
+      vehicleNumber: record?.vehicleDriver.vehicleNumber ?? "",
+      driverName: record?.vehicleDriver.driverName ?? null,
+      contactNumber: record?.vehicleDriver.contactNumber ?? null,
+    };
+  });
+
+  rows.sort((a, b) => sortByArrival(a.arrivalLabel, b.arrivalLabel));
+
+  return { rows };
 }

@@ -1,7 +1,12 @@
 // Ad-hoc requests are for same-day emergency transport, covering the overnight
 // window from 10:00 PM tonight through 6:00 AM the next morning -- this window
 // is available every day of the week (no weekday/deadline restriction, unlike
-// the Weekly form's Mon-Fri + Saturday-noon lock).
+// the Weekly form's Mon-Fri + Saturday-midnight lock).
+
+import {
+  addUtcCalendarDays,
+  dhakaDateTimeFromMinutes,
+} from "@/lib/date/week";
 
 function to12Hour(hour: number): string {
   const period = hour < 12 ? "AM" : "PM";
@@ -29,21 +34,21 @@ export const ADHOC_MIN_ADVANCE_HOURS = 3;
 // from a specific spot at night); for other overnight arrivals it is optional.
 export const ADHOC_PICKUP_REQUIRED_TIME = "22:00";
 
-const HOURS_PER_DAY = 24;
 const MS_PER_HOUR = 60 * 60 * 1000;
 
 /**
- * Resolve an arrival-time string against a base date (a day's midnight).
- * Hours in the overnight window come "tonight" for 22:00/23:00 and "tomorrow
- * morning" for 00:00..06:00, matching the ad-hoc window's semantics. Returns
- * a local-time Date representing the actual arrival moment.
+ * Resolve an arrival-time string against a base date (a UTC-midnight Dhaka
+ * date key). Hours in the overnight window come "tonight" for 22:00/23:00 and
+ * "tomorrow morning" for 00:00..06:00, matching the ad-hoc window's semantics.
+ * Returns the actual arrival moment as a UTC instant, computed with explicit
+ * Asia/Dhaka wall-clock math so server, client, and CI agree regardless of
+ * host timezone or device clock zone. Never uses host-local `setHours`.
  */
 export function resolveAdhocArrival(baseDate: Date, arrivalTime: string): Date {
   const hour = Number.parseInt(arrivalTime.split(":")[0], 10);
-  const d = new Date(baseDate);
-  if (Number.isNaN(hour)) return d;
-  d.setHours(hour >= 22 ? hour : hour + HOURS_PER_DAY, 0, 0, 0);
-  return d;
+  if (Number.isNaN(hour)) return new Date(baseDate);
+  if (hour >= 22) return dhakaDateTimeFromMinutes(baseDate, hour * 60);
+  return dhakaDateTimeFromMinutes(addUtcCalendarDays(baseDate, 1), hour * 60);
 }
 
 /** The earliest arrival moment allowed by the 3-hour advance rule. */

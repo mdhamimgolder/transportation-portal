@@ -514,7 +514,7 @@ function Pinner({
   return (
     <Card>
       <CardHeader className="border-b">
-        <div className="flex items-center justify-between gap-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
           <CardTitle className="flex items-center gap-2">
             <Pin className="size-4 text-teal" />
             Vehicle → route pinning
@@ -963,12 +963,7 @@ export function RouteSettingClient({
   }
 
   return (
-    <div
-      className="grid gap-6"
-      style={{
-        gridTemplateColumns: "1fr 2fr 2fr",
-      }}
-    >
+    <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">
       <SequenceEditor
         vehicles={vehicles}
         addresses={addresses}

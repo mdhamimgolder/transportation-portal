@@ -1,7 +1,23 @@
 import "server-only";
 import { redirect } from "next/navigation";
 import { getSession, type SessionUser } from "@/lib/auth/session";
-import type { Role } from "@/lib/constants/enums";
+import { Role } from "@/lib/constants/enums";
+
+/**
+ * Roles Facilities may administer day-to-day on the User Info page
+ * (edit profile, set password, resend/delete). Role CHANGES are broader:
+ * see `updateUserRoleByFacilitiesAction` — Facilities may also change the
+ * role of staff accounts, but never touch or grant SUPER_ADMIN.
+ */
+export const FACILITIES_MANAGEABLE_ROLES: readonly string[] = [
+  Role.EMPLOYEE,
+  Role.CORPORATE_EMPLOYEE,
+  Role.FIXED_ARRIVAL,
+];
+
+export function canFacilitiesManage(targetRole: string): boolean {
+  return FACILITIES_MANAGEABLE_ROLES.includes(targetRole);
+}
 
 /**
  * Use at the top of a Server Component (layout/page) or Server Action to

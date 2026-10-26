@@ -62,7 +62,7 @@ export function LoadingSpinner({ label = "Loading…" }: { label?: string }) {
           </svg>
           {/* Center mark: the Commure knot (white-on-black source, inverted to
               black-on-white) cropped to the knot via cover + zoom. */}
-          <div className="absolute left-1/2 top-1/2 size-16 -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-full bg-background ring-1 ring-black/10">
+          <div className="absolute left-1/2 top-1/2 size-12 -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-full bg-background ring-1 ring-black/10">
             <Image
               src="/commure-logo.jpeg"
               alt="Commure"

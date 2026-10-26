@@ -1,11 +1,13 @@
 import Link from "next/link";
-import { requireRole } from "@/lib/rbac/guards";
+import { requireRole, canFacilitiesManage } from "@/lib/rbac/guards";
 import { Role } from "@/lib/constants/enums";
 import { getEmployeeDirectory } from "@/lib/queries/users";
 import { SearchBox } from "@/components/shared/search-box";
 import { AddEmployeeDialog } from "@/components/super-admin/add-employee-dialog";
 import { BulkUploadDialog } from "@/components/super-admin/bulk-upload-dialog";
 import { EditEmployeeProfileDialog } from "@/components/facilities/edit-employee-profile-dialog";
+import { FacilitiesUserRoleForm } from "@/components/facilities/user-role-form";
+import { FixedArrivalServiceControls } from "@/components/facilities/fixed-arrival-service-controls";
 import { SetPasswordDialog } from "@/components/shared/set-password-dialog";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -40,8 +42,9 @@ export default async function FacilitiesUserInfoPage({
             User Info
           </h1>
           <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
-            Employee profiles on file — address and pick-up point, for route
-            planning reference.
+            Employee and Operations profiles on file — address and pick-up
+            point, for route planning reference. Fixed-arrival transport
+            service is managed on the Pick-up schedule page.
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -57,6 +60,7 @@ export default async function FacilitiesUserInfoPage({
           <TableHeader>
             <TableRow>
               <TableHead className="sticky left-0 z-20 bg-background">Name</TableHead>
+              <TableHead>Role</TableHead>
               <TableHead>Employee ID</TableHead>
               <TableHead>Department</TableHead>
               <TableHead>Email</TableHead>
@@ -65,6 +69,7 @@ export default async function FacilitiesUserInfoPage({
               <TableHead>Home latitude/longitude</TableHead>
               <TableHead>Pick-up point</TableHead>
               <TableHead>Pick-up latitude/longitude</TableHead>
+              <TableHead>Fixed arrival service</TableHead>
               <TableHead>Status</TableHead>
               <TableHead className="w-40">Actions</TableHead>
             </TableRow>
@@ -72,7 +77,7 @@ export default async function FacilitiesUserInfoPage({
           <TableBody>
             {result.rows.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={11} className="text-center text-muted-foreground">
+                <TableCell colSpan={13} className="text-center text-muted-foreground">
                   No employees found.
                 </TableCell>
               </TableRow>
@@ -81,6 +86,12 @@ export default async function FacilitiesUserInfoPage({
                 <TableRow key={employee.id}>
                   <TableCell className="sticky left-0 z-10 bg-card font-medium">
                     {employee.fullName}
+                  </TableCell>
+                  <TableCell>
+                    <FacilitiesUserRoleForm
+                      userId={employee.id}
+                      currentRole={employee.role}
+                    />
                   </TableCell>
                   <TableCell>{employee.employeeCode ?? "—"}</TableCell>
                   <TableCell>{employee.department ?? "—"}</TableCell>
@@ -103,24 +114,43 @@ export default async function FacilitiesUserInfoPage({
                       : "Not set"}
                   </TableCell>
                   <TableCell>
+                    {employee.role === Role.FIXED_ARRIVAL ? (
+                      <FixedArrivalServiceControls
+                        userId={employee.id}
+                        active={employee.fixedArrivalActive}
+                        arrivalTime={employee.fixedArrivalTime}
+                      />
+                    ) : (
+                      <span className="text-muted-foreground">—</span>
+                    )}
+                  </TableCell>
+                  <TableCell>
                     <Badge variant={employee.isActive ? "secondary" : "outline"}>
                       {employee.isActive ? "Active" : "Deactivated"}
                     </Badge>
                   </TableCell>
                   <TableCell>
                     <div className="flex items-center gap-1">
-                      <EditEmployeeProfileDialog
-                        userId={employee.id}
-                        fullName={employee.fullName}
-                        contactNumber={employee.contactNumber}
-                        address={employee.address}
-                        pickupPoint={employee.pickupPoint}
-                        homeLatitude={employee.homeLatitude}
-                        homeLongitude={employee.homeLongitude}
-                        pickupLatitude={employee.pickupLatitude}
-                        pickupLongitude={employee.pickupLongitude}
-                      />
-                      <SetPasswordDialog userId={employee.id} fullName={employee.fullName} />
+                      {canFacilitiesManage(employee.role) ? (
+                        <>
+                          <EditEmployeeProfileDialog
+                            userId={employee.id}
+                            fullName={employee.fullName}
+                            contactNumber={employee.contactNumber}
+                            address={employee.address}
+                            pickupPoint={employee.pickupPoint}
+                            homeLatitude={employee.homeLatitude}
+                            homeLongitude={employee.homeLongitude}
+                            pickupLatitude={employee.pickupLatitude}
+                            pickupLongitude={employee.pickupLongitude}
+                          />
+                          <SetPasswordDialog userId={employee.id} fullName={employee.fullName} />
+                        </>
+                      ) : (
+                        <span className="text-xs text-muted-foreground">
+                          Super Admin managed
+                        </span>
+                      )}
                     </div>
                   </TableCell>
                 </TableRow>
@@ -131,7 +161,7 @@ export default async function FacilitiesUserInfoPage({
       </div>
       <div className="flex items-center justify-between text-sm">
         <span className="text-muted-foreground">
-          {result.total.toLocaleString()} employees · Page {result.page} of {result.pageCount}
+          {result.total.toLocaleString()} users · Page {result.page} of {result.pageCount}
         </span>
         <div className="flex gap-3">
           {result.page > 1 ? (

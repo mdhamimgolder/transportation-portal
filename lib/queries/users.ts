@@ -1,6 +1,6 @@
 import "server-only";
 import { prisma } from "@/lib/prisma";
-import type { Role } from "@/lib/constants/enums";
+import { Role } from "@/lib/constants/enums";
 
 const USER_PAGE_SIZE = 50;
 const MAX_SEARCH_LENGTH = 120;
@@ -80,18 +80,33 @@ export async function getAllUsers(
 export type EmployeeDirectoryRow = {
   id: string;
   fullName: string;
+  role: Role;
   employeeCode: string | null;
   department: string | null;
   email: string;
   contactNumber: string | null;
   address: string | null;
   pickupPoint: string | null;
+  fixedArrivalActive: boolean;
+  fixedArrivalTime: string | null;
   homeLatitude: number | null;
   homeLongitude: number | null;
   pickupLatitude: number | null;
   pickupLongitude: number | null;
   isActive: boolean;
 };
+
+/**
+ * Roles surfaced on Facilities' "User Info" page: all riders plus the
+ * Operations staff account. FACILITIES and SUPER_ADMIN accounts stay
+ * excluded — those belong to Super Admin's user management.
+ */
+export const EMPLOYEE_DIRECTORY_ROLES: Role[] = [
+  Role.EMPLOYEE,
+  Role.CORPORATE_EMPLOYEE,
+  Role.FIXED_ARRIVAL,
+  Role.OPERATIONS,
+];
 
 /** Read-only employee directory, used by Facilities' "User Info" page. */
 export async function getEmployeeDirectory(
@@ -100,7 +115,7 @@ export async function getEmployeeDirectory(
 ): Promise<UserPage<EmployeeDirectoryRow>> {
   const needle = q?.trim().slice(0, MAX_SEARCH_LENGTH) ?? "";
   const where = {
-    role: "EMPLOYEE",
+    role: { in: EMPLOYEE_DIRECTORY_ROLES },
     ...(needle
       ? {
           OR: [
@@ -123,12 +138,15 @@ export async function getEmployeeDirectory(
     select: {
       id: true,
       fullName: true,
+      role: true,
       employeeCode: true,
       department: true,
       email: true,
       contactNumber: true,
       address: true,
       pickupPoint: true,
+      fixedArrivalActive: true,
+      fixedArrivalTime: true,
       isActive: true,
       homeAddress: { select: { latitude: true, longitude: true } },
       pickupAddress: { select: { latitude: true, longitude: true } },
@@ -142,12 +160,15 @@ export async function getEmployeeDirectory(
     rows: users.map((user) => ({
       id: user.id,
       fullName: user.fullName,
+      role: user.role as Role,
       employeeCode: user.employeeCode,
       department: user.department,
       email: user.email,
       contactNumber: user.contactNumber,
       address: user.address,
       pickupPoint: user.pickupPoint,
+      fixedArrivalActive: user.fixedArrivalActive,
+      fixedArrivalTime: user.fixedArrivalTime,
       homeLatitude: user.homeAddress?.latitude ?? null,
       homeLongitude: user.homeAddress?.longitude ?? null,
       pickupLatitude: user.pickupAddress?.latitude ?? null,

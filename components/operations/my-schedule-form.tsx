@@ -74,7 +74,7 @@ export function MyScheduleForm({
   return (
     <form action={formAction} className="space-y-4">
       <input type="hidden" name="weekStartDate" value={weekStartDate} />
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <p className="text-sm text-muted-foreground">
           Select your arrival time for each day, or mark a day as not needing
           transport.

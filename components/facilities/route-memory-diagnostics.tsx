@@ -62,7 +62,7 @@ export function RouteMemoryDiagnostics() {
         Why these times?
       </Button>
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="max-h-[85vh] max-w-3xl overflow-y-auto">
+        <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-3xl">
           <DialogHeader>
             <DialogTitle>Route memory — why pick-up times look like this</DialogTitle>
             <DialogDescription>

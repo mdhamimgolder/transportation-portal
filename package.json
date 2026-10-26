@@ -9,7 +9,7 @@
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "typecheck": "tsc --noEmit",
-    "test": "node --import tsx --test lib/routing/__tests__/side-selection.test.ts lib/routing/__tests__/manual-plan-training.test.ts lib/routing/__tests__/corridor-core.test.ts lib/routing/__tests__/matrix-core.test.ts lib/date/__tests__/dhaka-time.test.ts lib/validation/__tests__/route-analysis.test.ts",
+    "test": "node --import tsx --test lib/routing/__tests__/side-selection.test.ts lib/routing/__tests__/manual-plan-training.test.ts lib/routing/__tests__/corridor-core.test.ts lib/routing/__tests__/matrix-core.test.ts lib/date/__tests__/dhaka-time.test.ts lib/date/__tests__/week-sync.test.ts lib/validation/__tests__/route-analysis.test.ts lib/constants/__tests__/adhoc-arrival-times.test.ts",
     "verify": "npm run typecheck && npm run lint && npm run test",
     "postinstall": "prisma generate",
     "db:generate": "prisma generate",

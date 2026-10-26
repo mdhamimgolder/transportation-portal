@@ -198,9 +198,7 @@ export function WeeklyScheduleBulkUploadDialog({
       }}
     >
       <DialogTrigger asChild>
-        <Button type="button" variant="outline" className="surface-accent">
-          Upload CSV
-        </Button>
+        <Button type="button">Upload CSV</Button>
       </DialogTrigger>
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>

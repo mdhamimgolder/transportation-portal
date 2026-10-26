@@ -5,16 +5,11 @@ import { prisma } from "@/lib/prisma";
 import { requireRole } from "@/lib/rbac/guards";
 import { Role } from "@/lib/constants/enums";
 import { sanitizedActionError } from "@/lib/actions/action-error";
-import { getMondayOfWeek, toUtcMidnight } from "@/lib/date/week";
+import { getMondayOfWeek, parseDayKey } from "@/lib/date/week";
 import { normalizeOfficeLocation } from "@/lib/constants/office-locations";
 import { SHIFT_KEYS } from "@/lib/constants/route-shifts";
 import type { PinState, ShiftKey } from "@/lib/constants/route-shifts";
 import { syncPickupPointTimes } from "@/lib/routing/pickup-schedule";
-
-function parseDayString(value: string): Date {
-  const [year, month, day] = value.split("-").map(Number);
-  return new Date(year, month - 1, day);
-}
 
 /**
  * Canonicalize an "HH:mm" time (e.g. "22:00"). Blank/absent returns null
@@ -143,7 +138,7 @@ export async function toggleVehicleShiftPin(
     const vehicle = await prisma.vehicle.findUnique({ where: { id: vehicleId } });
     if (!vehicle) return { success: false, pin: null, error: "Vehicle not found." };
 
-    const weekStart = toUtcMidnight(getMondayOfWeek(parseDayString(weekStartDateStr)));
+    const weekStart = getMondayOfWeek(parseDayKey(weekStartDateStr));
     const existing = await prisma.vehicleShiftAssignment.findFirst({
       where: { vehicleId, startDate: weekStart },
     });
@@ -204,7 +199,7 @@ export async function getVehicleShiftPins(
   await requireRole([Role.FACILITIES, Role.SUPER_ADMIN]);
 
   try {
-    const weekStart = toUtcMidnight(getMondayOfWeek(parseDayString(weekStartDateStr)));
+    const weekStart = getMondayOfWeek(parseDayKey(weekStartDateStr));
     const rows = await prisma.vehicleShiftAssignment.findMany({
       where: { startDate: weekStart, isActive: true },
       select: { vehicleId: true, shifts: true },

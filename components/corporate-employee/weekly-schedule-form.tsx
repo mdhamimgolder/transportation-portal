@@ -41,10 +41,12 @@ function SubmitButton({ disabled }: { disabled: boolean }) {
 }
 
 export function CorporateWeeklyScheduleForm({
+  weekStartDate,
   days,
   initialValues,
   disabled,
 }: {
+  weekStartDate: string;
   days: DayInfo[];
   initialValues: string[];
   disabled: boolean;
@@ -73,7 +75,8 @@ export function CorporateWeeklyScheduleForm({
 
   return (
     <form action={formAction} className="space-y-4">
-      <div className="flex items-center justify-between">
+      <input type="hidden" name="weekStartDate" value={weekStartDate} />
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <p className="text-sm text-muted-foreground">
           Select your arrival time for each day, or mark a day as not needing
           transport.
@@ -134,8 +137,8 @@ export function CorporateWeeklyScheduleForm({
             <DialogTitle>Schedule submitted</DialogTitle>
           </DialogHeader>
           <p className="text-sm text-muted-foreground">
-            Your weekly transport schedule has been submitted to Operation-Admin
-            for approval.
+            Your weekly transport schedule has been submitted to Facilities
+            for route planning.
           </p>
           <DialogFooter>
             <Button

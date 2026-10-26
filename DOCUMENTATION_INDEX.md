@@ -104,7 +104,7 @@ SUPER ADMIN (full system control)
 ## 📋 Business Rules (Critical)
 
 ### 1. Weekly Submission Deadline
-- **When:** Saturday 12:00 PM Asia/Dhaka (UTC+6)
+- **When:** Saturday 12:00 AM Asia/Dhaka (UTC+6)
 - **What:** After deadline, API rejects new weekly schedule submissions for that week
 - **Frontend:** Shows live countdown timer, disables form after deadline
 - **Storage:** All times stored in UTC, displayed in Asia/Dhaka

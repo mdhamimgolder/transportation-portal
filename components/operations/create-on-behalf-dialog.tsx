@@ -12,6 +12,8 @@ import { NO_TRANSPORT_VALUE, ARRIVAL_TIME_OPTIONS } from "@/lib/constants/arriva
 import {
   eligibleAdhocArrivalOptions,
 } from "@/lib/constants/adhoc-arrival-times";
+import { parseDayKey } from "@/lib/date/week";
+import { useServerDhakaTime } from "@/lib/time/use-server-dhaka-time";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -140,11 +142,11 @@ function EmployeeInfoPanel({ selected }: { selected: OnBehalfEmployeeOption }) {
   );
 }
 
-function SubmitButton() {
+function SubmitButton({ label }: { label: string }) {
   const { pending } = useFormStatus();
   return (
     <Button type="submit" disabled={pending}>
-      {pending ? "Saving..." : "Create & approve"}
+      {pending ? "Saving..." : label}
     </Button>
   );
 }
@@ -188,12 +190,12 @@ export function CreateWeeklyOnBehalfDialog({
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
         <Button type="button" variant="outline">
-          Create on behalf of employee
+          Place a single request
         </Button>
       </DialogTrigger>
       <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-xl">
         <DialogHeader>
-          <DialogTitle>Create weekly schedule on behalf of an employee</DialogTitle>
+          <DialogTitle>Place a single weekly schedule</DialogTitle>
           <DialogDescription>
             For an employee who missed the submission window. This is saved as
             already approved -- it skips the normal review step.
@@ -239,14 +241,14 @@ export function CreateWeeklyOnBehalfDialog({
           ) : null}
           {weeklyState.success ? (
             <p className="text-sm text-green-foreground">
-              Weekly schedule created and approved for {weeklyState.employeeName}.
+              Weekly schedule placed for {weeklyState.employeeName}.
             </p>
           ) : null}
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => setOpen(false)}>
               Close
             </Button>
-            <SubmitButton />
+            <SubmitButton label="Place request" />
           </DialogFooter>
         </form>
       </DialogContent>
@@ -266,14 +268,17 @@ export function CreateAdHocOnBehalfDialog({
   const [adhocDate, setAdhocDate] = useState("");
   const [adhocTime, setAdhocTime] = useState("");
   const [adhocReason, setAdhocReason] = useState("");
+  // Server-synced clock for the 3-hour cutoff — never the device clock.
+  const { now: serverNow } = useServerDhakaTime();
+  const serverNowMs = serverNow?.getTime();
 
-  const adhocArrivalOptions = useMemo(
-    () =>
-      adhocDate
-        ? eligibleAdhocArrivalOptions(new Date(`${adhocDate}T00:00:00`))
-        : [],
-    [adhocDate]
-  );
+  const adhocArrivalOptions = useMemo(() => {
+    if (!adhocDate) return [];
+    const base = parseDayKey(adhocDate);
+    if (Number.isNaN(base.getTime())) return [];
+    const now = serverNowMs != null ? new Date(serverNowMs) : new Date();
+    return eligibleAdhocArrivalOptions(base, now);
+  }, [adhocDate, serverNowMs]);
 
   const [adhocState, adhocAction] = useActionState(
     createAdHocRequestOnBehalf,
@@ -295,12 +300,12 @@ export function CreateAdHocOnBehalfDialog({
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
         <Button type="button" variant="outline">
-          Create on behalf of employee
+          Place an Ad-hoc request
         </Button>
       </DialogTrigger>
       <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle>Create ad-hoc request on behalf of an employee</DialogTitle>
+          <DialogTitle>Place an ad-hoc request</DialogTitle>
           <DialogDescription>
             For an employee who needs a same-day request logged for them. This
             is saved as already approved -- it goes straight to Facilities.
@@ -327,9 +332,12 @@ export function CreateAdHocOnBehalfDialog({
                 const next = e.target.value;
                 setAdhocDate(next);
                 if (adhocTime && next) {
-                  const nextOptions = eligibleAdhocArrivalOptions(
-                    new Date(`${next}T00:00:00`)
-                  );
+                  const base = parseDayKey(next);
+                  const now =
+                    serverNowMs != null ? new Date(serverNowMs) : new Date();
+                  const nextOptions = Number.isNaN(base.getTime())
+                    ? []
+                    : eligibleAdhocArrivalOptions(base, now);
                   if (
                     nextOptions.length === 0 ||
                     !nextOptions.some((option) => option.value === adhocTime)
@@ -382,14 +390,14 @@ export function CreateAdHocOnBehalfDialog({
           ) : null}
           {adhocState.success ? (
             <p className="text-sm text-green-foreground">
-              Ad-hoc request created and approved for {adhocState.employeeName}.
+              Ad-hoc request placed for {adhocState.employeeName}.
             </p>
           ) : null}
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => setOpen(false)}>
               Close
             </Button>
-            <SubmitButton />
+            <SubmitButton label="Place request" />
           </DialogFooter>
         </form>
       </DialogContent>

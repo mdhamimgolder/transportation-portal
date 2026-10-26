@@ -40,7 +40,7 @@ Roles are `EMPLOYEE`, `CORPORATE_EMPLOYEE`, `FIXED_ARRIVAL`, `OPERATIONS`, `FACI
 
 ## 6. Business Rules (critical — implement exactly)
 
-1. **Weekly deadline:** Weekly schedules for next week (Mon–Fri) must be submitted by **Saturday 12:00 PM Asia/Dhaka**. After the deadline the API rejects submission for that week with a clear error; the UI shows a live countdown and disables the form.
+1. **Weekly deadline:** Weekly schedules for next week (Mon–Fri) must be submitted by **Saturday 12:00 AM Asia/Dhaka**. After the deadline the API rejects submission for that week with a clear error; the UI shows a live countdown and disables the form.
 2. **Weekly flow:** submitted → Operations approves → becomes visible in Facilities route planning. Rejected requests return to the employee with remarks.
 3. **Ad-hoc flow:** on creation, instantly visible to BOTH Operations (tracking only) and Facilities (action). No approval step.
 4. **Allocation dispatch:** when Facilities saves pickup details, send transport details through Next.js `after()`; mark delivery as sent only after a successful send.

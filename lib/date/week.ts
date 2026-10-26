@@ -1,14 +1,42 @@
 /**
- * Weekly submission window logic.
+ * Weekly submission window logic + canonical week/day date keys.
  *
  * Rule (PRD 4.2): employees submit a Mon-Fri schedule for the *upcoming* week;
- * the window locks at Saturday 12:00 PM. Once that Saturday-noon deadline for
- * a given target week passes, the window rolls forward to the following week
- * (whose own deadline is exactly 7 days later).
+ * the window locks at Saturday 12:00 AM (midnight). Once that Saturday-midnight
+ * deadline for a given target week passes, the window rolls forward to the
+ * following week (whose own deadline is exactly 7 days later).
+ *
+ * CANONICAL KEYS — read this before touching dates:
+ * Every week/day key (`weeklySchedule.weekStartDate`, `weeklyScheduleDay.date`,
+ * `routePlan.weekStartDate/dayDate`, `adHocRequest.date`) is stored as a UTC
+ * midnight instant whose calendar date equals the ASIA/DHAKA calendar date.
+ * All helpers below are explicit about Asia/Dhaka and NEVER use the host
+ * timezone (`getDay`, `setHours`, `getDate`, `toDateString`, ...), so dev
+ * machines, CI, and production servers behave identically.
  */
 
-const MS_PER_DAY = 24 * 60 * 60 * 1000;
+export const TIME_ZONE = "Asia/Dhaka";
+
+export const MS_PER_DAY = 24 * 60 * 60 * 1000;
+export const MS_PER_WEEK = 7 * MS_PER_DAY;
+
+/** Fixed UTC+6 offset — Bangladesh observes no daylight saving time. */
 const DHAKA_UTC_OFFSET_MINUTES = 6 * 60;
+
+/** Calendar date (year/month/day) of `date` as seen in Asia/Dhaka. */
+function dhakaYMD(date: Date): { y: number; m: number; d: number } {
+  const shifted = new Date(date.getTime() + DHAKA_UTC_OFFSET_MINUTES * 60 * 1000);
+  return {
+    y: shifted.getUTCFullYear(),
+    m: shifted.getUTCMonth(),
+    d: shifted.getUTCDate(),
+  };
+}
+
+/** Day of week of `date` as seen in Asia/Dhaka (0=Sun .. 6=Sat). */
+function dhakaDay(date: Date): number {
+  return new Date(date.getTime() + DHAKA_UTC_OFFSET_MINUTES * 60 * 1000).getUTCDay();
+}
 
 /** Convert Dhaka wall-clock minutes on a UTC-midnight date key into a UTC instant. */
 export function dhakaDateTimeFromMinutes(dayDate: Date, minutes: number): Date {
@@ -40,44 +68,90 @@ export function addUtcCalendarDays(date: Date, days: number): Date {
   return result;
 }
 
-function atMidnight(date: Date): Date {
-  const d = new Date(date);
-  d.setHours(0, 0, 0, 0);
-  return d;
-}
-
-/** Today's date at 00:00. */
+/** Today's date as a canonical UTC-midnight key (Dhaka calendar). */
 export function startOfToday(): Date {
-  return atMidnight(new Date());
+  return toUtcMidnight(new Date());
 }
 
-/** Monday (00:00) of the ISO week containing `date`. */
+/** Monday (canonical UTC midnight) of the Dhaka-calendar week containing `date`. */
 export function getMondayOfWeek(date: Date): Date {
-  const d = atMidnight(date);
-  const day = d.getDay(); // 0=Sun, 1=Mon, ..., 6=Sat
-  const diffFromMonday = (day + 6) % 7;
-  d.setDate(d.getDate() - diffFromMonday);
-  return d;
+  const { y, m, d } = dhakaYMD(date);
+  const diffFromMonday = (dhakaDay(date) + 6) % 7;
+  return new Date(Date.UTC(y, m, d) - diffFromMonday * MS_PER_DAY);
 }
 
-/** The same calendar date as `date`, expressed at UTC midnight. Week keys
+/** The same Dhaka-calendar date as `date`, expressed at UTC midnight. Week keys
  * (`weeklySchedule.weekStartDate`, `weeklyScheduleDay.date`) are stored this
  * way so RUN MAPPING / route-generation lookups never depend on the server's
  * timezone — every schedule-creating flow MUST pass its week through this
- * before writing to the database. */
+ * before writing to the database. Idempotent on canonical keys. */
 export function toUtcMidnight(date: Date): Date {
-  return new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+  const { y, m, d } = dhakaYMD(date);
+  return new Date(Date.UTC(y, m, d));
+}
+
+/** Canonical week key for any instant inside a week: the UTC-midnight Monday
+ * of the Dhaka-calendar week containing `date`. Tolerates legacy
+ * Sunday-18:00Z (Dhaka-midnight) keys — they normalize to the same Monday. */
+export function normalizeWeekStart(date: Date): Date {
+  return toUtcMidnight(getMondayOfWeek(date));
+}
+
+/** Parse a "yyyy-mm-dd" calendar string as an Asia/Dhaka date and return its
+ * canonical UTC-midnight key. Unlike `new Date("…T00:00:00")` (host-local) or
+ * `new Date("…")` (UTC), the result is the same Dhaka calendar day on every
+ * host timezone. Returns an invalid Date for malformed input. */
+export function parseDayKey(value: string): Date {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value.trim());
+  if (!match) return new Date(NaN);
+  const y = Number(match[1]);
+  const m = Number(match[2]);
+  const d = Number(match[3]);
+  if (m < 1 || m > 12 || d < 1 || d > 31) return new Date(NaN);
+  const key = new Date(Date.UTC(y, m - 1, d));
+  // Reject overflow (e.g. month 02 day 30 rolls into March).
+  if (key.getUTCFullYear() !== y || key.getUTCMonth() !== m - 1 || key.getUTCDate() !== d) {
+    return new Date(NaN);
+  }
+  return key;
 }
 
 export type SubmissionWindow = {
-  /** Monday of the Mon-Fri week currently open for submission. */
+  /** Monday (canonical UTC midnight) of the Mon-Fri week currently open for submission. */
   weekStartDate: Date;
-  /** Saturday 12:00 PM deadline for that week. */
+  /** Saturday 12:00 AM Asia/Dhaka deadline instant for that week. */
   deadline: Date;
   /** When this window opened — exactly 7 days before `deadline`. */
   opensAt: Date;
   isOpen: boolean;
 };
+
+/**
+ * Submission window for one explicit target week (canonical Monday key):
+ * the deadline is the Saturday before that Monday at the lock wall-clock
+ * time, and the window opens exactly 7 days earlier. Powers the Corporate
+ * week picker so every offered week is gated by its own deadline.
+ */
+export function getSubmissionWindowForWeek(
+  targetMonday: Date,
+  now: Date = new Date(),
+  lockDayOfWeek: number = 6,
+  lockHour: number = 0,
+  lockMinute: number = 0
+): SubmissionWindow {
+  const monday = normalizeWeekStart(targetMonday);
+  const dayOffsetFromMonday = (lockDayOfWeek - 1 + 7) % 7;
+  // The lock-day date (canonical key) + Dhaka wall-clock lock time -> instant.
+  const lockDateKey = new Date(monday.getTime() - (7 - dayOffsetFromMonday) * MS_PER_DAY);
+  const deadline = dhakaDateTimeFromMinutes(lockDateKey, lockHour * 60 + lockMinute);
+  const opensAt = new Date(deadline.getTime() - MS_PER_WEEK);
+  return {
+    weekStartDate: monday,
+    deadline,
+    opensAt,
+    isOpen: opensAt.getTime() <= now.getTime() && now.getTime() <= deadline.getTime(),
+  };
+}
 
 /**
  * `lockDayOfWeek` is 0=Sun .. 6=Sat (defaults to Saturday, matching the
@@ -87,38 +161,40 @@ export type SubmissionWindow = {
 export function getSubmissionWindow(
   now: Date = new Date(),
   lockDayOfWeek: number = 6,
-  lockHour: number = 12,
+  lockHour: number = 0,
   lockMinute: number = 0
 ): SubmissionWindow {
   const thisMonday = getMondayOfWeek(now);
-  const dayOffsetFromMonday = (lockDayOfWeek - 1 + 7) % 7;
 
-  let candidateTargetMonday = new Date(thisMonday.getTime() + 7 * MS_PER_DAY);
-  let deadline = new Date(thisMonday.getTime() + dayOffsetFromMonday * MS_PER_DAY);
-  deadline.setHours(lockHour, lockMinute, 0, 0);
+  let candidateTargetMonday = new Date(thisMonday.getTime() + MS_PER_WEEK);
+  let window = getSubmissionWindowForWeek(
+    candidateTargetMonday,
+    now,
+    lockDayOfWeek,
+    lockHour,
+    lockMinute
+  );
 
-  if (now.getTime() > deadline.getTime()) {
-    candidateTargetMonday = new Date(
-      candidateTargetMonday.getTime() + 7 * MS_PER_DAY
+  if (now.getTime() > window.deadline.getTime()) {
+    candidateTargetMonday = new Date(candidateTargetMonday.getTime() + MS_PER_WEEK);
+    window = getSubmissionWindowForWeek(
+      candidateTargetMonday,
+      now,
+      lockDayOfWeek,
+      lockHour,
+      lockMinute
     );
-    deadline = new Date(deadline.getTime() + 7 * MS_PER_DAY);
   }
 
-  return {
-    weekStartDate: candidateTargetMonday,
-    deadline,
-    opensAt: new Date(deadline.getTime() - 7 * MS_PER_DAY),
-    isOpen: now.getTime() <= deadline.getTime(),
-  };
+  return window;
 }
 
-/** The 5 calendar dates (Mon-Fri) for a given week-start Monday. */
+/** The 5 calendar dates (Mon-Fri, canonical UTC midnight) for a week. The input
+ * is normalized to its Monday first, so legacy off-Monday keys still yield the
+ * correct Mon-Fri range instead of a shifted Sun-Thu window. */
 export function getWeekDays(weekStartDate: Date): Date[] {
-  return Array.from({ length: 5 }, (_, i) => {
-    const d = new Date(weekStartDate);
-    d.setDate(d.getDate() + i);
-    return d;
-  });
+  const monday = normalizeWeekStart(weekStartDate);
+  return Array.from({ length: 5 }, (_, i) => new Date(monday.getTime() + i * MS_PER_DAY));
 }
 
 export const DAY_LABELS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"];
@@ -128,9 +204,10 @@ const SHORT_MONTHS = [
   "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
 ];
 
-// Deterministic formatting (no locale/timezone) so server and client output
-// identical strings and React hydration never mismatches.
+// Deterministic formatting on the UTC calendar (keys are UTC midnight) so
+// server and client output identical strings on any host timezone and React
+// hydration never mismatches.
 export function formatShortDate(date: Date): string {
-  const month = SHORT_MONTHS[date.getMonth()];
-  return `${date.getDate()} ${month}`;
+  const month = SHORT_MONTHS[date.getUTCMonth()];
+  return `${date.getUTCDate()} ${month}`;
 }

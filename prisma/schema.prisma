@@ -47,12 +47,15 @@ model User {
 
   addressChangedAt DateTime? // last time the employee's address changed (1-month change lock)
 
+  wfmId String? // external workforce-management identifier (added 2026-10-05)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   zoneId String? // Phase 2 hook: area/zone grouping
   zone   Zone?   @relation(fields: [zoneId], references: [id])
 
+  fixedArrivalPickup         FixedArrivalPickup?        @relation("FixedArrivalPickupEmployee")
   weeklySchedules            WeeklySchedule[]           @relation("EmployeeWeeklySchedules")
   adHocRequests              AdHocRequest[]             @relation("EmployeeAdHocRequests")
   addressChangeRequests      AddressChangeRequest[]     @relation("EmployeeAddressChangeRequests")
@@ -344,9 +347,34 @@ model VehicleDriver {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  assignments RouteAssignment[]
+  assignments         RouteAssignment[]
+  fixedArrivalPickups FixedArrivalPickup[]
 
   @@index([isActive])
+}
+
+// ── FIXED-ARRIVAL STATIC PICKUP DETAILS ──────────────────────
+// One row per FIXED_ARRIVAL employee. Facilities saves the standing
+// pick-up details here once (vehicle/driver + pick-up time); they stay
+// in force — across every weekday and week — until Facilities edits
+// them again. Separate from RouteAssignment, which is keyed to a
+// specific WeeklyScheduleDay (per-week submission cycle).
+model FixedArrivalPickup {
+  id String @id @default(cuid())
+
+  employeeId      String  @unique
+  employee        User    @relation("FixedArrivalPickupEmployee", fields: [employeeId], references: [id], onDelete: Cascade)
+  vehicleDriverId String
+  vehicleDriver   VehicleDriver @relation(fields: [vehicleDriverId], references: [id])
+  pickupTime      String // "HH:mm" style display time as entered (e.g. "8:00 PM")
+
+  assignedById String
+  emailSentAt  DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([vehicleDriverId])
 }
 
 // ── APP SETTINGS ──────────────────────────────────────────────
@@ -355,7 +383,7 @@ model VehicleDriver {
 model TransportSettings {
   id                  String   @id @default("singleton")
   weeklyLockDayOfWeek Int      @default(6) // 0=Sun .. 6=Sat; default Saturday
-  weeklyLockHour      Int      @default(12)
+  weeklyLockHour      Int      @default(0) // Saturday 12:00 AM (midnight) Asia/Dhaka
   weeklyLockMinute    Int      @default(0)
   updatedAt           DateTime @updatedAt
 }

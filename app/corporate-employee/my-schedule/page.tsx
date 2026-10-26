@@ -2,8 +2,11 @@ import { requireRole } from "@/lib/rbac/guards";
 import { Role } from "@/lib/constants/enums";
 import { prisma } from "@/lib/prisma";
 import {
+  addUtcCalendarDays,
   getSubmissionWindow,
+  getSubmissionWindowForWeek,
   getWeekDays,
+  normalizeWeekStart,
   toUtcMidnight,
   DAY_LABELS,
   formatShortDate,
@@ -13,20 +16,79 @@ import { NO_TRANSPORT_VALUE, ARRIVAL_TIME_OPTIONS } from "@/lib/constants/arriva
 import { CorporateWeeklyScheduleForm } from "@/components/corporate-employee/weekly-schedule-form";
 import { CountdownTimer } from "@/components/shared/countdown-timer";
 import { StatusBadge } from "@/components/shared/status-badge";
+import { WeekSelect } from "@/components/shared/week-select";
 
-export default async function MySchedulePage() {
+// Open window week plus the next three upcoming weeks -- every option is
+// gated by its own Saturday-midnight submission window.
+const WEEK_OPTION_COUNT = 4;
+
+export default async function MySchedulePage({
+  searchParams,
+}: {
+  searchParams: Promise<{ week?: string }>;
+}) {
   const session = await requireRole([Role.CORPORATE_EMPLOYEE]);
+  const { week } = await searchParams;
 
   const settings = await getTransportSettings();
-  const window = getSubmissionWindow(
-    new Date(),
+  const now = new Date();
+  const baseWindow = getSubmissionWindow(
+    now,
     settings.weeklyLockDayOfWeek,
     settings.weeklyLockHour,
     settings.weeklyLockMinute
   );
-  // Canonical week key (UTC-midnight Monday) — must match how schedules are
-  // stored, otherwise the saved week is never found here.
-  const weekStartDate = toUtcMidnight(window.weekStartDate);
+
+  const optionMondays = Array.from(
+    { length: WEEK_OPTION_COUNT },
+    (_, i) => addUtcCalendarDays(baseWindow.weekStartDate, i * 7)
+  );
+  const optionWindows = optionMondays.map((monday) =>
+    getSubmissionWindowForWeek(
+      monday,
+      now,
+      settings.weeklyLockDayOfWeek,
+      settings.weeklyLockHour,
+      settings.weeklyLockMinute
+    )
+  );
+  const options = optionMondays.map((monday, i) => {
+    const days = getWeekDays(monday);
+    const label = `${formatShortDate(days[0])} – ${formatShortDate(days[4])}`;
+    const window = optionWindows[i];
+    const suffix = window.isOpen
+      ? " (open)"
+      : now.getTime() < window.opensAt.getTime()
+        ? ` (opens ${formatShortDate(toUtcMidnight(window.opensAt))})`
+        : " (closed)";
+    return {
+      value: monday.toISOString(),
+      label: `${label}${suffix}`,
+      disabled: !window.isOpen,
+    };
+  });
+
+  let selectedMonday = baseWindow.weekStartDate;
+  if (week) {
+    const parsed = new Date(week);
+    if (!Number.isNaN(parsed.getTime())) {
+      const normalized = normalizeWeekStart(parsed);
+      if (
+        parsed.getTime() === normalized.getTime() &&
+        optionMondays.some((m) => m.getTime() === normalized.getTime())
+      ) {
+        selectedMonday = normalized;
+      }
+    }
+  }
+  const selectedWindow = getSubmissionWindowForWeek(
+    selectedMonday,
+    now,
+    settings.weeklyLockDayOfWeek,
+    settings.weeklyLockHour,
+    settings.weeklyLockMinute
+  );
+  const weekStartDate = selectedMonday;
   const weekDates = getWeekDays(weekStartDate);
 
   const existing = await prisma.weeklySchedule.findUnique({
@@ -47,8 +109,10 @@ export default async function MySchedulePage() {
       : NO_TRANSPORT_VALUE;
   });
 
-  const isLockedByApproval = existing?.status === "APPROVED";
-  const disabled = !window.isOpen || isLockedByApproval;
+  // No Operations review step for corporate schedules -- every submission is
+  // saved as already approved for Facilities; only the per-week
+  // Saturday-midnight window gates the form.
+  const disabled = !selectedWindow.isOpen;
 
   const days = weekDates.map((date, i) => ({
     label: DAY_LABELS[i],
@@ -79,18 +143,34 @@ export default async function MySchedulePage() {
         {existing ? <StatusBadge status={existing.status} /> : null}
       </div>
 
-      {window.isOpen ? (
+      <WeekSelect
+        value={weekStartDate.toISOString()}
+        options={options}
+        label="Week"
+      />
+
+      {selectedWindow.isOpen ? (
         <p className="text-sm text-muted-foreground">
           Submissions lock in{" "}
           <span className="font-medium text-foreground">
-            <CountdownTimer deadline={window.deadline.toISOString()} />
+            <CountdownTimer deadline={selectedWindow.deadline.toISOString()} />
           </span>{" "}
-          ({window.deadline.toLocaleDateString(undefined, { weekday: "long" })}{" "}
-          {window.deadline.toLocaleTimeString(undefined, {
+          ({selectedWindow.deadline.toLocaleDateString(undefined, { weekday: "long" })}{" "}
+          {selectedWindow.deadline.toLocaleTimeString(undefined, {
             hour: "numeric",
             minute: "2-digit",
           })}
           ).
+        </p>
+      ) : now.getTime() < selectedWindow.opensAt.getTime() ? (
+        <p className="text-sm text-muted-foreground">
+          Submissions for this week open on{" "}
+          {selectedWindow.opensAt.toLocaleDateString(undefined, {
+            weekday: "long",
+            month: "short",
+            day: "numeric",
+          })}
+          .
         </p>
       ) : (
         <p className="text-sm text-destructive">
@@ -98,13 +178,9 @@ export default async function MySchedulePage() {
         </p>
       )}
 
-      {isLockedByApproval ? (
-        <p className="text-sm text-muted-foreground">
-          This schedule has been approved and can no longer be changed.
-        </p>
-      ) : null}
-
       <CorporateWeeklyScheduleForm
+        key={weekStartDate.toISOString()}
+        weekStartDate={weekStartDate.toISOString()}
         days={days}
         initialValues={initialValues}
         disabled={disabled}

@@ -35,8 +35,8 @@ export const ROLE_LABELS: Record<Role, string> = {
   EMPLOYEE: "Employee-MDS",
   OPERATIONS: "Operation-Admin",
   FACILITIES: "Facilities",
-  CORPORATE_EMPLOYEE: "Operation-Corporate Employee",
-  FIXED_ARRIVAL: "Fixed Arrival Employee",
+  CORPORATE_EMPLOYEE: "Employee-Corporate",
+  FIXED_ARRIVAL: "Employee-Corporate(Fixed arrival)",
 };
 
 export const WeeklyScheduleStatus = {

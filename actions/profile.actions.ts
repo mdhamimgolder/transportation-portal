@@ -38,7 +38,13 @@ export async function updateProfile(
   _prevState: UpdateProfileState,
   formData: FormData
 ): Promise<UpdateProfileState> {
-  const session = await requireRole([Role.EMPLOYEE, Role.CORPORATE_EMPLOYEE]);
+  // Every role that mounts `ProfileUpdateForm` must be listed here, otherwise
+  // the form renders but saving redirects to /403 (Fixed-arrival profiles do).
+  const session = await requireRole([
+    Role.EMPLOYEE,
+    Role.CORPORATE_EMPLOYEE,
+    Role.FIXED_ARRIVAL,
+  ]);
 
   try {
   const pickupPointRaw = formData.get("pickupPoint");
@@ -205,6 +211,8 @@ export async function updateProfile(
 
   revalidatePath("/employee/profile");
   revalidatePath("/corporate-employee/profile");
+  revalidatePath("/fixed-arrival/profile");
+  revalidatePath("/facilities/user-info");
 
   return {
     errors: Object.keys(errors).length > 0 ? errors : undefined,

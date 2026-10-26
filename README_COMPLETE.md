@@ -41,7 +41,7 @@ TABLE: weekly_requests
 ├─ id, employee_id*, week_start_date (Monday), status*
 ├─ submitted_at, reviewed_by, reviewed_at, remarks
 └─ Status: submitted → approved OR rejected
-    └─ Deadline: Saturday 12:00 PM Asia/Dhaka
+    └─ Deadline: Saturday 12:00 AM Asia/Dhaka
 
 TABLE: weekly_request_days
 ├─ id, weekly_request_id*, day_date, arrival_time
@@ -98,7 +98,7 @@ TABLE: audit_logs (COMPLIANCE)
 ## Critical Business Rules
 
 ### 1. Weekly Schedule Deadline
-- **Rule:** Submissions close Saturday 12:00 PM Asia/Dhaka
+- **Rule:** Submissions close Saturday 12:00 AM Asia/Dhaka
 - **Enforcement:** API rejects submissions after deadline
 - **UI:** Live countdown timer, disabled form after deadline
 - **Timezone:** All times stored in UTC, displayed in Asia/Dhaka

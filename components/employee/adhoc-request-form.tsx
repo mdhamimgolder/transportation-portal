@@ -10,7 +10,7 @@ import {
   ADHOC_MIN_ADVANCE_HOURS,
   eligibleAdhocArrivalOptions,
 } from "@/lib/constants/adhoc-arrival-times";
-import { startOfToday } from "@/lib/date/week";
+import { useServerDhakaTime } from "@/lib/time/use-server-dhaka-time";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -35,9 +35,18 @@ function SubmitButton() {
 
 export function AdHocRequestForm() {
   const [state, formAction] = useActionState(submitAdHocRequest, initialState);
+  // Server-synced Dhaka clock — never trust the device clock for the 3-hour
+  // cutoff. `now` advances from the /api/time instant via monotonic elapsed
+  // time; the server re-enforces the rule on submit regardless.
+  const { now, todayKey, loading, unsynced } = useServerDhakaTime();
+  const nowMs = now?.getTime();
+  const todayKeyMs = todayKey?.getTime();
   const arrivalOptions = useMemo(
-    () => eligibleAdhocArrivalOptions(startOfToday(), new Date()),
-    []
+    () =>
+      nowMs != null && todayKeyMs != null
+        ? eligibleAdhocArrivalOptions(new Date(todayKeyMs), new Date(nowMs))
+        : [],
+    [nowMs, todayKeyMs]
   );
 
   return (
@@ -50,7 +59,11 @@ export function AdHocRequestForm() {
         <Label htmlFor="arrivalTime">
           Arrival time (tonight – tomorrow 6 AM)
         </Label>
-        {arrivalOptions.length > 0 ? (
+        {loading ? (
+          <p className="rounded-md border border-dashed px-3 py-2 text-sm text-muted-foreground">
+            Syncing Dhaka time…
+          </p>
+        ) : arrivalOptions.length > 0 ? (
           <Select name="arrivalTime" required>
             <SelectTrigger className="w-full" id="arrivalTime">
               <SelectValue placeholder="Select a time" />
@@ -72,8 +85,15 @@ export function AdHocRequestForm() {
           </p>
         )}
         <p className="text-xs text-muted-foreground">
-          Arrival must be at least {ADHOC_MIN_ADVANCE_HOURS} hours from now.
+          Arrival must be at least {ADHOC_MIN_ADVANCE_HOURS} hours from now
+          (Dhaka time, synced from server).
         </p>
+        {unsynced && !loading ? (
+          <p className="text-xs text-amber-600">
+            Could not sync server time — showing device-clock times as a
+            fallback. The server still enforces the 3-hour rule on submit.
+          </p>
+        ) : null}
       </div>
       <div className="space-y-2">
         <Label htmlFor="reason">Reason (optional)</Label>

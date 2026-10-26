@@ -49,7 +49,7 @@ users (root)
 ```
 
 ### Critical Business Rules
-- ✅ Weekly deadline: Saturday 12:00 PM Asia/Dhaka
+- ✅ Weekly deadline: Saturday 12:00 AM Asia/Dhaka
 - ✅ All timestamps stored in UTC, displayed in Asia/Dhaka (UTC+6)
 - ✅ Role-based access control (4 roles: employee, operations, facilities, super_admin)
 - ✅ Audit logging for every create/update/approve/reject action

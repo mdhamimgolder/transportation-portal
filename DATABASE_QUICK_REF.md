@@ -21,7 +21,7 @@ users (id, name, email*, contact_number, address, hashed_password, role*, is_act
 - **password_reset_tokens**: One-time reset links (30 min validity, single-use)
 
 ### 2. Weekly Transport Requests
-- **weekly_requests**: Employee submits schedule for Mon–Fri (deadline: Sat 12:00 PM Asia/Dhaka)
+- **weekly_requests**: Employee submits schedule for Mon–Fri (deadline: Sat 12:00 AM Asia/Dhaka)
   - Status flow: `submitted` → `approved` OR `rejected`
   - Only approved requests visible to Facilities for planning
 - **weekly_request_days**: Per-day entries (5 rows per request, one per weekday)
@@ -55,7 +55,7 @@ users (id, name, email*, contact_number, address, hashed_password, role*, is_act
 
 | Rule | Enforcement |
 |------|-------------|
-| Weekly deadline | Sat 12:00 PM Asia/Dhaka; API rejects after deadline |
+| Weekly deadline | Sat 12:00 AM Asia/Dhaka; API rejects after deadline |
 | Weekly flow | submitted → Operations approves → Facilities plans |
 | Ad-hoc flow | No approval; instant alert to Ops + Facilities |
 | Allocation dispatch | Email sent on driver assignment (BackgroundTask) |
@@ -73,7 +73,7 @@ users (id, name, email*, contact_number, address, hashed_password, role*, is_act
 - `POST /api/v1/auth/login` — Email + password
 - `POST /api/v1/auth/forgot-password` — Reset link via email
 - `POST /api/v1/auth/reset-password` — Set new password
-- `POST /api/v1/weekly` — Submit weekly schedule (by Sat 12:00 PM)
+- `POST /api/v1/weekly` — Submit weekly schedule (by Sat 12:00 AM)
 - `POST /api/v1/adhoc` — Submit emergency request
 - `GET /api/v1/transport/my-details` — View own allocations
 - `GET /api/v1/users/me` — View own profile

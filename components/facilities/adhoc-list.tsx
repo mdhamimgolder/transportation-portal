@@ -87,7 +87,7 @@ export function AdHocList({
               style={{ background: RAIL_BY_STATUS[request.status] ?? "var(--muted)" }}
             />
 
-            <div className="grid h-24 gap-0 overflow-hidden sm:grid-cols-[minmax(0,1fr)_5rem_25rem]">
+            <div className="grid h-auto gap-0 overflow-hidden sm:h-24 sm:grid-cols-[minmax(0,1fr)_5rem_25rem]">
               {/* Left: identity + required data (fills the box) */}
               <div className="flex min-w-0 flex-col justify-center gap-[3px] overflow-hidden px-3 py-1.5">
                 <div className="flex min-w-0 items-center gap-1.5">

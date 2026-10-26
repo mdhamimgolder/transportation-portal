@@ -7,6 +7,7 @@ import {
   getMondayOfWeek,
   getWeekDays,
   getSubmissionWindow,
+  normalizeWeekStart,
   startOfToday,
   toUtcMidnight,
   DAY_LABELS,
@@ -23,9 +24,6 @@ import {
   WeeklyRequestsFilters,
   type WeekOption,
 } from "@/components/operations/weekly-requests-filters";
-import { ExportCsvButton } from "@/components/facilities/export-csv-button";
-import { WeeklyScheduleBulkUploadDialog } from "@/components/operations/weekly-schedule-bulk-upload-dialog";
-import { excelSafeText } from "@/lib/csv";
 
 const ARRIVAL_TIME_LABELS = Object.fromEntries(
   ARRIVAL_TIME_OPTIONS.map((o) => [o.value, o.label])
@@ -44,15 +42,21 @@ export default async function WeeklyRequestsPage({
 
   const params = await searchParams;
   const q = params.q?.trim().toLowerCase() ?? "";
-  const weekFilter = params.week;
+  // Normalize the filter to its canonical Monday so a legacy off-Monday key
+  // in the URL still filters the right Dhaka week.
+  const weekFilterDate = params.week ? normalizeWeekStart(new Date(params.week)) : null;
+  const weekFilter = weekFilterDate && !Number.isNaN(weekFilterDate.getTime()) ? weekFilterDate : null;
   const thisMonday = toUtcMidnight(getMondayOfWeek(startOfToday()));
   const nextMonday = addUtcCalendarDays(thisMonday, 7);
   const formatWeekOptionLabel = (weekStartDate: Date) => {
-    const days = getWeekDays(weekStartDate);
+    // Normalize first: a legacy off-Monday key still labels its Mon–Fri week
+    // (e.g. 12 Oct – 16 Oct) instead of a shifted Sun–Thu window.
+    const monday = normalizeWeekStart(weekStartDate);
+    const days = getWeekDays(monday);
     const weekType =
-      weekStartDate.getTime() === thisMonday.getTime()
+      monday.getTime() === thisMonday.getTime()
         ? " (this week)"
-        : weekStartDate.getTime() === nextMonday.getTime()
+        : monday.getTime() === nextMonday.getTime()
           ? " (next week)"
           : "";
     return `${formatShortDate(days[0])} – ${formatShortDate(days[4])}${weekType}`;
@@ -67,7 +71,7 @@ export default async function WeeklyRequestsPage({
     }),
     prisma.weeklySchedule.findMany({
       where: {
-        ...(weekFilter ? { weekStartDate: new Date(weekFilter) } : {}),
+        ...(weekFilter ? { weekStartDate: weekFilter } : {}),
         ...(q
           ? {
               employee: {
@@ -156,6 +160,11 @@ export default async function WeeklyRequestsPage({
       return { dayOfWeek: i + 1, display, value };
     });
 
+    // Full Mon–Fri range from the normalized week (a legacy off-Monday key
+    // still renders e.g. "12 Oct – 16 Oct", never a shifted Sun–Thu window).
+    const weekRange = getWeekDays(schedule.weekStartDate);
+    const weekLabel = `${formatShortDate(weekRange[0])} – ${formatShortDate(weekRange[4])}`;
+
     return {
       id: schedule.id,
       status: schedule.status,
@@ -163,7 +172,7 @@ export default async function WeeklyRequestsPage({
       reviewerName: schedule.reviewedById
         ? reviewerNames.get(schedule.reviewedById) ?? null
         : null,
-      weekLabel: formatShortDate(schedule.weekStartDate),
+      weekLabel,
       employee: {
         fullName: schedule.employee.fullName,
         employeeCode: schedule.employee.employeeCode,
@@ -175,41 +184,15 @@ export default async function WeeklyRequestsPage({
     };
   });
 
-  const exportCsvRows = rows.map((row) => [
-    row.employee.email,
-    row.employee.fullName,
-    row.employee.employeeCode ? excelSafeText(row.employee.employeeCode) : "—",
-    ...row.days.map((d) => d.display),
-  ]);
-
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-semibold">MDS Weekly Schedule</h1>
-          <p className="text-sm text-muted-foreground">
-            Review, edit, and approve employee weekly transport schedules.
-            Approved schedules become available to Facilities for route
-            planning.
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <ExportCsvButton
-            filename="weekly-requests-export.csv"
-            headers={[
-              "Employee Email",
-              "Employee Name",
-              "Employee ID",
-              "Monday",
-              "Tuesday",
-              "Wednesday",
-              "Thursday",
-              "Friday",
-            ]}
-            rows={exportCsvRows}
-          />
-          <WeeklyScheduleBulkUploadDialog weekOptions={uploadWeekOptions} />
-        </div>
+      <div>
+        <h1 className="text-xl font-semibold">MDS Weekly Schedule</h1>
+        <p className="text-sm text-muted-foreground">
+          Place individual schedules or bulk-upload the week&apos;s MDS
+          transport schedules. Placed schedules go straight to Facilities
+          for route planning.
+        </p>
       </div>
       <WeeklyRequestsFilters weekOptions={weekOptions} />
       <WeeklyRequestsTable
@@ -217,6 +200,7 @@ export default async function WeeklyRequestsPage({
         employees={employees}
         onBehalfWeekLabel={onBehalfWeekLabel}
         onBehalfDays={onBehalfDays}
+        uploadWeekOptions={uploadWeekOptions}
       />
     </div>
   );
