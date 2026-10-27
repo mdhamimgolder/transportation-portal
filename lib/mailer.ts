@@ -3,7 +3,8 @@ import nodemailer from "nodemailer";
 import type SMTPPool from "nodemailer/lib/smtp-pool";
 import { env } from "@/lib/env";
 import { logger } from "@/lib/logger";
-import { escapeHtml, textToHtml } from "@/lib/html";
+import { textToHtml } from "@/lib/html";
+import { accountCreatedEmail } from "@/lib/email-templates";
 
 /**
  * SMTP transporter, created on first send (never at module import) so importing
@@ -129,51 +130,13 @@ export async function trySendMail(params: {
   }
 }
 
-function credentialsEmailContent(params: {
-  to: string;
-  fullName: string;
-  password: string;
-}): { subject: string; body: string; html: string } {
-  const { to, fullName, password } = params;
-  const safeName = escapeHtml(fullName);
-  const safeTo = escapeHtml(to);
-  const safePassword = escapeHtml(password);
-  return {
-    subject: "Your Transportation Portal Account Has Been Created",
-    body: `Hi ${fullName},\n\nYour account for the Transportation Portal has been created.\n\nLogin credentials:\nEmail: ${to}\nPassword: ${password}\n\nPlease change your password after signing in for the first time.\n\nBest regards,\nTransportation Team`,
-    html: `
-      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
-        <div style="height: 4px; background: #70bccc; border-radius: 4px 4px 0 0;"></div>
-        <div style="border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 4px 4px; padding: 32px;">
-          <h2 style="color: #1a1a2e; margin: 0 0 8px;">Your Account Has Been Created</h2>
-          <p style="color: #6b7280; margin: 0 0 24px;">You can now sign in to the Transportation Portal.</p>
-          <p>Hi <strong>${safeName}</strong>,</p>
-          <p>Your account is ready. Here are your login credentials:</p>
-          <table style="width: 100%; border-collapse: collapse; margin: 16px 0;">
-            <tr style="background: #f8f9fa;">
-              <td style="padding: 10px; border: 1px solid #dee2e6; font-weight: bold; width: 120px;">Email</td>
-              <td style="padding: 10px; border: 1px solid #dee2e6; font-family: monospace;">${safeTo}</td>
-            </tr>
-            <tr style="background: #f8f9fa;">
-              <td style="padding: 10px; border: 1px solid #dee2e6; font-weight: bold;">Password</td>
-              <td style="padding: 10px; border: 1px solid #dee2e6; font-family: monospace;">${safePassword}</td>
-            </tr>
-          </table>
-          <p style="color: #b45309; font-weight: bold; margin-top: 16px;">Please change your password after signing in for the first time.</p>
-          <p style="color: #6c757d; margin-top: 24px;">Best regards,<br><strong>Transportation Team</strong></p>
-        </div>
-      </div>
-    `,
-  };
-}
-
 /** Fire-and-forget version used right after account creation. */
 export function sendCredentialsEmail(params: {
   to: string;
   fullName: string;
   password: string;
 }): Promise<void> {
-  const { subject, body, html } = credentialsEmailContent(params);
+  const { subject, body, html } = accountCreatedEmail(params);
   return sendMailBackground({ to: params.to, subject, body, html });
 }
 
@@ -184,7 +147,7 @@ export async function sendCredentialsEmailNow(params: {
   fullName: string;
   password: string;
 }): Promise<{ status: "sent" | "skipped-dev" | "failed"; error?: string }> {
-  const { subject, body, html } = credentialsEmailContent(params);
+  const { subject, body, html } = accountCreatedEmail(params);
   try {
     await sendMail({ to: params.to, subject, body, html });
     return isEmailEnabled() ? { status: "sent" } : { status: "skipped-dev" };
