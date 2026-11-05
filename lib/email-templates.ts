@@ -59,7 +59,7 @@ export function transportArrangedEmail({
   const heading = isAdhoc
     ? "Your ad-hoc transport is arranged"
     : "Your transport is arranged";
-  const kindLabel = isAdhoc ? "Ad-hoc trip" : "Weekly trip";
+  const kindLabel = isAdhoc ? "Ad-hoc Transport" : "Weekly trip";
 
   const rows: EmailDetailRow[] = [
     { label: "Travel date", value: dateLabel, accent: true },

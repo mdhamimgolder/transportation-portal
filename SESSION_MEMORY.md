@@ -22,6 +22,10 @@ intro, and no repeated explanatory note. Pickup-time highlight, readable 10px
 labels/13px values, all trip rows, branding, and portal CTA remain; other mail
 types keep the standard layout.
 **Verified:** typecheck, targeted ESLint, all 39 tests, and diff check pass.
+**Copy follow-up (2026-11-06):** the transport email header now reads
+"Ad-hoc Transport" instead of "Ad-hoc trip". The requested "If you cannot
+travel..." sentence was already absent from the compact template and has no
+remaining repo match. Typecheck, targeted ESLint, and all 39 tests pass.
 **Next:** no follow-up needed for this task; preserve unrelated in-progress
 working-tree changes.
 
