@@ -14,6 +14,7 @@ import {
 import { appBaseUrl } from "@/lib/env";
 import { logger } from "@/lib/logger";
 import { sendMailBackground } from "@/lib/mailer";
+import { passwordResetEmail } from "@/lib/email-templates";
 import { RATE_LIMITS, clientIp, consumeRateLimit } from "@/lib/rate-limit";
 import {
   forgotPasswordSchema,
@@ -76,16 +77,16 @@ export async function requestPasswordResetAction(
       const resetUrl = `${baseUrl}/reset-password/${token}`;
 
       after(async () => {
+        const email = passwordResetEmail({
+          fullName: user.fullName,
+          resetUrl,
+          ttlLabel: RESET_TOKEN_TTL_LABEL,
+        });
         await sendMailBackground({
           to: user.email,
-          subject: "Reset your Transportation Portal password",
-          body: `Hi ${user.fullName},
-
-Use the link below to reset your password. This link expires in ${RESET_TOKEN_TTL_LABEL} and can be used once.
-
-${resetUrl}
-
-If you didn't request this, you can ignore this email.`,
+          subject: email.subject,
+          body: email.body,
+          html: email.html,
         });
       });
     }

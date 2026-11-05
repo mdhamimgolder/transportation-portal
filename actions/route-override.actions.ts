@@ -1,12 +1,12 @@
 "use server";
 
-import { escapeHtml } from "@/lib/html";
 import { after } from "next/server";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { requireRole } from "@/lib/rbac/guards";
 import { Role } from "@/lib/constants/enums";
 import { trySendMail } from "@/lib/mailer";
+import { routePlanArrangedEmail } from "@/lib/email-templates";
 import { arrivalMinutesForLabel } from "@/lib/constants/route-shifts";
 import { officeCoordinatesFor } from "@/lib/constants/office-locations";
 import { ensurePickupPointSchedule, loadLearnedLegs, LEARN_MIN_SAMPLES } from "@/lib/routing/pickup-schedule";
@@ -202,59 +202,22 @@ export async function finalizeRoute(routePlanId: string) {
               : assignment.pickupAddress?.addressText || "Home Address";
 
           const subject = `Your transport has been arranged - ${routePlan.arrivalTime}`;
+          const email = routePlanArrangedEmail({
+            employeeName: assignment.employee.fullName,
+            date: routePlan.dayDate,
+            arrivalTime: routePlan.arrivalTime,
+            pickupTime: assignment.pickupTime ?? "To be confirmed",
+            pickupLocation,
+            vehicleNumber: routePlan.vehicle.vehicleNumber,
+            vehicleType: routePlan.vehicle.vehicleType,
+            driverName: routePlan.vehicle.driverName || "TBD",
+            driverContact: routePlan.vehicle.driverContact || "N/A",
+          });
           const result = await trySendMail({
             to: assignment.employee.email,
-            subject,
-            body: `Hi ${assignment.employee.fullName},
-
-Your transport for ${routePlan.dayDate.toDateString()} has been arranged:
-
-Arrival Time: ${routePlan.arrivalTime}
-Pickup Time: ${assignment.pickupTime}
-Pickup Location: ${pickupLocation}
-Vehicle: ${escapeHtml(routePlan.vehicle.vehicleNumber)} (${escapeHtml(routePlan.vehicle.vehicleType)})
-Driver: ${routePlan.vehicle.driverName || "TBD"}
-Driver Contact: ${routePlan.vehicle.driverContact || "N/A"}
-
-Please be ready at the pickup location at the scheduled time.
-
-Best regards,
-Facilities Team`,
-            html: `
-              <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
-                <h2 style="color: #1a1a2e;">Your Transport Has Been Arranged</h2>
-                <p>Hi <strong>${escapeHtml(assignment.employee.fullName)}</strong>,</p>
-                <p>Your transport for <strong>${routePlan.dayDate.toDateString()}</strong> has been arranged with the following details:</p>
-                <table style="width: 100%; border-collapse: collapse; margin: 16px 0;">
-                  <tr style="background: #f8f9fa;">
-                    <td style="padding: 10px; border: 1px solid #dee2e6; font-weight: bold;">Arrival Time</td>
-                    <td style="padding: 10px; border: 1px solid #dee2e6;">${escapeHtml(routePlan.arrivalTime)}</td>
-                  </tr>
-                  <tr>
-                    <td style="padding: 10px; border: 1px solid #dee2e6; font-weight: bold;">Pickup Time</td>
-                    <td style="padding: 10px; border: 1px solid #dee2e6;">${escapeHtml(assignment.pickupTime)}</td>
-                  </tr>
-                  <tr style="background: #f8f9fa;">
-                    <td style="padding: 10px; border: 1px solid #dee2e6; font-weight: bold;">Pickup Location</td>
-                    <td style="padding: 10px; border: 1px solid #dee2e6;">${escapeHtml(pickupLocation)}</td>
-                  </tr>
-                  <tr>
-                    <td style="padding: 10px; border: 1px solid #dee2e6; font-weight: bold;">Vehicle</td>
-                    <td style="padding: 10px; border: 1px solid #dee2e6;">${escapeHtml(routePlan.vehicle.vehicleNumber)} (${escapeHtml(routePlan.vehicle.vehicleType)})</td>
-                  </tr>
-                  <tr style="background: #f8f9fa;">
-                    <td style="padding: 10px; border: 1px solid #dee2e6; font-weight: bold;">Driver</td>
-                    <td style="padding: 10px; border: 1px solid #dee2e6;">${escapeHtml(routePlan.vehicle.driverName || "TBD")}</td>
-                  </tr>
-                  <tr>
-                    <td style="padding: 10px; border: 1px solid #dee2e6; font-weight: bold;">Driver Contact</td>
-                    <td style="padding: 10px; border: 1px solid #dee2e6;">${escapeHtml(routePlan.vehicle.driverContact || "N/A")}</td>
-                  </tr>
-                </table>
-                <p>Please be ready at the pickup location at the scheduled time.</p>
-                <p style="color: #6c757d; margin-top: 24px;">Best regards,<br><strong>Facilities Team</strong></p>
-              </div>
-            `,
+            subject: email.subject,
+            body: email.body,
+            html: email.html,
           });
           return {
             assignmentId: assignment.id,

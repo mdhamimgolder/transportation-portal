@@ -65,10 +65,20 @@ async function upsertAssignmentForWeeklyDay(params: {
   });
 
   const employee = day.weeklySchedule.employee;
+  const email = transportArrangedEmail({
+    kind: "WEEKLY",
+    employeeName: employee.fullName,
+    date: day.date,
+    driverName: vehicleDriver.driverName,
+    contactNumber: vehicleDriver.contactNumber,
+    vehicleNumber: vehicleDriver.vehicleNumber,
+    pickupTime,
+  });
   await sendMail({
     to: employee.email,
-    subject: "Your transport has been arranged",
-    body: `Hi ${employee.fullName},\n\nYour transport for ${day.date.toDateString()} has been arranged:\nDriver: ${vehicleDriver.driverName} (${vehicleDriver.contactNumber})\nVehicle: ${vehicleDriver.vehicleNumber}\nPickup time: ${pickupTime}\n\n- Facilities Team`,
+    subject: email.subject,
+    body: email.body,
+    html: email.html,
   });
 
   return assignment;
@@ -220,7 +230,11 @@ export async function resendRouteAssignmentEmail(
         weeklyScheduleDay: {
           include: { weeklySchedule: { include: { employee: true } } },
         },
-        adHocRequest: { include: { employee: true } },
+        adHocRequest: {
+          include: {
+            employee: true,
+          },
+        },
       },
     });
     if (!assignment) return { error: "Assignment not found." };
@@ -393,11 +407,23 @@ export async function runAutomatedRoutePlanner(
 
     if (existing) updated++;
     else created++;
+    const email = transportArrangedEmail({
+      kind: "WEEKLY",
+      employeeName: schedule.employee.fullName,
+      date: day.date,
+      driverName: vehicle.driverName,
+      contactNumber: vehicle.contactNumber,
+      vehicleNumber: vehicle.vehicleNumber,
+      vehicleType: assignment.vehicleType,
+      pickupTime: assignment.pickupTime,
+      pickupLocation: address.addressText,
+    });
     emails.push(
       sendMail({
         to: schedule.employee.email,
-        subject: "Your transport has been arranged",
-        body: `Hi ${schedule.employee.fullName},\n\nYour transport for ${day.date.toDateString()} has been arranged:\nPick-up point: ${address.addressText}\nCoordinates: ${address.latitude}, ${address.longitude}\nDriver: ${vehicle.driverName} (${vehicle.contactNumber})\nVehicle: ${vehicle.vehicleNumber} (${assignment.vehicleType})\nPickup time: ${assignment.pickupTime}\n\n- Facilities Team`,
+        subject: email.subject,
+        body: email.body,
+        html: email.html,
       })
     );
   }

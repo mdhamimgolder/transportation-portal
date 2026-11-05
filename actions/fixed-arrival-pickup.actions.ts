@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { requireRole } from "@/lib/rbac/guards";
 import { sendMail, trySendMail } from "@/lib/mailer";
+import { fixedArrivalTransportEmail } from "@/lib/email-templates";
 import { logActionError, sanitizedActionError } from "@/lib/actions/action-error";
 import { Role } from "@/lib/constants/enums";
 import type { SessionUser } from "@/lib/auth/session";
@@ -153,10 +154,18 @@ async function upsertFixedArrivalPickup(params: {
     description: `${actor.fullName} saved the standing pick-up details for ${employee.fullName}`,
   });
 
+  const email = fixedArrivalTransportEmail({
+    employeeName: employee.fullName,
+    driverName: vehicleDriver.driverName,
+    contactNumber: vehicleDriver.contactNumber,
+    vehicleNumber: vehicleDriver.vehicleNumber,
+    pickupTime,
+  });
   await sendMail({
     to: employee.email,
-    subject: "Your transport details have been saved",
-    body: `Hi ${employee.fullName},\n\nYour standing transport details have been arranged:\nDriver: ${vehicleDriver.driverName} (${vehicleDriver.contactNumber})\nVehicle: ${vehicleDriver.vehicleNumber}\nPickup time: ${pickupTime}\n\nThese details stay in force until Facilities updates them.\n\n- Facilities Team`,
+    subject: email.subject,
+    body: email.body,
+    html: email.html,
   });
 
   return record;
@@ -193,11 +202,18 @@ export async function resendFixedArrivalPickupEmail(
     }
     const { pickupTime, vehicleDriver } = employee.fixedArrivalPickup;
 
-    const subject = "Your transport details have been saved";
+    const email = fixedArrivalTransportEmail({
+      employeeName: employee.fullName,
+      driverName: vehicleDriver.driverName,
+      contactNumber: vehicleDriver.contactNumber,
+      vehicleNumber: vehicleDriver.vehicleNumber,
+      pickupTime,
+    });
     const outcome = await trySendMail({
       to: employee.email,
-      subject,
-      body: `Hi ${employee.fullName},\n\nYour standing transport details have been arranged:\nDriver: ${vehicleDriver.driverName} (${vehicleDriver.contactNumber})\nVehicle: ${vehicleDriver.vehicleNumber}\nPickup time: ${pickupTime}\n\nThese details stay in force until Facilities updates them.\n\n- Facilities Team`,
+      subject: email.subject,
+      body: email.body,
+      html: email.html,
     });
 
     await prisma.emailNotificationLog.create({
@@ -205,7 +221,7 @@ export async function resendFixedArrivalPickupEmail(
         kind: "ROUTE_ASSIGNMENT_FIXED_ARRIVAL",
         recipient: employee.email,
         recipientName: employee.fullName,
-        subject,
+        subject: email.subject,
         routeAssignmentId: null,
         status: outcome.status,
         error: outcome.error ?? null,

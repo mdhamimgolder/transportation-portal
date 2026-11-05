@@ -91,10 +91,10 @@ export function transportArrangedEmail({
     eyebrow: isAdhoc ? "Ad-hoc transport confirmed" : "Weekly transport confirmed",
     headerNote: kindLabel,
     heading,
-    introHtml: `<p style="margin:0;">Hi ${emailStrong(employeeName)},</p><p style="margin:12px 0 0;">Your ${isAdhoc ? "ad-hoc " : ""}transport for ${emailStrong(dateLabel)} has been arranged. Here are your trip details.</p>`,
+    introHtml: `<p style="margin:0;">Hi ${emailStrong(employeeName)}, your ${isAdhoc ? "ad-hoc " : ""}transport details for ${emailStrong(dateLabel)} are below.</p>`,
     highlight: { label: "Pick-up time", value: pickupTime },
     rows,
-    note: "Please be ready at your pick-up point a few minutes before the scheduled time. If you cannot travel, let the Facilities team know as early as possible.",
+    compact: true,
     cta: emailPortalUrl()
       ? { label: "Open the transportation portal", url: emailPortalUrl() as string }
       : undefined,

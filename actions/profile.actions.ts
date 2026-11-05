@@ -1,6 +1,5 @@
 "use server";
 
-import { escapeHtml } from "@/lib/html";
 import { revalidatePath } from "next/cache";
 import { after } from "next/server";
 import { prisma } from "@/lib/prisma";
@@ -15,6 +14,7 @@ import {
   notificationRecipients,
 } from "@/lib/constants/notification-recipients";
 import { sendMailBackground } from "@/lib/mailer";
+import { addressChangedEmail } from "@/lib/email-templates";
 import { sanitizedActionMessage } from "@/lib/actions/action-error";
 import { audit } from "@/lib/audit";
 
@@ -125,33 +125,20 @@ export async function updateProfile(
         ].filter((email) => email.length > 0);
         after(async () => {
           await Promise.allSettled(
-            recipients.map((to) =>
-              sendMailBackground({
+            recipients.map((to) => {
+              const email = addressChangedEmail({
+                fullName: updated.fullName,
+                email: updated.email,
+                oldAddress,
+                newAddress,
+              });
+              return sendMailBackground({
                 to,
-                subject: `Address changed: ${updated.fullName}`,
-                body: `Hi,\n\n${updated.fullName} (${updated.email}) has changed their address.\n\nOld address: ${oldAddress}\nNew address: ${newAddress}\n\nBest regards,\nTransportation Team`,
-                html: `
-                  <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
-                    <div style="height: 4px; background: #70bccc; border-radius: 4px 4px 0 0;"></div>
-                    <div style="border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 4px 4px; padding: 32px;">
-                      <h2 style="color: #1a1a2e; margin: 0 0 8px;">Address Changed</h2>
-                      <p><strong>${escapeHtml(updated.fullName)}</strong> (${escapeHtml(updated.email)}) has changed their address.</p>
-                      <table style="width: 100%; border-collapse: collapse; margin: 16px 0;">
-                        <tr style="background: #f8f9fa;">
-                          <td style="padding: 10px; border: 1px solid #dee2e6; font-weight: bold; width: 120px;">Old address</td>
-                          <td style="padding: 10px; border: 1px solid #dee2e6;">${escapeHtml(oldAddress || "—")}</td>
-                        </tr>
-                        <tr style="background: #f8f9fa;">
-                          <td style="padding: 10px; border: 1px solid #dee2e6; font-weight: bold;">New address</td>
-                          <td style="padding: 10px; border: 1px solid #dee2e6;">${escapeHtml(newAddress)}</td>
-                        </tr>
-                      </table>
-                      <p style="color: #6c757d; margin-top: 24px;">Best regards,<br><strong>Transportation Team</strong></p>
-                    </div>
-                  </div>
-                `,
-              })
-            )
+                subject: email.subject,
+                body: email.body,
+                html: email.html,
+              });
+            })
           );
         });
 

@@ -1,7 +1,6 @@
 "use server";
 
 
-import { escapeHtml } from "@/lib/html";
 import { revalidatePath } from "next/cache";
 import { after } from "next/server";
 import { prisma } from "@/lib/prisma";
@@ -21,6 +20,7 @@ import {
   normalizeArrivalTimeInput,
 } from "@/lib/constants/arrival-times";
 import { sendMailBackground, isEmailEnabled } from "@/lib/mailer";
+import { scheduleSubmittedEmail } from "@/lib/email-templates";
 import { Role, WeeklyScheduleStatus } from "@/lib/constants/enums";
 import { parseCsv } from "@/lib/csv";
 import { sanitizedActionError } from "@/lib/actions/action-error";
@@ -38,41 +38,25 @@ type SubmitNoticeArgs = {
 };
 
 async function sendScheduleSubmittedNotice({ to, fullName, weekStartDate, days }: SubmitNoticeArgs) {
-  const subject = "Your schedule has been submitted";
-  const bodyRows = days
-    .map((d) => {
-      const label = d.needsTransport ? ARRIVAL_VALUE_TO_LABEL[d.arrivalTime ?? ""] ?? d.arrivalTime : "Not required";
-      return `${DAY_LABELS[d.dayOfWeek - 1]} (${formatShortDate(d.date)}): ${d.needsTransport ? `Arrival ${label}` : "No transport"}`;
-    })
-    .join("\n");
-
-  const htmlRows = days
-    .map((d) => {
-      const label = d.needsTransport ? ARRIVAL_VALUE_TO_LABEL[d.arrivalTime ?? ""] ?? d.arrivalTime : "Not required";
-      return `
-        <tr style="background: #f8f9fa;">
-          <td style="padding: 10px; border: 1px solid #dee2e6; font-weight: bold;">${DAY_LABELS[d.dayOfWeek - 1]} — ${formatShortDate(d.date)}</td>
-          <td style="padding: 10px; border: 1px solid #dee2e6;">${d.needsTransport ? label : "No transport"}</td>
-        </tr>`;
-    })
-    .join("");
+  const email = scheduleSubmittedEmail({
+    employeeName: fullName,
+    weekStartDate,
+    days: days.map((d) => {
+      const label = d.needsTransport
+        ? ARRIVAL_VALUE_TO_LABEL[d.arrivalTime ?? ""] ?? d.arrivalTime ?? ""
+        : "Not required";
+      return {
+        label: `${DAY_LABELS[d.dayOfWeek - 1]} — ${formatShortDate(d.date)}`,
+        value: d.needsTransport ? label : "No transport",
+      };
+    }),
+  });
 
   await sendMailBackground({
     to,
-    subject,
-    body: `Hi ${fullName},\n\nYour weekly schedule for the week of ${weekStartDate.toDateString()} has been submitted successfully.\n\nDay-wise schedule:\n${bodyRows}\n\nTo view your current week schedule and find your day-wise assignment, please log in to the system and open the "My Schedule" page.\n\nThank you.`,
-    html: `
-      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
-        <h2 style="color: #1a1a2e;">Your Schedule Has Been Submitted</h2>
-        <p>Hi <strong>${escapeHtml(fullName)}</strong>,</p>
-        <p>Your weekly schedule for the week of <strong>${weekStartDate.toDateString()}</strong> has been submitted successfully.</p>
-        <table style="width: 100%; border-collapse: collapse; margin: 16px 0;">
-          ${htmlRows}
-        </table>
-        <p>To view your current week schedule and find your day-wise assignment, please <strong>log in to the system</strong> and open the <strong>My Schedule</strong> page.</p>
-        <p style="color: #6c757d; margin-top: 24px;">Best regards,<br><strong>Transportation Team</strong></p>
-      </div>
-    `,
+    subject: email.subject,
+    body: email.body,
+    html: email.html,
   });
 }
 

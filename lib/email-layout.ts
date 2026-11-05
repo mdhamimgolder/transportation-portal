@@ -82,6 +82,8 @@ export type EmailLayoutParams = {
   signature: string;
   /** Small label in the header, right side, e.g. "Ad-hoc" / "Weekly". */
   headerNote?: string;
+  /** Tighter vertical spacing for compact transport confirmations. */
+  compact?: boolean;
 };
 
 /** Logo URL for `<img src>`; absolute because email clients cannot resolve
@@ -140,15 +142,15 @@ export function emailDateLabel(date: Date): string {
   } ${date.getUTCFullYear()}`;
 }
 
-function detailRowsHtml(rows: EmailDetailRow[]): string {
+function detailRowsHtml(rows: EmailDetailRow[], compact: boolean): string {
   return rows
     .map((row, index) => {
       const borderTop =
         index === 0 ? "none" : `1px solid ${BRAND.rowBorder}`;
       return `
         <tr>
-          <td style="padding:11px 0;border-top:${borderTop};font-family:${FONT_STACK};font-size:11px;line-height:1.4;letter-spacing:0.06em;text-transform:uppercase;color:${BRAND.muted};">${escapeHtml(row.label)}</td>
-          <td align="right" style="padding:11px 0 11px 18px;border-top:${borderTop};font-family:${FONT_STACK};font-size:14px;line-height:1.45;font-weight:600;color:${row.accent ? BRAND.accentInk : BRAND.body};">${escapeHtml(row.value)}</td>
+          <td style="padding:${compact ? "4px" : "8px"} 0;border-top:${borderTop};font-family:${FONT_STACK};font-size:10px;line-height:1.35;letter-spacing:0.06em;text-transform:uppercase;color:${BRAND.muted};">${escapeHtml(row.label)}</td>
+          <td align="right" style="padding:${compact ? "4px" : "8px"} 0 ${compact ? "4px" : "8px"} ${compact ? "8px" : "12px"};border-top:${borderTop};font-family:${FONT_STACK};font-size:13px;line-height:1.35;font-weight:600;color:${row.accent ? BRAND.accentInk : BRAND.body};">${escapeHtml(row.value)}</td>
         </tr>`;
     })
     .join("");
@@ -181,14 +183,15 @@ export function renderEmail(params: EmailLayoutParams): string {
     signature,
     headerNote,
   } = params;
+  const compact = params.compact === true;
 
   const highlightHtml = highlight
     ? `
-          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 22px;background:${BRAND.accentSoft};border:1px solid ${BRAND.accentBorder};border-radius:14px;">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 ${compact ? "10px" : "16px"};background:${BRAND.accentSoft};border:1px solid ${BRAND.accentBorder};border-radius:${compact ? "10px" : "12px"};">
             <tr>
-              <td style="padding:16px 20px;font-family:${FONT_STACK};">
-                <div style="font-size:10.5px;line-height:1.4;letter-spacing:0.1em;text-transform:uppercase;color:${BRAND.accentInk};">${escapeHtml(highlight.label)}</div>
-                <div style="margin-top:5px;font-size:24px;line-height:1.2;font-weight:700;letter-spacing:-0.01em;color:${BRAND.ink};">${escapeHtml(highlight.value)}</div>
+              <td style="padding:${compact ? "8px 12px" : "12px 16px"};font-family:${FONT_STACK};">
+                <div style="font-size:${compact ? "9px" : "10.5px"};line-height:1.3;letter-spacing:0.1em;text-transform:uppercase;color:${BRAND.accentInk};">${escapeHtml(highlight.label)}</div>
+                <div style="margin-top:3px;font-size:${compact ? "17px" : "20px"};line-height:1.15;font-weight:700;letter-spacing:-0.01em;color:${BRAND.ink};">${escapeHtml(highlight.value)}</div>
               </td>
             </tr>
           </table>`
@@ -197,18 +200,18 @@ export function renderEmail(params: EmailLayoutParams): string {
   const rowsHtml =
     rows && rows.length > 0
       ? `
-          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 22px;background:${BRAND.box};border:1px solid ${BRAND.border};border-radius:14px;">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 ${compact ? "10px" : "16px"};background:${BRAND.box};border:1px solid ${BRAND.border};border-radius:${compact ? "10px" : "12px"};">
             <tr>
-              <td style="padding:6px 20px;">
+              <td style="padding:${compact ? "2px 12px" : "4px 16px"};">
                 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
-                  ${detailRowsHtml(rows)}
+                  ${detailRowsHtml(rows, compact)}
                 </table>
               </td>
             </tr>
           </table>`
       : "";
 
-  const noteHtml = note
+  const noteHtml = note && !compact
     ? `
           <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 22px;">
             <tr>
@@ -228,10 +231,10 @@ export function renderEmail(params: EmailLayoutParams): string {
 
   const ctaHtml = cta
     ? `
-          <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 6px;">
+          <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 ${compact ? "2px" : "6px"};">
             <tr>
               <td style="background:${BRAND.ink};border-radius:10px;">
-                <a href="${escapeHtml(cta.url)}" target="_blank" rel="noreferrer" style="display:inline-block;padding:13px 24px;font-family:${FONT_STACK};font-size:13px;line-height:1;font-weight:600;color:#ffffff;text-decoration:none;">${escapeHtml(cta.label)}</a>
+                <a href="${escapeHtml(cta.url)}" target="_blank" rel="noreferrer" style="display:inline-block;padding:${compact ? "10px 18px" : "13px 24px"};font-family:${FONT_STACK};font-size:${compact ? "12px" : "13px"};line-height:1;font-weight:600;color:#ffffff;text-decoration:none;">${escapeHtml(cta.label)}</a>
               </td>
             </tr>
           </table>`
@@ -251,10 +254,10 @@ export function renderEmail(params: EmailLayoutParams): string {
 <div style="display:none;max-height:0;overflow:hidden;opacity:0;color:transparent;font-size:1px;line-height:1px;">${escapeHtml(preheader)}</div>
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:${BRAND.page};padding:0;margin:0;">
   <tr>
-    <td align="center" style="padding:32px 14px 40px;">
-      <table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" style="width:100%;max-width:600px;background:${BRAND.card};border:1px solid ${BRAND.footerBorder};border-radius:18px;">
+    <td align="center" style="padding:${compact ? "12px 8px" : "32px 14px 40px"};">
+      <table role="presentation" width="560" cellpadding="0" cellspacing="0" border="0" style="width:100%;max-width:560px;background:${BRAND.card};border:1px solid ${BRAND.footerBorder};border-radius:16px;">
         <tr>
-          <td style="background:${BRAND.ink};padding:22px 26px;border-radius:18px 18px 0 0;">
+          <td style="background:${BRAND.ink};padding:${compact ? "12px 18px" : "18px 22px"};border-radius:16px 16px 0 0;">
             <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
               <tr>
                 <td width="42" valign="middle" style="width:42px;padding:0 14px 0 0;">${headerLogoHtml()}</td>
@@ -275,14 +278,14 @@ export function renderEmail(params: EmailLayoutParams): string {
           <td height="4" bgcolor="${BRAND.accent}" style="height:4px;line-height:4px;font-size:0;background:${BRAND.accent};">&nbsp;</td>
         </tr>
         <tr>
-          <td style="padding:32px 26px 30px;font-family:${FONT_STACK};">
+          <td style="padding:${compact ? "14px 18px" : "24px 22px"};font-family:${FONT_STACK};">
             ${
               eyebrow
-                ? `<div style="font-size:10.5px;line-height:1.4;font-weight:600;letter-spacing:0.12em;text-transform:uppercase;color:${BRAND.accentInk};padding-bottom:10px;">${escapeHtml(eyebrow)}</div>`
+                ? `<div style="font-size:${compact ? "9px" : "10px"};line-height:1.35;font-weight:600;letter-spacing:0.12em;text-transform:uppercase;color:${BRAND.accentInk};padding-bottom:${compact ? "4px" : "8px"};">${escapeHtml(eyebrow)}</div>`
                 : ""
             }
-            <h1 style="margin:0 0 16px;font-family:${FONT_STACK};font-size:21px;line-height:1.35;font-weight:700;letter-spacing:-0.01em;color:${BRAND.ink};">${escapeHtml(heading)}</h1>
-            <div style="font-family:${FONT_STACK};font-size:13.5px;line-height:1.7;color:#41504a;padding-bottom:22px;">${introHtml}</div>
+              <h1 style="margin:0 0 ${compact ? "6px" : "12px"};font-family:${FONT_STACK};font-size:${compact ? "17px" : "19px"};line-height:1.3;font-weight:700;letter-spacing:-0.01em;color:${BRAND.ink};">${escapeHtml(heading)}</h1>
+              <div style="font-family:${FONT_STACK};font-size:${compact ? "12px" : "13px"};line-height:${compact ? "1.4" : "1.55"};color:#41504a;padding-bottom:${compact ? "10px" : "18px"};">${introHtml}</div>
             ${highlightHtml}
             ${rowsHtml}
             ${noteHtml}
@@ -291,10 +294,10 @@ export function renderEmail(params: EmailLayoutParams): string {
           </td>
         </tr>
         <tr>
-          <td style="background:${BRAND.footer};border-top:1px solid ${BRAND.footerBorder};border-radius:0 0 18px 18px;padding:18px 26px;">
-            <p style="margin:0;font-family:${FONT_STACK};font-size:12px;line-height:1.6;font-weight:600;color:#4b5a54;">${escapeHtml(signature)}</p>
-            <p style="margin:6px 0 0;font-family:${FONT_STACK};font-size:11px;line-height:1.6;color:#8a968f;">Commure &middot; Transportation Portal &mdash; automated message, please do not reply.</p>
-            <p style="margin:4px 0 0;font-family:${FONT_STACK};font-size:11px;line-height:1.6;color:#a0aaa4;">Internal transport management &middot; ${new Date().getFullYear()}</p>
+          <td style="background:${BRAND.footer};border-top:1px solid ${BRAND.footerBorder};border-radius:0 0 16px 16px;padding:${compact ? "8px 18px" : "14px 22px"};">
+            <p style="margin:0;font-family:${FONT_STACK};font-size:${compact ? "11px" : "12px"};line-height:1.4;font-weight:600;color:#4b5a54;">${escapeHtml(signature)}</p>
+            <p style="margin:${compact ? "2px" : "6px"} 0 0;font-family:${FONT_STACK};font-size:${compact ? "10px" : "11px"};line-height:1.4;color:#8a968f;">Commure &middot; Transportation Portal &mdash; automated message, please do not reply.</p>
+            ${compact ? "" : `<p style="margin:4px 0 0;font-family:${FONT_STACK};font-size:11px;line-height:1.6;color:#a0aaa4;">Internal transport management &middot; ${new Date().getFullYear()}</p>`}
           </td>
         </tr>
       </table>

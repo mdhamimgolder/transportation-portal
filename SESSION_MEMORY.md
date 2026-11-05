@@ -4,6 +4,79 @@ Read this at the start of every task so you can continue without re-exploring.
 **Always update it before the session ends** (append/rewrite the Latest Session
 block and bump Work State / Next Move). Do this EVERY session — it is how we
 work fast without interruption.
+## Latest Session (2026-11-05) — Ad-hoc pickup point in email and dashboard
+**User request:** use the branded HTML transport email with driver, contact,
+vehicle and pickup time; show the employee pickup point only for a 10 PM
+arrival; add it to today's ride details after Facilities assigns the ride.
+**Completed:** `actions/route-assignment.actions.ts` passes the employee's
+pickup point into the shared HTML template for 10 PM ad-hoc assignments and
+resends only. Employee and corporate-employee dashboard queries now include the
+pickup point only for an assigned 10 PM ad-hoc ride; the shared today's-ride
+card renders the label only when a point is present. 11 PM through 6 AM, weekly
+rides, and fixed-arrival rides have no pickup-point indication.
+**Verified:** `npx tsc --noEmit`, targeted ESLint, `npm run test` (39/39), and
+`git diff --check` passed. No schema change or migration.
+**Follow-up:** transport confirmations now use compact-only email rendering:
+560px shell, tighter header/content/footer and detail-row padding, shorter
+intro, and no repeated explanatory note. Pickup-time highlight, readable 10px
+labels/13px values, all trip rows, branding, and portal CTA remain; other mail
+types keep the standard layout.
+**Verified:** typecheck, targeted ESLint, all 39 tests, and diff check pass.
+**Next:** no follow-up needed for this task; preserve unrelated in-progress
+working-tree changes.
+
+## Latest Session (2026-10-27) — Branded HTML email redesign (ad-hoc + regular transport) with Commure logo
+**User request:** check the ad-hoc confirmation mail, give every outgoing mail a
+"box"-style professional HTML design, apply it to the regular transportation
+mail too, and put the Commure logo in the header.
+**Why it was needed:** the same "your transport has been arranged" notice was
+hand-rolled in 4 different places (weekly assignment, ad-hoc dispatch, automated
+planner, finalize route) and 3 of them sent **plain text only** — no HTML at all.
+Fixed-arrival, schedule receipts, credentials, password reset and address
+notices each had their own one-off markup in a different style.
+**Done:**
+- New `lib/email-layout.ts` (server-only): one table-based, inline-styled,
+  600px email shell — dark ink header (`#03120f`) with the Commure mark +
+  wordmark + "Transportation Portal", 4px `#70bccc` accent strip, uppercase
+  eyebrow, display heading, teal "highlight" block (the pick-up time in 24px),
+  a bordered key/value details box, neutral note + amber attention callouts,
+  dark CTA button, and a branded footer. Exports `renderEmail`,
+  `emailStrong`, `emailText`, `emailDateLabel`, `emailLogoUrl`,
+  `emailPortalUrl`. Outlook-safe (no flex/grid/classes), mobile-verified at
+  375px (tested via iframe, since headless Chrome clamps window width to 512).
+- New `public/commure-logo-light.png` (128px, transparent background): generated
+  from `commure-logo.jpeg` by driving alpha from luminance in PowerShell +
+  System.Drawing, so the white mark sits cleanly on the dark header instead of
+  showing a black JPEG square. If `APP_URL`/`VERCEL_PROJECT_PRODUCTION_URL` is
+  missing the header falls back to a teal monogram tile (no broken image).
+- `lib/email-templates.ts` rewritten as the single source of every mail:
+  `transportArrangedEmail` (WEEKLY/ADHOC, now with optional `pickupLocation` /
+  `vehicleType`), `routePlanArrangedEmail` (finalize), `fixedArrivalTransportEmail`,
+  `scheduleSubmittedEmail`, `accountCreatedEmail`, `passwordResetEmail`,
+  `addressChangedEmail`. Subjects/plain-text bodies preserved (email-log rows and
+  subjects stay stable).
+- Dates use `emailDateLabel()` (UTC calendar → "Tuesday, 27 October 2026") instead
+  of `toDateString()`: day/week keys are UTC midnight, so `toDateString()` printed
+  the previous day on hosts behind UTC (reproduced on this dev box).
+- Wired through: `route-assignment.actions.ts` (weekly + ad-hoc + automated
+  planner — all three previously text-only), `route-override.actions.ts`
+  (finalize), `fixed-arrival-pickup.actions.ts` (save + resend),
+  `weekly-schedule.actions.ts` + `on-behalf.actions.ts` (schedule receipt,
+  duplicated block removed), `password-reset.actions.ts`, `profile.actions.ts`
+  (address notice), `lib/mailer.ts` (credentials template moved out of the
+  mailer). `escapeHtml` imports dropped where no longer used.
+**Verified:** `npx tsc --noEmit` clean; ESLint clean on all 10 touched files;
+`npm run test` 39/39. Templates rendered to HTML and screenshotted (headless
+Chrome) at desktop + 375px to confirm the design, the transparent logo and UTF-8
+output. No schema change → no migration/restart needed.
+**Gotcha for next session:** do NOT round-trip source files through PowerShell
+`Get-Content`/`Set-Content` — it decodes UTF-8 as cp1252 and bakes `â€”` into the
+file (and adds a BOM). Use the edit/write tools, or Node with an explicit
+`utf8` encoding.
+**Next (optional):** if Facilities wants a per-role accent colour in mails, pass
+a `tone` through `EmailLayoutParams`; the header/footer currently use one brand
+palette for every role.
+
 ## Latest Session (2026-10-26) — DEPLOY: merged the unpushed feature work into `main` (Vercel)
 **Why:** features built in earlier sessions (fixed-arrival planning, direct-to-
 facilities flows, adhoc monitoring UI, the Fixed-arrival profile 403 fix, the
@@ -2229,6 +2302,11 @@ User: "use one line for comment box and arrival time box; arrival time box fixed
    5-min grid with ≥5 min gaps.
 
 ### Work State
+- **Latest task (2026-11-05):** 10 PM ad-hoc pickup point included in branded assignment/resend emails and employee/corporate dashboard ride details. 11 PM–6 AM and non-ad-hoc rides omit it. TypeScript, targeted ESLint, 39 tests and diff check passed.
+- **Working tree:** preserve all other in-progress changes; some email template integration changes predate this task and remain untouched.
+- **Next Move:** no remaining code action for the 10 PM pickup-point request; no Prisma migration needed.
+
+### Historical Work State (2026-09-12; retained for context)
 - **Latest uncommitted work (2026-09-11g/h + 2026-09-11i + 2026-09-12a):** bulk-upload `fixedArrivalTime` column; User Info fixed-arrival ON/OFF + arrival-time select (`User.fixedArrivalActive`,
   migration `20260911232301`, `updateFixedArrivalServiceAction`); bulk-upload coords lenient-header fix;
   route pattern learning + week mirroring (`RouteTemplate`/`RouteTemplateStop`, migration `20260912012837`,
