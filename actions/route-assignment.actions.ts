@@ -8,6 +8,7 @@ import { trySendMail } from "@/lib/mailer";
 import { transportArrangedEmail } from "@/lib/email-templates";
 import { sanitizedActionError, logActionError } from "@/lib/actions/action-error";
 import { Role, AdHocStatus, WeeklyScheduleStatus } from "@/lib/constants/enums";
+import { ADHOC_PICKUP_REQUIRED_TIME } from "@/lib/constants/adhoc-arrival-times";
 import type { SessionUser } from "@/lib/auth/session";
 
 export type AssignRouteState = {
@@ -115,10 +116,24 @@ async function upsertAssignmentForAdHoc(params: {
     data: { status: AdHocStatus.ASSIGNED },
   });
 
+  const email = transportArrangedEmail({
+    kind: "ADHOC",
+    employeeName: request.employee.fullName,
+    date: request.date,
+    driverName: vehicleDriver.driverName,
+    contactNumber: vehicleDriver.contactNumber,
+    vehicleNumber: vehicleDriver.vehicleNumber,
+    pickupTime,
+    pickupLocation:
+      request.arrivalTime === ADHOC_PICKUP_REQUIRED_TIME
+        ? request.employee.pickupPoint
+        : null,
+  });
   await sendMail({
     to: request.employee.email,
-    subject: "Your ad-hoc transport has been arranged",
-    body: `Hi ${request.employee.fullName},\n\nYour ad-hoc transport for ${request.date.toDateString()} has been arranged:\nDriver: ${vehicleDriver.driverName} (${vehicleDriver.contactNumber})\nVehicle: ${vehicleDriver.vehicleNumber}\nPickup time: ${pickupTime}\n\n- Facilities Team`,
+    subject: email.subject,
+    body: email.body,
+    html: email.html,
   });
 
   return assignment;
@@ -225,6 +240,10 @@ export async function resendRouteAssignmentEmail(
       contactNumber: assignment.vehicleDriver.contactNumber,
       vehicleNumber: assignment.vehicleDriver.vehicleNumber,
       pickupTime: assignment.pickupTime,
+      pickupLocation:
+        assignment.adHocRequest?.arrivalTime === ADHOC_PICKUP_REQUIRED_TIME
+          ? assignment.adHocRequest.employee.pickupPoint
+          : null,
     });
     const outcome = await trySendMail({
       to: employee.email,

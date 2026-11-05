@@ -7,6 +7,7 @@ export type TodaysScheduleEntry = {
   driverName: string;
   contactNumber: string;
   vehicleNumber: string;
+  pickupPoint?: string | null;
   requestType: string;
 };
 
@@ -84,6 +85,14 @@ export function TodaysScheduleCard({
                 <span className="font-mono font-semibold text-foreground">
                   {entry.vehicleNumber}
                 </span>
+                {entry.pickupPoint ? (
+                  <>
+                    <span className="text-muted-foreground">Pick-up point</span>
+                    <span className="font-semibold text-foreground">
+                      {entry.pickupPoint}
+                    </span>
+                  </>
+                ) : null}
               </div>
             </div>
           ))}

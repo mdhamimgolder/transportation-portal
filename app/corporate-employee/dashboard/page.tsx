@@ -18,6 +18,7 @@ import { ThisWeekScheduleCard } from "@/components/employee/this-week-schedule-c
 import { DashboardHero } from "@/components/shared/dashboard-hero";
 import { WeatherWidget } from "@/components/shared/weather-widget";
 import { Button } from "@/components/ui/button";
+import { ADHOC_PICKUP_REQUIRED_TIME } from "@/lib/constants/adhoc-arrival-times";
 import {
   WeeklyScheduleTable,
   type ScheduleDay,
@@ -72,7 +73,15 @@ export default async function CorporateEmployeeDashboardPage() {
           { adHocRequest: { employeeId: user.id, date: today } },
         ],
       },
-      include: { vehicleDriver: true },
+      include: {
+        vehicleDriver: true,
+        adHocRequest: {
+          select: {
+            arrivalTime: true,
+            employee: { select: { pickupPoint: true } },
+          },
+        },
+      },
       orderBy: { pickupTime: "asc" },
     }),
     prisma.weeklySchedule.findUnique({
@@ -92,6 +101,10 @@ export default async function CorporateEmployeeDashboardPage() {
     driverName: a.vehicleDriver.driverName,
     contactNumber: a.vehicleDriver.contactNumber,
     vehicleNumber: a.vehicleDriver.vehicleNumber,
+    pickupPoint:
+      a.adHocRequest?.arrivalTime === ADHOC_PICKUP_REQUIRED_TIME
+        ? a.adHocRequest.employee.pickupPoint
+        : null,
     requestType: a.weeklyScheduleDayId ? "Weekly schedule" : "Ad-hoc request",
   }));
 
