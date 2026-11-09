@@ -53,6 +53,7 @@ export const AdHocStatus = {
   REJECTED: "REJECTED",
   ASSIGNED: "ASSIGNED",
   CANCELLED: "CANCELLED",
+  RESOLVED: "RESOLVED",
 } as const;
 export type AdHocStatus = (typeof AdHocStatus)[keyof typeof AdHocStatus];
 

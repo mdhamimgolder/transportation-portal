@@ -248,7 +248,7 @@ model AdHocRequest {
   date         DateTime
   arrivalTime  String // "HH:mm"
   reason       String?
-  status       String   @default("PENDING") // PENDING | APPROVED | REJECTED | ASSIGNED | CANCELLED
+  status       String   @default("PENDING") // PENDING | APPROVED | REJECTED | ASSIGNED | CANCELLED | RESOLVED
   rejectReason String?
 
   reviewedById String?
@@ -309,7 +309,7 @@ model RouteAssignment {
 
 model EmailNotificationLog {
   id            String @id @default(cuid())
-  kind          String // ROUTE_ASSIGNMENT_WEEKLY | ROUTE_ASSIGNMENT_ADHOC | ROUTE_ASSIGNMENT_RESEND
+  kind          String // ROUTE_ASSIGNMENT_WEEKLY | ROUTE_ASSIGNMENT_ADHOC | ROUTE_ASSIGNMENT_RESEND | ADHOC_STATUS_NOTICE
   recipient     String
   recipientName String
   subject       String

@@ -7,8 +7,8 @@ import { AdHocList } from "@/components/facilities/adhoc-list";
 export default async function FacilitiesAdHocPage() {
   await requireRole([Role.FACILITIES, Role.SUPER_ADMIN]);
 
-  // Visible as soon as an employee submits -- only assigned (or cancelled)
-  // requests drop off, since those have already moved to Allocation History.
+  // Keep active requests in the queue; assigned, cancelled, and resolved
+  // requests are handled outside this work list.
   const [requests, vehicleDrivers] = await Promise.all([
     prisma.adHocRequest.findMany({
       where: {
@@ -40,8 +40,8 @@ export default async function FacilitiesAdHocPage() {
       <div>
         <h1 className="text-xl font-semibold">Ad-hoc Transport</h1>
         <p className="text-sm text-muted-foreground">
-          All same-day requests, as submitted -- assign a vehicle right away.
-          Assigned requests move to Allocation History.
+          All same-day requests, as submitted -- assign a vehicle or send the
+          employee a note if transport cannot be provided.
         </p>
       </div>
 

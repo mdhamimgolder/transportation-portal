@@ -2,10 +2,14 @@
 
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
+import { auditEntry } from "@/lib/audit";
 import { requireRole } from "@/lib/rbac/guards";
 import { sendMail } from "@/lib/mailer";
 import { trySendMail } from "@/lib/mailer";
-import { transportArrangedEmail } from "@/lib/email-templates";
+import {
+  adHocRequestStatusEmail,
+  transportArrangedEmail,
+} from "@/lib/email-templates";
 import { sanitizedActionError, logActionError } from "@/lib/actions/action-error";
 import { Role, AdHocStatus, WeeklyScheduleStatus } from "@/lib/constants/enums";
 import { ADHOC_PICKUP_REQUIRED_TIME } from "@/lib/constants/adhoc-arrival-times";
@@ -149,6 +153,113 @@ async function upsertAssignmentForAdHoc(params: {
   return assignment;
 }
 
+const RESOLVABLE_ADHOC_STATUSES: AdHocStatus[] = [
+  AdHocStatus.PENDING,
+  AdHocStatus.APPROVED,
+  AdHocStatus.REJECTED,
+];
+
+async function sendAdHocStatusNote(params: {
+  adHocRequestId: string;
+  note: string;
+  actor: SessionUser;
+}): Promise<AssignRouteState> {
+  const { adHocRequestId, note, actor } = params;
+  const request = await prisma.adHocRequest.findUnique({
+    where: { id: adHocRequestId },
+    include: {
+      employee: true,
+      routeAssignment: { select: { id: true } },
+    },
+  });
+  if (!request) return { error: "Request not found." };
+  if (
+    request.routeAssignment ||
+    !RESOLVABLE_ADHOC_STATUSES.includes(request.status as AdHocStatus)
+  ) {
+    return { error: "This ad-hoc request is already assigned or resolved." };
+  }
+
+  const email = adHocRequestStatusEmail({
+    employeeName: request.employee.fullName,
+    date: request.date,
+    arrivalTime: request.arrivalTime,
+    note,
+  });
+  const logData = {
+    kind: "ADHOC_STATUS_NOTICE",
+    recipient: request.employee.email,
+    recipientName: request.employee.fullName,
+    subject: email.subject,
+    routeAssignmentId: null,
+  };
+  const outcome = await trySendMail({
+    to: request.employee.email,
+    subject: email.subject,
+    body: email.body,
+    html: email.html,
+  });
+
+  if (outcome.status !== "SENT") {
+    await prisma.emailNotificationLog.create({
+      data: {
+        ...logData,
+        status: outcome.status,
+        error: outcome.error ?? null,
+      },
+    });
+    return {
+      error:
+        outcome.status === "SKIPPED_DEV"
+          ? "Email delivery is disabled in this environment; the request was not resolved."
+          : outcome.error ?? "The email could not be sent.",
+    };
+  }
+
+  const resolved = await prisma.$transaction(async (tx) => {
+    await tx.emailNotificationLog.create({
+      data: {
+        ...logData,
+        status: outcome.status,
+        error: null,
+      },
+    });
+    const transition = await tx.adHocRequest.updateMany({
+      where: {
+        id: adHocRequestId,
+        status: request.status,
+        routeAssignment: { is: null },
+      },
+      data: {
+        status: AdHocStatus.RESOLVED,
+        facilitiesComment: note,
+      },
+    });
+    if (transition.count === 0) return false;
+
+    await auditEntry(
+      actor,
+      {
+        action: "RESOLVE_ADHOC_WITH_FACILITIES_NOTE",
+        entityType: "AdHocRequest",
+        entityId: adHocRequestId,
+        before: {
+          status: request.status,
+          facilitiesComment: request.facilitiesComment,
+        },
+        after: { status: AdHocStatus.RESOLVED, facilitiesComment: note },
+        description: `${actor.fullName} resolved ${request.employee.fullName}'s ad-hoc request by sending a Facilities note.`,
+      },
+      tx
+    );
+    return true;
+  });
+
+  return resolved
+    ? {}
+    : { error: "This request changed before the note could be sent." };
+}
+
 export async function assignRoute(
   _prevState: AssignRouteState,
   formData: FormData
@@ -193,14 +304,23 @@ export async function assignRoute(
           pickupTime: pickupTime as string,
           actor: session,
         });
+        await prisma.adHocRequest.update({
+          where: { id: adHocRequestId },
+          data: { facilitiesComment: comment || null },
+        });
+      } else {
+        const result = await sendAdHocStatusNote({
+          adHocRequestId,
+          note: comment,
+          actor: session,
+        });
+        if (result.error) return result;
       }
-      await prisma.adHocRequest.update({
-        where: { id: adHocRequestId },
-        data: { facilitiesComment: comment || null },
-      });
       revalidatePath("/facilities/adhoc");
       revalidatePath("/operations/adhoc");
       revalidatePath("/employee/adhoc");
+      revalidatePath("/corporate-employee/adhoc");
+      revalidatePath("/facilities/email-log");
     } else {
       return { error: "Missing assignment target." };
     }

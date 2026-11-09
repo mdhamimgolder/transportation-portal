@@ -4,7 +4,32 @@ Read this at the start of every task so you can continue without re-exploring.
 **Always update it before the session ends** (append/rewrite the Latest Session
 block and bump Work State / Next Move). Do this EVERY session — it is how we
 work fast without interruption.
-## Latest Session (2026-11-05) — Ad-hoc pickup point in email and dashboard
+## Latest Session (2026-11-09) — Resolve ad-hoc requests with Facilities note
+**User request:** allow Facilities to send a note without assigning a vehicle or
+pickup time; notify the employee, then resolve the request. Use a status email,
+not an "arranged" email.
+**Completed:** note-only `assignRoute` now sends `adHocRequestStatusEmail` with
+date, requested arrival, resolved status, and the Facilities note. It logs the
+delivery, atomically writes an audit entry and changes eligible unassigned
+requests to `RESOLVED` only after a successful send. Failed or dev-skipped sends
+leave the request open. Employee history shows the note and status; Facilities
+queue removes resolved requests; refresh covers both employee roles and the
+email log. No database migration (status is a string).
+**Verified:** typecheck, targeted ESLint, all 39 tests, and diff check pass.
+**Dashboard copy follow-up (2026-11-09):** today's ride card now displays
+"Pick-up Time - 8:40 PM" on one line, retaining the existing 12-hour formatter.
+Typecheck and targeted ESLint pass.
+**Email design follow-up:** ad-hoc and day-wise driver notifications now use a
+shared inline/table-based itinerary layout based on the provided reference:
+navy pickup-time/date hero, optional pickup-point strip, driver/vehicle panels,
+CTA, note, and footer. All values and escaping verified by rendered HTML smoke
+checks; 10 PM pickup-point behavior remains conditional.
+**Verified:** typecheck, targeted ESLint, all 39 tests, diff check, and sample
+HTML checks pass.
+**Next:** no follow-up needed for the note resolution, dashboard label, or
+assigned transport email layout.
+
+## Earlier Session (2026-11-05) — Ad-hoc pickup point in email and dashboard
 **User request:** use the branded HTML transport email with driver, contact,
 vehicle and pickup time; show the employee pickup point only for a 10 PM
 arrival; add it to today's ride details after Facilities assigns the ride.
@@ -2306,9 +2331,10 @@ User: "use one line for comment box and arrival time box; arrival time box fixed
    5-min grid with ≥5 min gaps.
 
 ### Work State
-- **Latest task (2026-11-05):** 10 PM ad-hoc pickup point included in branded assignment/resend emails and employee/corporate dashboard ride details. 11 PM–6 AM and non-ad-hoc rides omit it. TypeScript, targeted ESLint, 39 tests and diff check passed.
+- **Latest task (2026-11-09):** Facilities can resolve an unassigned ad-hoc request by sending a branded status email with the note; failed/skipped mail does not resolve it. Assigned ad-hoc/day-wise notifications use a shared ticket-style itinerary renderer. Dashboard ride time displays as "Pick-up Time - 8:40 PM". Typecheck/lint, 39 tests, rendered-email assertions, and diff check passed. No schema migration.
+- **Prior task (2026-11-05):** 10 PM ad-hoc pickup point included in branded assignment/resend emails and employee/corporate dashboard ride details. 11 PM–6 AM and non-ad-hoc rides omit it.
 - **Working tree:** preserve all other in-progress changes; some email template integration changes predate this task and remain untouched.
-- **Next Move:** no remaining code action for the 10 PM pickup-point request; no Prisma migration needed.
+- **Next Move:** no remaining code action for note-based ad-hoc resolution; no Prisma migration needed.
 
 ### Historical Work State (2026-09-12; retained for context)
 - **Latest uncommitted work (2026-09-11g/h + 2026-09-11i + 2026-09-12a):** bulk-upload `fixedArrivalTime` column; User Info fixed-arrival ON/OFF + arrival-time select (`User.fixedArrivalActive`,

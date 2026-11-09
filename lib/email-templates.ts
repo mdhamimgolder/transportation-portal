@@ -5,8 +5,10 @@ import {
   emailStrong,
   emailText,
   renderEmail,
+  renderTransportNotificationEmail,
   type EmailDetailRow,
 } from "@/lib/email-layout";
+import { ADHOC_ARRIVAL_TIME_OPTIONS } from "@/lib/constants/adhoc-arrival-times";
 
 export { emailLogoUrl } from "@/lib/email-layout";
 
@@ -61,16 +63,6 @@ export function transportArrangedEmail({
     : "Your transport is arranged";
   const kindLabel = isAdhoc ? "Ad-hoc Transport" : "Weekly trip";
 
-  const rows: EmailDetailRow[] = [
-    { label: "Travel date", value: dateLabel, accent: true },
-    { label: "Driver", value: driverName },
-    { label: "Contact number", value: contactNumber },
-    { label: "Vehicle", value: vehicleLabel },
-  ];
-  if (pickupLocation) {
-    rows.push({ label: "Pick-up point", value: pickupLocation });
-  }
-
   const body = [
     `Hi ${employeeName},`,
     "",
@@ -85,19 +77,77 @@ export function transportArrangedEmail({
     "- Facilities Team",
   ].join("\n");
 
-  const html = renderEmail({
+  const html = renderTransportNotificationEmail({
     title: subject,
     preheader: `${isAdhoc ? "Ad-hoc" : "Weekly"} transport confirmed for ${dateLabel} — pick-up at ${pickupTime}.`,
-    eyebrow: isAdhoc ? "Ad-hoc transport confirmed" : "Weekly transport confirmed",
     headerNote: kindLabel,
     heading,
     introHtml: `<p style="margin:0;">Hi ${emailStrong(employeeName)}, your ${isAdhoc ? "ad-hoc " : ""}transport details for ${emailStrong(dateLabel)} are below.</p>`,
-    highlight: { label: "Pick-up time", value: pickupTime },
-    rows,
-    compact: true,
+    pickupTime,
+    travelDate: dateLabel,
+    pickupLocation,
+    driverName,
+    driverContact: contactNumber,
+    vehicleNumber,
+    vehicleType,
+    note: "Please be ready at the pickup location at the scheduled time.",
     cta: emailPortalUrl()
       ? { label: "Open the transportation portal", url: emailPortalUrl() as string }
       : undefined,
+    signature: "Facilities Team",
+  });
+
+  return { subject, body, html };
+}
+
+export type AdHocRequestStatusEmailParams = {
+  employeeName: string;
+  date: Date;
+  arrivalTime: string;
+  note: string;
+};
+
+/** Notice sent when Facilities resolves an ad-hoc request without a vehicle. */
+export function adHocRequestStatusEmail({
+  employeeName,
+  date,
+  arrivalTime,
+  note,
+}: AdHocRequestStatusEmailParams): {
+  subject: string;
+  body: string;
+  html: string;
+} {
+  const dateLabel = emailDateLabel(date);
+  const arrivalLabel =
+    ADHOC_ARRIVAL_TIME_OPTIONS.find((option) => option.value === arrivalTime)
+      ?.label ?? arrivalTime;
+  const subject = "Your Ad-hoc request status";
+  const heading = "Your Ad-hoc Request Status";
+  const rows: EmailDetailRow[] = [
+    { label: "Travel date", value: dateLabel, accent: true },
+    { label: "Requested arrival", value: arrivalLabel },
+    { label: "Request status", value: "Resolved" },
+  ];
+  const body = [
+    `Hi ${employeeName},`,
+    "",
+    `Facilities was unable to provide a vehicle for your ad-hoc request for ${dateLabel} (${arrivalLabel}).`,
+    "Status: Resolved",
+    `Note from Facilities: ${note}`,
+    "",
+    "- Facilities Team",
+  ].join("\n");
+  const html = renderEmail({
+    title: subject,
+    preheader: `Update on your ad-hoc request for ${dateLabel}.`,
+    eyebrow: "Ad-hoc request update",
+    headerNote: "Ad-hoc Transport",
+    heading,
+    introHtml: `<p style="margin:0;">Hi ${emailStrong(employeeName)}, Facilities was unable to provide a vehicle for this request.</p>`,
+    rows,
+    note: `Note from Facilities: ${note}`,
+    compact: true,
     signature: "Facilities Team",
   });
 
@@ -153,22 +203,20 @@ export function routePlanArrangedEmail({
     "Facilities Team",
   ].join("\n");
 
-  const html = renderEmail({
+  const html = renderTransportNotificationEmail({
     title: subject,
     preheader: `Your trip for ${dateLabel} is arranged — pick-up at ${pickupTime}, arrival ${arrivalTime}.`,
-    eyebrow: "Weekly transport confirmed",
-    headerNote: "Weekly trip",
+    headerNote: "Day-wise Transport",
     heading: "Your transport is arranged",
     introHtml: `<p style="margin:0;">Hi ${emailStrong(employeeName)},</p><p style="margin:12px 0 0;">Your transport for ${emailStrong(dateLabel)} has been arranged. Here are your trip details.</p>`,
-    highlight: { label: "Pick-up time", value: pickupTime },
-    rows: [
-      { label: "Travel date", value: dateLabel, accent: true },
-      { label: "Office arrival", value: arrivalTime },
-      { label: "Pick-up point", value: pickupLocation },
-      { label: "Vehicle", value: `${vehicleNumber} (${vehicleType})` },
-      { label: "Driver", value: driverName },
-      { label: "Driver contact", value: driverContact },
-    ],
+    pickupTime,
+    travelDate: dateLabel,
+    arrivalTime,
+    pickupLocation,
+    driverName,
+    driverContact,
+    vehicleNumber,
+    vehicleType,
     note: "Please be ready at your pick-up point a few minutes before the scheduled time.",
     cta: emailPortalUrl()
       ? { label: "Open the transportation portal", url: emailPortalUrl() as string }

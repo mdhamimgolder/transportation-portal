@@ -65,7 +65,10 @@ export function TodaysScheduleCard({
           {entries.map((entry) => (
             <div key={entry.id} className="space-y-2 py-3 first:pt-0 last:pb-0">
               <div className="flex items-center justify-between gap-2">
-                <p className="font-mono text-lg font-semibold tabular-nums text-foreground">
+                <p className="font-mono text-sm font-semibold tabular-nums text-foreground">
+                  <span className="font-sans font-medium text-muted-foreground">
+                    Pick-up Time -{" "}
+                  </span>
                   {formatTime12h(entry.pickupTime)}
                 </p>
                 <Badge variant="outline" className="font-normal">

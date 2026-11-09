@@ -211,11 +211,11 @@ export function renderEmail(params: EmailLayoutParams): string {
           </table>`
       : "";
 
-  const noteHtml = note && !compact
+  const noteHtml = note
     ? `
-          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 22px;">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 ${compact ? "10px" : "22px"};">
             <tr>
-              <td style="padding:13px 18px;background:${BRAND.accentSoft};border-left:3px solid ${BRAND.accent};border-radius:8px;font-family:${FONT_STACK};font-size:12.5px;line-height:1.6;color:#2c474c;">${emailText(note)}</td>
+              <td style="padding:${compact ? "9px 12px" : "13px 18px"};background:${BRAND.accentSoft};border-left:3px solid ${BRAND.accent};border-radius:8px;font-family:${FONT_STACK};font-size:${compact ? "11px" : "12.5px"};line-height:${compact ? "1.45" : "1.6"};color:#2c474c;">${emailText(note)}</td>
             </tr>
           </table>`
     : "";
@@ -311,5 +311,167 @@ export function renderEmail(params: EmailLayoutParams): string {
 /** Absolute portal URL for CTA buttons, or `null` when none is configured. */
 export function emailPortalUrl(): string | null {
   return appBaseUrl();
+}
+
+export type TransportNotificationLayoutParams = {
+  title: string;
+  preheader: string;
+  headerNote: string;
+  heading: string;
+  introHtml: string;
+  pickupTime: string;
+  travelDate: string;
+  arrivalTime?: string;
+  pickupLocation?: string | null;
+  driverName: string;
+  driverContact: string;
+  vehicleNumber: string;
+  vehicleType?: string | null;
+  note: string;
+  cta?: { label: string; url: string };
+  signature: string;
+};
+
+/** Ticket-style itinerary for ad-hoc and day-wise driver notifications. */
+export function renderTransportNotificationEmail(
+  params: TransportNotificationLayoutParams
+): string {
+  const {
+    title,
+    preheader,
+    headerNote,
+    heading,
+    introHtml,
+    pickupTime,
+    travelDate,
+    arrivalTime,
+    pickupLocation,
+    driverName,
+    driverContact,
+    vehicleNumber,
+    vehicleType,
+    note,
+    cta,
+    signature,
+  } = params;
+  const safePhone = driverContact.replace(/[^\d+]/g, "");
+  const vehicleLabel = vehicleType
+    ? `${vehicleNumber} (${vehicleType})`
+    : vehicleNumber;
+  const pickupLocationHtml = pickupLocation
+    ? `
+        <tr>
+          <td style="padding:14px 20px;background:#ffffff;border-bottom:1px solid #e8edf2;font-family:${FONT_STACK};">
+            <div style="font-size:10px;line-height:1.4;font-weight:600;letter-spacing:0.1em;text-transform:uppercase;color:#64748b;">Pick-up point</div>
+            <div style="padding-top:3px;font-size:15px;line-height:1.4;font-weight:700;color:#0b132b;">${escapeHtml(pickupLocation)}</div>
+          </td>
+        </tr>`
+    : "";
+  const arrivalHtml = arrivalTime
+    ? `<div style="padding-top:7px;font-size:11px;line-height:1.4;color:#cbd5e1;">Office arrival: <strong style="color:#ffffff;">${escapeHtml(arrivalTime)}</strong></div>`
+    : "";
+  const ctaHtml = cta
+    ? `
+        <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 12px;">
+          <tr><td bgcolor="#0b132b" style="border-radius:8px;">
+            <a href="${escapeHtml(cta.url)}" target="_blank" rel="noreferrer" style="display:inline-block;padding:12px 20px;font-family:${FONT_STACK};font-size:13px;line-height:1;font-weight:600;color:#ffffff;text-decoration:none;">${escapeHtml(cta.label)}</a>
+          </td></tr>
+        </table>`
+    : "";
+
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<meta name="x-apple-disable-message-reformatting" />
+<meta name="color-scheme" content="light only" />
+<meta name="supported-color-schemes" content="light only" />
+<title>${escapeHtml(title)}</title>
+</head>
+<body style="margin:0;padding:0;background:#f4f6f9;">
+<div style="display:none;max-height:0;overflow:hidden;opacity:0;color:transparent;font-size:1px;line-height:1px;">${escapeHtml(preheader)}</div>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:0;background:#f4f6f9;">
+  <tr><td align="center" style="padding:20px 10px;">
+    <table role="presentation" width="620" cellpadding="0" cellspacing="0" border="0" style="width:100%;max-width:620px;background:#ffffff;border:1px solid #e2e8f0;border-radius:14px;overflow:hidden;">
+      <tr>
+        <td style="padding:17px 20px;background:#f8fafc;border-bottom:1px solid #e8edf2;font-family:${FONT_STACK};">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr>
+            <td width="42" valign="middle" style="width:42px;padding-right:11px;">${headerLogoHtml()}</td>
+            <td valign="middle" style="font-family:${FONT_STACK};">
+              <div style="font-size:12px;line-height:1.3;font-weight:700;letter-spacing:0.12em;color:#0b132b;">COMMURE</div>
+              <div style="padding-top:3px;font-size:10px;line-height:1.3;font-weight:500;letter-spacing:0.06em;text-transform:uppercase;color:#64748b;">Transportation Portal</div>
+            </td>
+            <td align="right" valign="middle" style="font-family:${FONT_STACK};">
+              <span style="display:inline-block;padding:5px 9px;border:1px solid #bbf7d0;border-radius:20px;background:#ecfdf5;font-size:10px;line-height:1.2;font-weight:700;color:#047857;">Confirmed</span>
+              <div style="padding-top:4px;font-size:9px;line-height:1.3;color:#64748b;">${escapeHtml(headerNote)}</div>
+            </td>
+          </tr></table>
+        </td>
+      </tr>
+      <tr><td height="3" bgcolor="#0d9488" style="height:3px;line-height:3px;font-size:0;background:#0d9488;">&nbsp;</td></tr>
+      <tr>
+        <td style="padding:20px 20px 8px;font-family:${FONT_STACK};">
+          <h1 style="margin:0;font-family:${FONT_STACK};font-size:21px;line-height:1.3;font-weight:700;color:#0b132b;">${escapeHtml(heading)}</h1>
+          <div style="padding-top:7px;font-family:${FONT_STACK};font-size:13px;line-height:1.5;color:#475569;">${introHtml}</div>
+        </td>
+      </tr>
+      <tr>
+        <td style="padding:12px 20px 18px;font-family:${FONT_STACK};">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border:1px solid #dfe5ec;border-radius:11px;overflow:hidden;background:#ffffff;">
+            <tr>
+              <td style="padding:17px 18px;background:#0b132b;font-family:${FONT_STACK};">
+                <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr>
+                  <td valign="middle" style="width:58%;font-family:${FONT_STACK};">
+                    <div style="font-size:10px;line-height:1.4;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;color:#5eead4;">Confirmed pick-up time</div>
+                    <div style="padding-top:3px;font-size:32px;line-height:1.15;font-weight:800;color:#ffffff;">${escapeHtml(pickupTime)}</div>
+                  </td>
+                  <td valign="middle" style="width:42%;padding-left:12px;border-left:1px solid #334155;font-family:${FONT_STACK};">
+                    <div style="font-size:10px;line-height:1.4;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:#94a3b8;">Travel date</div>
+                    <div style="padding-top:4px;font-size:13px;line-height:1.45;font-weight:600;color:#ffffff;">${escapeHtml(travelDate)}</div>
+                    ${arrivalHtml}
+                  </td>
+                </tr></table>
+              </td>
+            </tr>
+            ${pickupLocationHtml}
+            <tr>
+              <td style="padding:14px;background:#f8fafc;font-family:${FONT_STACK};">
+                <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr>
+                  <td valign="top" style="width:50%;padding-right:6px;">
+                    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#ffffff;border:1px solid #e2e8f0;border-radius:9px;"><tr><td style="padding:12px;font-family:${FONT_STACK};">
+                      <div style="font-size:10px;line-height:1.4;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:#64748b;">Assigned driver</div>
+                      <div style="padding-top:6px;font-size:15px;line-height:1.35;font-weight:700;color:#0b132b;word-break:break-word;">${escapeHtml(driverName)}</div>
+                      <a href="tel:${escapeHtml(safePhone)}" style="display:inline-block;margin-top:8px;padding:5px 8px;border:1px solid #99f6e4;border-radius:5px;background:#f0fdfa;font-family:${FONT_STACK};font-size:11px;line-height:1.3;font-weight:600;color:#0f766e;text-decoration:none;">${escapeHtml(driverContact)}</a>
+                    </td></tr></table>
+                  </td>
+                  <td valign="top" style="width:50%;padding-left:6px;">
+                    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#ffffff;border:1px solid #e2e8f0;border-radius:9px;"><tr><td style="padding:12px;font-family:${FONT_STACK};">
+                      <div style="font-size:10px;line-height:1.4;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:#64748b;">Vehicle</div>
+                      <div style="padding-top:6px;font-size:10px;line-height:1.3;font-weight:500;color:#64748b;">Registration plate</div>
+                      <div style="display:inline-block;margin-top:4px;padding:5px 7px;border:1px solid #cbd5e1;border-radius:4px;background:#f1f5f9;font-family:${FONT_STACK};font-size:12px;line-height:1.3;font-weight:700;color:#0b132b;word-break:break-word;">${escapeHtml(vehicleLabel)}</div>
+                    </td></tr></table>
+                  </td>
+                </tr></table>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+      <tr>
+        <td style="padding:0 20px 16px;font-family:${FONT_STACK};">
+          ${ctaHtml}
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td style="padding:10px 12px;border:1px solid #fde68a;border-left:3px solid #f59e0b;border-radius:7px;background:#fffbeb;font-family:${FONT_STACK};font-size:11px;line-height:1.5;color:#78350f;">${emailText(note)}</td></tr></table>
+        </td>
+      </tr>
+      <tr><td style="padding:12px 20px;background:#f8fafc;border-top:1px solid #e2e8f0;font-family:${FONT_STACK};">
+        <div style="font-size:11px;line-height:1.4;font-weight:600;color:#334155;">${escapeHtml(signature)}</div>
+        <div style="padding-top:5px;font-size:10px;line-height:1.4;color:#94a3b8;">Commure &middot; Transportation Portal &mdash; automated message, please do not reply.</div>
+      </td></tr>
+    </table>
+  </td></tr>
+</table>
+</body>
+</html>`;
 }
 

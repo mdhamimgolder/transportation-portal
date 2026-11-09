@@ -6,6 +6,7 @@ const STATUS_STYLES: Record<string, string> = {
   ASSIGNED: "bg-green/15 text-green",
   REJECTED: "bg-red/15 text-red",
   CANCELLED: "bg-red/15 text-red",
+  RESOLVED: "bg-muted text-muted-foreground",
 };
 
 export function StatusBadge({ status }: { status: string }) {
