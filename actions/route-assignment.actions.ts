@@ -127,7 +127,7 @@ async function upsertAssignmentForAdHoc(params: {
 
   await prisma.adHocRequest.update({
     where: { id: adHocRequestId },
-    data: { status: AdHocStatus.ASSIGNED },
+    data: { status: AdHocStatus.RESOLVED },
   });
 
   const email = transportArrangedEmail({
@@ -321,6 +321,7 @@ export async function assignRoute(
       revalidatePath("/employee/adhoc");
       revalidatePath("/corporate-employee/adhoc");
       revalidatePath("/facilities/email-log");
+      revalidatePath("/facilities/allocation-history");
     } else {
       return { error: "Missing assignment target." };
     }

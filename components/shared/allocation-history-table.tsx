@@ -16,7 +16,7 @@ export function AllocationHistoryTable({
   rows: AllocationHistoryRow[];
   showTypeColumn?: boolean;
 }) {
-  const columnCount = showTypeColumn ? 9 : 8;
+  const columnCount = showTypeColumn ? 10 : 9;
 
   return (
     <div className="overflow-x-auto rounded-lg border">
@@ -31,6 +31,7 @@ export function AllocationHistoryTable({
             <TableHead>Vehicle</TableHead>
             <TableHead>Vendor</TableHead>
             <TableHead>Pickup Time</TableHead>
+            <TableHead>Status</TableHead>
             <TableHead>Assigned</TableHead>
           </TableRow>
         </TableHeader>
@@ -66,6 +67,18 @@ export function AllocationHistoryTable({
                 <TableCell>{row.vehicleNumber}</TableCell>
                 <TableCell className="text-muted-foreground">{row.vendor}</TableCell>
                 <TableCell>{row.pickupTime}</TableCell>
+                <TableCell>
+                  <Badge
+                    variant="outline"
+                    className={
+                      row.status === "Resolved"
+                        ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-700"
+                        : "text-muted-foreground"
+                    }
+                  >
+                    {row.status}
+                  </Badge>
+                </TableCell>
                 <TableCell className="text-muted-foreground">
                   <div className="flex flex-col gap-0.5">
                     <span>{row.assignedAtLabel}</span>

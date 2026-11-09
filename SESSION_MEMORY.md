@@ -29,10 +29,25 @@ HTML checks pass.
 **Status-email refinement (2026-11-09):** reused the itinerary layout for the
 "Your Ad-hoc request status" email; visible Commure logo on dark tile, request
 date/arrival hero, no status row or generated inability statement, and a larger
-Facilities note box using `#fcba03`. Rendered-output checks confirm escaping and
-that assigned driver details remain unchanged. Typecheck, lint, and 39 tests pass.
-**Next:** no follow-up needed for the note resolution, dashboard label, or
-assigned transport email layout.
+Facilities note box on white with `#fcba03` as a narrow right-side accent.
+Rendered-output checks confirm escaping and note styling, and that assigned
+driver details remain unchanged. Typecheck and targeted ESLint pass.
+**Facilities queue follow-up:** removed the Unassigned, Assigned, and Late
+arrivals filters while preserving KPI boxes and search. Driver assignment marks
+the ad-hoc request `RESOLVED`, removes it from the active queue, and shows it
+as Resolved in Allocation History. Declined KPI includes explicit rejections
+and note-only resolved requests. Driver picker displays `Driver_Name`-style
+name/contact values only.
+**Verified:** typecheck, targeted ESLint, all 39 tests, and diff check pass.
+**Next:** no follow-up needed for the current ad-hoc dispatch workflow.
+**Queue KPI follow-up (2026-11-09):** first KPI is now "Today in Queue" and
+the active request query is date-scoped to today's Dhaka key. Second KPI is
+"This week (Resolved)" and counts ad-hoc RouteAssignments by `assignedAt`
+within the current Dhaka week. Declined-note count remains separate.
+**Verified:** typecheck, targeted ESLint, and all 39 tests pass.
+**Search spacing follow-up (2026-11-10):** removed the full-width bordered
+search wrapper and extra padding; retained the input's own outline and behavior.
+Typecheck and targeted ESLint pass.
 
 ## Earlier Session (2026-11-05) — Ad-hoc pickup point in email and dashboard
 **User request:** use the branded HTML transport email with driver, contact,
@@ -2336,7 +2351,7 @@ User: "use one line for comment box and arrival time box; arrival time box fixed
    5-min grid with ≥5 min gaps.
 
 ### Work State
-- **Latest task (2026-11-09):** Facilities can resolve an unassigned ad-hoc request by sending a branded status email with the note; failed/skipped mail does not resolve it. Assigned ad-hoc/day-wise notifications use a shared ticket-style itinerary renderer. Dashboard ride time displays as "Pick-up Time - 8:40 PM". Typecheck/lint, 39 tests, rendered-email assertions, and diff check passed. No schema migration.
+- **Latest task (2026-11-10):** Facilities ad-hoc queue counts are date-scoped; assignment removes requests from the queue and Allocation History shows Resolved. Filter tabs removed; KPI boxes remain; Declined includes note-only resolutions. Driver picker shows name/contact only and the search input has no full-width wrapper. Typecheck/lint and 39 tests pass. No schema migration.
 - **Prior task (2026-11-05):** 10 PM ad-hoc pickup point included in branded assignment/resend emails and employee/corporate dashboard ride details. 11 PM–6 AM and non-ad-hoc rides omit it.
 - **Working tree:** preserve all other in-progress changes; some email template integration changes predate this task and remain untouched.
 - **Next Move:** no remaining code action for note-based ad-hoc resolution; no Prisma migration needed.

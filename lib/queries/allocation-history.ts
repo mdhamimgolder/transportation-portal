@@ -10,6 +10,7 @@ export type AllocationHistoryRow = {
   employeeEmail: string;
   employeeCode: string | null;
   type: "Weekly" | "Ad-hoc";
+  status: "Assigned" | "Resolved";
   dateLabel: string;
   driverName: string;
   driverContactNumber: string;
@@ -99,6 +100,7 @@ export async function getAllocationHistory(
         employeeEmail: employee.email,
         employeeCode: employee.employeeCode,
         type: assignment.weeklyScheduleDay ? "Weekly" : "Ad-hoc",
+        status: assignment.adHocRequestId ? "Resolved" : "Assigned",
         dateLabel: formatShortDate(assignmentDate),
         driverName: assignment.vehicleDriver.driverName,
         driverContactNumber: assignment.vehicleDriver.contactNumber,

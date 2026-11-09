@@ -9,19 +9,20 @@ import { cn } from "@/lib/utils";
 export type VehicleDriverOption = {
   id: string;
   driverName: string;
+  contactNumber: string;
   vehicleNumber: string;
   vendor: string;
 };
 
 function labelFor(option: VehicleDriverOption): string {
-  return `${option.driverName} · ${option.vehicleNumber} (${option.vendor})`;
+  return `${option.driverName}_${option.contactNumber}`;
 }
 
 export function VehicleDriverCombobox({
   name,
   options,
   defaultValue,
-  placeholder = "Search vehicle or driver",
+  placeholder = "Search driver name or contact",
   className,
   onSelect,
 }: {
@@ -78,8 +79,7 @@ export function VehicleDriverCombobox({
     return options.filter(
       (o) =>
         o.driverName.toLowerCase().includes(needle) ||
-        o.vehicleNumber.toLowerCase().includes(needle) ||
-        o.vendor.toLowerCase().includes(needle)
+        o.contactNumber.toLowerCase().includes(needle)
     );
   }, [options, query]);
 

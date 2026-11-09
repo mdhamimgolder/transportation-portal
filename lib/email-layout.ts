@@ -405,10 +405,13 @@ export function renderTransportNotificationEmail(
               </td>
             </tr>`
     : "";
-  const noteBackground = highlightNote ? "#fcba03" : "#fffbeb";
+    const noteBackground = highlightNote ? "#ffffff" : "#fffbeb";
   const noteTextColor = highlightNote ? "#1f2937" : "#78350f";
+    const noteBorder = highlightNote ? "#e2e8f0" : "#fde68a";
+    const noteLeftBorder = highlightNote ? "1px solid #e2e8f0" : "3px solid #f59e0b";
+    const noteRightBorder = highlightNote ? "4px solid #fcba03" : `1px solid ${noteBorder}`;
   const noteHtml = `
-          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td style="padding:${highlightNote ? "16px 18px" : "10px 12px"};border:1px solid ${highlightNote ? "#e4a900" : "#fde68a"};border-left:3px solid ${highlightNote ? "#b88600" : "#f59e0b"};border-radius:7px;background:${noteBackground};font-family:${FONT_STACK};color:${noteTextColor};">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td style="padding:${highlightNote ? "16px 18px" : "10px 12px"};border:1px solid ${noteBorder};border-left:${noteLeftBorder};border-right:${noteRightBorder};border-radius:7px;background:${noteBackground};font-family:${FONT_STACK};color:${noteTextColor};">
             ${noteLabel ? `<div style="font-size:11px;line-height:1.4;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;">${escapeHtml(noteLabel)}</div>` : ""}
             <div style="padding-top:${noteLabel ? "5px" : "0"};font-size:${highlightNote ? "16px" : "11px"};line-height:${highlightNote ? "1.5" : "1.5"};font-weight:${highlightNote ? "600" : "400"};">${emailText(note)}</div>
           </td></tr></table>`;
