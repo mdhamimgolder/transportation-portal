@@ -65,17 +65,15 @@ export function TodaysScheduleCard({
           {entries.map((entry) => (
             <div key={entry.id} className="space-y-2 py-3 first:pt-0 last:pb-0">
               <div className="flex items-center justify-between gap-2">
-                <p className="font-mono text-sm font-semibold tabular-nums text-foreground">
-                  <span className="font-sans font-medium text-muted-foreground">
-                    Pick-up Time -{" "}
-                  </span>
-                  {formatTime12h(entry.pickupTime)}
-                </p>
                 <Badge variant="outline" className="font-normal">
                   {entry.requestType}
                 </Badge>
               </div>
               <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-sm">
+                <span className="text-muted-foreground">Pick-up Time</span>
+                <span className="font-mono font-semibold tabular-nums text-foreground">
+                  {formatTime12h(entry.pickupTime)}
+                </span>
                 <span className="text-muted-foreground">Driver</span>
                 <span className="font-semibold text-foreground">
                   {entry.driverName}

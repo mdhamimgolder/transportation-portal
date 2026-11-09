@@ -6,7 +6,6 @@ import {
   emailText,
   renderEmail,
   renderTransportNotificationEmail,
-  type EmailDetailRow,
 } from "@/lib/email-layout";
 import { ADHOC_ARRIVAL_TIME_OPTIONS } from "@/lib/constants/adhoc-arrival-times";
 
@@ -124,30 +123,31 @@ export function adHocRequestStatusEmail({
       ?.label ?? arrivalTime;
   const subject = "Your Ad-hoc request status";
   const heading = "Your Ad-hoc Request Status";
-  const rows: EmailDetailRow[] = [
-    { label: "Travel date", value: dateLabel, accent: true },
-    { label: "Requested arrival", value: arrivalLabel },
-    { label: "Request status", value: "Resolved" },
-  ];
   const body = [
     `Hi ${employeeName},`,
     "",
-    `Facilities was unable to provide a vehicle for your ad-hoc request for ${dateLabel} (${arrivalLabel}).`,
-    "Status: Resolved",
-    `Note from Facilities: ${note}`,
+    `Ad-hoc request: ${dateLabel}, requested arrival ${arrivalLabel}`,
+    "",
+    "Note from Facilities:",
+    note,
     "",
     "- Facilities Team",
   ].join("\n");
-  const html = renderEmail({
+  const html = renderTransportNotificationEmail({
     title: subject,
     preheader: `Update on your ad-hoc request for ${dateLabel}.`,
-    eyebrow: "Ad-hoc request update",
     headerNote: "Ad-hoc Transport",
     heading,
-    introHtml: `<p style="margin:0;">Hi ${emailStrong(employeeName)}, Facilities was unable to provide a vehicle for this request.</p>`,
-    rows,
-    note: `Note from Facilities: ${note}`,
-    compact: true,
+    introHtml: `<p style="margin:0;">Hi ${emailStrong(employeeName)},</p>`,
+    requestedArrival: arrivalLabel,
+    travelDate: dateLabel,
+    headerStatus: "Request Update",
+    note,
+    noteLabel: "Note from Facilities",
+    highlightNote: true,
+    cta: emailPortalUrl()
+      ? { label: "Open the transportation portal", url: emailPortalUrl() as string }
+      : undefined,
     signature: "Facilities Team",
   });
 

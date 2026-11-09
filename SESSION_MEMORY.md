@@ -16,9 +16,9 @@ leave the request open. Employee history shows the note and status; Facilities
 queue removes resolved requests; refresh covers both employee roles and the
 email log. No database migration (status is a string).
 **Verified:** typecheck, targeted ESLint, all 39 tests, and diff check pass.
-**Dashboard copy follow-up (2026-11-09):** today's ride card now displays
-"Pick-up Time - 8:40 PM" on one line, retaining the existing 12-hour formatter.
-Typecheck and targeted ESLint pass.
+**Dashboard copy follow-up (2026-11-09):** pickup time is now a standard
+label/value row beside Driver, Contact, and Vehicle, without a hyphen; the
+existing 12-hour formatter remains. Typecheck and targeted ESLint pass.
 **Email design follow-up:** ad-hoc and day-wise driver notifications now use a
 shared inline/table-based itinerary layout based on the provided reference:
 navy pickup-time/date hero, optional pickup-point strip, driver/vehicle panels,
@@ -26,6 +26,11 @@ CTA, note, and footer. All values and escaping verified by rendered HTML smoke
 checks; 10 PM pickup-point behavior remains conditional.
 **Verified:** typecheck, targeted ESLint, all 39 tests, diff check, and sample
 HTML checks pass.
+**Status-email refinement (2026-11-09):** reused the itinerary layout for the
+"Your Ad-hoc request status" email; visible Commure logo on dark tile, request
+date/arrival hero, no status row or generated inability statement, and a larger
+Facilities note box using `#fcba03`. Rendered-output checks confirm escaping and
+that assigned driver details remain unchanged. Typecheck, lint, and 39 tests pass.
 **Next:** no follow-up needed for the note resolution, dashboard label, or
 assigned transport email layout.
 
