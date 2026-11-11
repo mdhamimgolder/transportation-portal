@@ -77,6 +77,10 @@ async function upsertAssignmentForWeeklyDay(params: {
     contactNumber: vehicleDriver.contactNumber,
     vehicleNumber: vehicleDriver.vehicleNumber,
     pickupTime,
+    pickupLocation:
+      day.arrivalTime === ADHOC_PICKUP_REQUIRED_TIME
+        ? employee.pickupPoint
+        : null,
   });
   await sendMail({
     to: employee.email,
@@ -378,7 +382,9 @@ export async function resendRouteAssignmentEmail(
       pickupLocation:
         assignment.adHocRequest?.arrivalTime === ADHOC_PICKUP_REQUIRED_TIME
           ? assignment.adHocRequest.employee.pickupPoint
-          : null,
+          : assignment.weeklyScheduleDay?.arrivalTime === ADHOC_PICKUP_REQUIRED_TIME
+            ? assignment.weeklyScheduleDay.weeklySchedule.employee.pickupPoint
+            : null,
     });
     const outcome = await trySendMail({
       to: employee.email,

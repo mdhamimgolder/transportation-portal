@@ -12,9 +12,11 @@ import {
 } from "@/lib/date/week";
 import { StatusBadge } from "@/components/shared/status-badge";
 import { WeeklyScheduleTable, type ScheduleDay } from "@/components/employee/weekly-schedule-table";
+import { ADHOC_PICKUP_REQUIRED_TIME } from "@/lib/constants/adhoc-arrival-times";
 
-function toWeekDays({ weekStartDate, days }: {
+function toWeekDays({ weekStartDate, days, employee }: {
   weekStartDate: Date;
+  employee: { pickupPoint: string | null };
   days: Array<{
     dayOfWeek: number;
     needsTransport: boolean;
@@ -34,6 +36,10 @@ function toWeekDays({ weekStartDate, days }: {
       dateLabel: formatShortDate(date),
       needsTransport: day?.needsTransport ?? false,
       arrivalTime: day?.arrivalTime ?? null,
+      pickupPoint:
+        day?.arrivalTime === ADHOC_PICKUP_REQUIRED_TIME
+          ? employee.pickupPoint
+          : null,
       assignment: day?.routeAssignment
         ? {
             driverName: day.routeAssignment.vehicleDriver.driverName,
@@ -57,6 +63,7 @@ export default async function WeeklySchedulePage() {
       weekStartDate: { in: [thisMonday, nextMonday] },
     },
     include: {
+      employee: { select: { pickupPoint: true } },
       days: { include: { routeAssignment: { include: { vehicleDriver: true } } } },
     },
     orderBy: { weekStartDate: "desc" },

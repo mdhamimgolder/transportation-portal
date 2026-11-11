@@ -25,6 +25,7 @@ export type ScheduleDay = {
   dayOfWeek: number;
   needsTransport: boolean;
   arrivalTime: string | null;
+  pickupPoint?: string | null;
   /** Route-assignment detail shown when the row is expanded. */
   assignment?: {
     driverName: string;
@@ -134,6 +135,24 @@ export function WeeklyScheduleTable({
                 );
               })}
             </tr>
+            {days.some((day) => day.pickupPoint) ? (
+              <tr>
+                <th
+                  scope="row"
+                  className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-wider text-muted-foreground sm:px-5"
+                >
+                  Pick-up point
+                </th>
+                {days.map((day) => (
+                  <td
+                    key={day.dayOfWeek}
+                    className="break-words px-2 py-3 text-center text-xs text-muted-foreground"
+                  >
+                    {day.pickupPoint ?? "—"}
+                  </td>
+                ))}
+              </tr>
+            ) : null}
           </tbody>
           </table>
         </div>
@@ -173,6 +192,21 @@ export function WeeklyScheduleTable({
         </table>
         </div>
       )}
+
+      {compact && days.some((day) => day.pickupPoint) ? (
+        <div className="space-y-1 border-t px-4 py-2.5 text-xs text-muted-foreground">
+          {days
+            .filter((day) => day.pickupPoint)
+            .map((day) => (
+              <p key={day.dayOfWeek}>
+                {day.label} pick-up point:{" "}
+                <span className="font-medium text-foreground">
+                  {day.pickupPoint}
+                </span>
+              </p>
+            ))}
+        </div>
+      ) : null}
 
       {/* Quiet summary footer — the one place the data is condensed. */}
       {!compact && days.length > 0 && (
@@ -280,7 +314,7 @@ function DayRow({
         </td>
       </tr>
 
-      {/* Expandable detail line — date, driver, vehicle, pick-up time only. */}
+      {/* Expandable detail line — includes the 10 PM pick-up point. */}
       {!compact && isOpen && (
         <tr
           className="border-b border-border/60 last:border-0"
@@ -313,6 +347,14 @@ function DayRow({
                     {day.assignment.pickupTime}
                   </span>
                 </span>
+                {day.pickupPoint ? (
+                  <span className="flex items-center gap-1.5">
+                    <span className="text-muted-foreground">Pick-up point:</span>
+                    <span className="font-medium text-foreground">
+                      {day.pickupPoint}
+                    </span>
+                  </span>
+                ) : null}
               </div>
             ) : (
               <div className="flex flex-wrap items-center gap-x-6 gap-y-1 text-[13px]">
@@ -331,6 +373,14 @@ function DayRow({
                     {active ? "Not assigned yet" : "No transport"}
                   </span>
                 </span>
+                {day.pickupPoint ? (
+                  <span className="flex items-center gap-1.5">
+                    <span className="text-muted-foreground">Pick-up point:</span>
+                    <span className="font-medium text-foreground">
+                      {day.pickupPoint}
+                    </span>
+                  </span>
+                ) : null}
               </div>
             )}
           </td>

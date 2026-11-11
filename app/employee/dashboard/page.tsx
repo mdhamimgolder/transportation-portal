@@ -26,6 +26,7 @@ import {
 
 function toWeekDays(schedule: {
   weekStartDate: Date;
+  pickupPoint: string | null;
   days: Array<{
     dayOfWeek: number;
     needsTransport: boolean;
@@ -41,6 +42,10 @@ function toWeekDays(schedule: {
       dateLabel: formatShortDate(date),
       needsTransport: day?.needsTransport ?? false,
       arrivalTime: day?.arrivalTime ?? null,
+      pickupPoint:
+        day?.arrivalTime === ADHOC_PICKUP_REQUIRED_TIME
+          ? schedule.pickupPoint
+          : null,
     };
   });
 }
@@ -75,6 +80,14 @@ export default async function EmployeeDashboardPage() {
       },
       include: {
         vehicleDriver: true,
+        weeklyScheduleDay: {
+          select: {
+            arrivalTime: true,
+            weeklySchedule: {
+              select: { employee: { select: { pickupPoint: true } } },
+            },
+          },
+        },
         adHocRequest: {
           select: {
             arrivalTime: true,
@@ -91,7 +104,10 @@ export default async function EmployeeDashboardPage() {
           weekStartDate: thisWeekStartDate,
         },
       },
-      include: { days: true },
+      include: {
+        employee: { select: { pickupPoint: true } },
+        days: true,
+      },
     }),
   ]);
 
@@ -104,7 +120,9 @@ export default async function EmployeeDashboardPage() {
     pickupPoint:
       a.adHocRequest?.arrivalTime === ADHOC_PICKUP_REQUIRED_TIME
         ? a.adHocRequest.employee.pickupPoint
-        : null,
+        : a.weeklyScheduleDay?.arrivalTime === ADHOC_PICKUP_REQUIRED_TIME
+          ? a.weeklyScheduleDay.weeklySchedule.employee.pickupPoint
+          : null,
     requestType: a.weeklyScheduleDayId ? "Weekly schedule" : "Ad-hoc request",
   }));
 
@@ -116,7 +134,12 @@ export default async function EmployeeDashboardPage() {
   });
 
   // Compact day-wise summary for the "this week" glance (Mon–Fri arrival only).
-  const weekDays = weekSchedule ? toWeekDays(weekSchedule) : [];
+  const weekDays = weekSchedule
+    ? toWeekDays({
+        ...weekSchedule,
+        pickupPoint: weekSchedule.employee.pickupPoint,
+      })
+    : [];
 
   return (
     <div className="space-y-7">
