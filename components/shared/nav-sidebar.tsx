@@ -23,7 +23,7 @@ import {
   Zap,
   type LucideIcon,
 } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { cn, getInitials } from "@/lib/utils";
 import { logoutAction } from "@/actions/auth.actions";
 import {
   DropdownMenu,
@@ -64,13 +64,7 @@ const ICONS: Record<string, LucideIcon> = {
 };
 
 function initialsOf(name: string): string {
-  return name
-    .split(" ")
-    .filter(Boolean)
-    .map((part) => part[0])
-    .slice(0, 2)
-    .join("")
-    .toUpperCase();
+  return getInitials(name);
 }
 
 function NavLinkList({

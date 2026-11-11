@@ -18,6 +18,7 @@ import {
 } from "@/lib/constants/adhoc-arrival-times";
 import { StatusBadge } from "@/components/shared/status-badge";
 import { Button } from "@/components/ui/button";
+import { getInitials } from "@/lib/utils";
 import {
   AssignmentForm,
   type VehicleDriverOption,
@@ -57,13 +58,7 @@ export type AdHocListRequest = {
 };
 
 function initials(fullName: string): string {
-  return fullName
-    .trim()
-    .split(/\s+/)
-    .slice(0, 2)
-    .map((part) => part[0] ?? "")
-    .join("")
-    .toUpperCase();
+  return getInitials(fullName);
 }
 
 function CopyPhoneButton({ phone }: { phone: string | null }) {
