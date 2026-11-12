@@ -52,6 +52,8 @@ type TableProps = {
   compact?: boolean;
   /** Show only day and arrival time for the dashboard summary. */
   summary?: boolean;
+  /** Hide pick-up points when the dashboard should defer them to today's rides. */
+  showPickupPoint?: boolean;
 };
 
 export function WeeklyScheduleTable({
@@ -61,6 +63,7 @@ export function WeeklyScheduleTable({
   statusNode,
   compact = false,
   summary = false,
+  showPickupPoint = true,
 }: TableProps) {
   const [open, setOpen] = useState<number | null>(null);
 
@@ -135,7 +138,7 @@ export function WeeklyScheduleTable({
                 );
               })}
             </tr>
-            {days.some((day) => day.pickupPoint) ? (
+            {showPickupPoint && days.some((day) => day.pickupPoint) ? (
               <tr>
                 <th
                   scope="row"
@@ -184,6 +187,7 @@ export function WeeklyScheduleTable({
                   active={active}
                   isOpen={isOpen}
                   compact={compact}
+                  showPickupPoint={showPickupPoint}
                   onToggle={() => setOpen(isOpen ? null : d.dayOfWeek)}
                 />
               );
@@ -193,7 +197,7 @@ export function WeeklyScheduleTable({
         </div>
       )}
 
-      {compact && days.some((day) => day.pickupPoint) ? (
+      {showPickupPoint && compact && days.some((day) => day.pickupPoint) ? (
         <div className="space-y-1 border-t px-4 py-2.5 text-xs text-muted-foreground">
           {days
             .filter((day) => day.pickupPoint)
@@ -243,12 +247,14 @@ function DayRow({
   active,
   isOpen,
   compact,
+  showPickupPoint,
   onToggle,
 }: {
   day: ScheduleDay;
   active: boolean;
   isOpen: boolean;
   compact: boolean;
+  showPickupPoint: boolean;
   onToggle: () => void;
 }) {
   const timeChip = active ? (
@@ -347,7 +353,7 @@ function DayRow({
                     {day.assignment.pickupTime}
                   </span>
                 </span>
-                {day.pickupPoint ? (
+                {showPickupPoint && day.pickupPoint ? (
                   <span className="flex items-center gap-1.5">
                     <span className="text-muted-foreground">Pick-up point:</span>
                     <span className="font-medium text-foreground">
@@ -373,7 +379,7 @@ function DayRow({
                     {active ? "Not assigned yet" : "No transport"}
                   </span>
                 </span>
-                {day.pickupPoint ? (
+                {showPickupPoint && day.pickupPoint ? (
                   <span className="flex items-center gap-1.5">
                     <span className="text-muted-foreground">Pick-up point:</span>
                     <span className="font-medium text-foreground">
